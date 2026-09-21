@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(HybridSynth VERSION 0.1.0)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -14,7 +15,7 @@ juce_add_plugin(HybridSynth
     COMPANY_NAME                "Capstone"
     PLUGIN_MANUFACTURER_CODE    Caps
     PLUGIN_CODE                 Hybs
-    FORMATS                     VST3
+    FORMATS                     VST3 AU Standalone
     PRODUCT_NAME                "Hybrid Synth"
     IS_SYNTH                    TRUE
     NEEDS_MIDI_INPUT            TRUE
