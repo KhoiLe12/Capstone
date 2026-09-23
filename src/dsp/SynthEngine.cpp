@@ -65,15 +65,21 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         }
 
         // 2. Drive the 32-mode IRCAM Modalys spruce soundboard
-        // Analog soft-saturation prevents harsh digital clipping on multi-string chords
-        // while preserving full unattenuated volume for single notes
-        const float bridgeSignal = std::tanh(totalBridgeForce * 1.5f) * 0.75f;
+        // Linear summing preserves harmonic clarity and prevents intermodulation distortion on chords
+        const float bridgeSignal = totalBridgeForce * 0.28f;
 
         // 3. Excite the soundboard
         float outputSample = body.process(bridgeSignal);
 
         // 4. Master gain
         outputSample *= paramMasterGain;
+
+        // 5. Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS DAC ceiling
+        if (std::abs(outputSample) > 0.88f)
+        {
+            const float sign = outputSample > 0.f ? 1.f : -1.f;
+            outputSample = sign * (0.88f + 0.10f * std::tanh((std::abs(outputSample) - 0.88f) / 0.10f));
+        }
 
         outputL[i] = outputSample;
         outputR[i] = outputSample;

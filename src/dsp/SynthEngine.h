@@ -15,7 +15,7 @@
 class SynthEngine
 {
 public:
-    static constexpr int NUM_VOICES = 6;
+    static constexpr int NUM_VOICES = 12;
 
     SynthEngine() = default;
 
