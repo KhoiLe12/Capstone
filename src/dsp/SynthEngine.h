@@ -53,9 +53,6 @@ private:
     BodyResonance body;
     float         sampleRate = 44100.f;
 
-    // Bridge scattering feedback memory for the 6 strings
-    float lastBridgeReflections[NUM_VOICES] = {};
-
     int findFreeVoice() const noexcept;
     int findVoiceForNote(int midiNote) const noexcept;
 };

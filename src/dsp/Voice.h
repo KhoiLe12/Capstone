@@ -34,11 +34,8 @@ public:
     /** Signal note release (string continues natural decay). */
     void noteOff() noexcept;
 
-    /**
-     * Advance one sample and return voice output at bridge.
-     * @param bridgeInjection Velocity/force scattered back from bridge junction
-     */
-    float tick(float bridgeInjection = 0.f) noexcept;
+    /** Advance one sample and return voice output at bridge. */
+    float tick() noexcept;
 
     bool  isActive()    const noexcept { return active; }
     int   getMidiNote() const noexcept { return midiNote; }

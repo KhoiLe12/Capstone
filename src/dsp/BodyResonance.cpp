@@ -117,9 +117,8 @@ float BodyResonance::process(float bridgeForce) noexcept
         modalSum += filters[i].process(bridgeForce);
     }
 
-    // Blend between direct string pickup (electric/solid-body character)
-    // and radiated acoustic wood soundboard (acoustic character)
-    return (1.0f - currentCoupling) * bridgeForce + currentCoupling * modalSum;
+    // Direct bridge vibration plus radiated acoustic wood soundboard resonance
+    return (1.0f - currentCoupling) * bridgeForce + currentCoupling * (bridgeForce + modalSum * 1.5f);
 }
 
 void BodyResonance::reset() noexcept

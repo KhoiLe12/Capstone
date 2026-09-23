@@ -45,21 +45,22 @@ void Voice::noteOn(int note, float vel,
 
 void Voice::noteOff() noexcept
 {
-    // Natural Karplus-Strong string decay continues
+    // Apply physical finger/palm damping to the vibrating string
+    string.damp();
 }
 
 // ---------------------------------------------------------------------------
 // Per-Sample Processing
 // ---------------------------------------------------------------------------
 
-float Voice::tick(float bridgeInjection) noexcept
+float Voice::tick() noexcept
 {
     if (!active) return 0.f;
 
-    const float out = string.tick(bridgeInjection) * velocity;
+    const float out = string.tick() * velocity;
 
     // Auto-deactivate when energy is negligibly small
-    if (string.getEnergy() < kSilenceThreshold)
+    if (string.getEnergy() < 1e-7f)
     {
         active   = false;
         midiNote = -1;

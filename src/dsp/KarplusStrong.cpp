@@ -21,8 +21,8 @@ void KarplusStrong::init(float sr)
 
 void KarplusStrong::setFrequency(float freqHz, float stiffness)
 {
-    // Clamp frequency to reasonable guitar range (20 Hz to Nyquist / 3)
-    const float f0 = std::max(20.0f, std::min(freqHz, sampleRate * 0.35f));
+    // Clamp frequency to reasonable guitar range (60 Hz drop-B to Nyquist / 3)
+    const float f0 = std::max(60.0f, std::min(freqHz, sampleRate * 0.35f));
 
     // Map stiffness [0, 1] to dispersion allpass coefficient D in [-0.55, 0.0]
     // D = 0: pure harmonic; D < 0: higher partials travel faster (stiff metal string)
@@ -40,13 +40,18 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     if (eta < 2.0f) eta = 2.0f;
 
     delayLength = static_cast<int>(eta);
+    float frac = eta - static_cast<float>(delayLength); // in [0, 1)
+
+    // Keep fractional delay away from 0 so allpass pole does not land on the unit circle (z = -1)
+    if (frac < 0.2f && delayLength > 2)
+    {
+        delayLength -= 1;
+        frac += 1.0f;
+    }
 
     // Ensure circular buffer has sufficient capacity
     if (delayLength + 8 > static_cast<int>(delayLine.size()))
         delayLine.resize(static_cast<size_t>(delayLength) + 32, 0.f);
-
-    // Fractional delay required from tuning allpass
-    const float frac = eta - static_cast<float>(delayLength); // in [0, 1)
 
     // Allpass coefficient: C = (1 - frac) / (1 + frac)
     apCoeff = (1.0f - frac) / (1.0f + frac);
@@ -54,10 +59,10 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
 
 void KarplusStrong::setDecay(float decay) noexcept
 {
-    // Map decay 0..1 to loop gain 0.985..0.9998
-    // Higher gain = longer sustain because each reflection loses less energy
+    // Map decay 0..1 to loop gain 0.965..0.996
+    // Strictly bounds loop gain so notes decay naturally within 3-6s
     const float d = std::max(0.0f, std::min(decay, 1.0f));
-    loopGain = 0.985f + d * 0.0148f;
+    loopGain = 0.965f + d * 0.031f;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +92,7 @@ void KarplusStrong::trigger(const float* exciterBuf, int length, float velocity)
 // Per-Sample Tick with Multi-Port Bridge Coupling
 // ---------------------------------------------------------------------------
 
-float KarplusStrong::tick(float bridgeInjection) noexcept
+float KarplusStrong::tick() noexcept
 {
     if (delayLength <= 0) return 0.f;
 
@@ -111,8 +116,8 @@ float KarplusStrong::tick(float bridgeInjection) noexcept
     float currentApCoeff = apCoeff;
     if (tensionOffset > 0.001f)
     {
-        // Pitch shift: decrease fractional delay -> increase C
-        currentApCoeff = std::min(0.99f, apCoeff + tensionOffset * 0.25f);
+        // Pitch shift: decrease fractional delay -> increase C (clamped to prevent Nyquist resonance)
+        currentApCoeff = std::min(0.75f, apCoeff + tensionOffset * 0.15f);
         tensionOffset *= tensionDecay;
     }
 
@@ -122,14 +127,11 @@ float KarplusStrong::tick(float bridgeInjection) noexcept
     apPrevIn  = dispOut;
     apPrevOut = apOut;
 
-    // 7. Inject bridge motion (scattered reflection from mutual string coupling)
-    const float toWrite = apOut + bridgeInjection;
-
-    // 8. Write filtered, coupled sample back into delay line
-    delayLine[static_cast<size_t>(writeHead)] = toWrite;
+    // 7. Write pure string wave back into delay line (strictly stable 1D waveguide)
+    delayLine[static_cast<size_t>(writeHead)] = apOut;
     writeHead = (writeHead + 1) % delayLength;
 
-    // 9. Update leaky RMS energy estimate
+    // 8. Update leaky RMS energy estimate
     energyEstimate = 0.9999f * energyEstimate + 0.0001f * x * x;
 
     return x;

@@ -112,17 +112,27 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
         const auto msg = meta.getMessage();
         if (msg.isNoteOn())
-            synth.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
+        {
+            if (msg.getFloatVelocity() > 0.0001f)
+                synth.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
+            else
+                synth.noteOff(msg.getNoteNumber());
+        }
         else if (msg.isNoteOff())
+        {
             synth.noteOff(msg.getNoteNumber());
-        // All Sounds Off / All Notes Off
+        }
         else if (msg.isAllNotesOff() || msg.isResetAllControllers())
+        {
             synth.reset();
+        }
     }
 
     // Render audio
+    if (buffer.getNumChannels() == 0) return;
+
     auto* outputL = buffer.getWritePointer(0);
-    auto* outputR = buffer.getWritePointer(1);
+    auto* outputR = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : outputL;
     synth.process(outputL, outputR, buffer.getNumSamples());
 }
 

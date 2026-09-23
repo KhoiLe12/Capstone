@@ -21,6 +21,12 @@ void SynthEngine::init(float sr, int /*blockSize*/)
 
 void SynthEngine::noteOn(int midiNote, float velocity)
 {
+    if (velocity <= 0.0001f)
+    {
+        noteOff(midiNote);
+        return;
+    }
+
     int idx = findVoiceForNote(midiNote);
     if (idx < 0)
         idx = findFreeVoice();
@@ -40,7 +46,7 @@ void SynthEngine::noteOff(int midiNote)
 }
 
 // ---------------------------------------------------------------------------
-// Multi-Port Bridge Scattering & Audio Processing
+// Pure Acoustic String & Modalys Soundboard Processing
 // ---------------------------------------------------------------------------
 
 void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexcept
@@ -48,37 +54,25 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     // Update body modal parameters (size, damping, coupling)
     body.setParameters(paramBodySize, 1.0f, paramBodyMix);
 
-    // Sympathetic coupling strength between strings at the bridge
-    // Bounded between 0.005 and 0.025 depending on body coupling
-    const float sympatheticStrength = 0.005f + 0.020f * paramBodyMix;
-
     for (int i = 0; i < numSamples; ++i)
     {
-        // 1. Advance all 6 strings, feeding each the bridge reflection from previous sample
-        float stringWaves[NUM_VOICES];
+        // 1. Advance all active string voices and sum bridge force
         float totalBridgeForce = 0.f;
 
         for (int v = 0; v < NUM_VOICES; ++v)
         {
-            stringWaves[v] = voices[v].tick(lastBridgeReflections[v]);
-            totalBridgeForce += stringWaves[v];
+            totalBridgeForce += voices[v].tick();
         }
 
-        // 2. Multi-Port Scattering: compute mutual sympathetic reflection for each string
-        for (int v = 0; v < NUM_VOICES; ++v)
-        {
-            // Each string receives a fraction of the force exerted by the other 5 strings
-            const float mutualForce = totalBridgeForce - stringWaves[v];
-            lastBridgeReflections[v] = sympatheticStrength * mutualForce;
-        }
+        // 2. Drive the 32-mode IRCAM Modalys spruce soundboard
+        // Analog soft-saturation prevents harsh digital clipping on multi-string chords
+        // while preserving full unattenuated volume for single notes
+        const float bridgeSignal = std::tanh(totalBridgeForce * 1.5f) * 0.75f;
 
-        // 3. Normalise by voice count to preserve headroom
-        float bridgeSignal = totalBridgeForce / static_cast<float>(NUM_VOICES);
-
-        // 4. Excite the IRCAM Modalys 32-mode soundboard
+        // 3. Excite the soundboard
         float outputSample = body.process(bridgeSignal);
 
-        // 5. Master gain
+        // 4. Master gain
         outputSample *= paramMasterGain;
 
         outputL[i] = outputSample;
@@ -95,7 +89,6 @@ void SynthEngine::reset()
     for (auto& v : voices)
         v.reset();
     body.reset();
-    std::fill(std::begin(lastBridgeReflections), std::end(lastBridgeReflections), 0.f);
 }
 
 // ---------------------------------------------------------------------------

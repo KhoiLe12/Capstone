@@ -53,11 +53,11 @@ public:
      */
     void trigger(const float* exciterBuf, int length, float velocity = 0.8f);
 
-    /**
-     * Advance one sample and return the string output at the bridge.
-     * @param bridgeInjection Velocity/force scattered back from the bridge junction
-     */
-    float tick(float bridgeInjection = 0.f) noexcept;
+    /** Advance one sample and return the string output at the bridge. */
+    float tick() noexcept;
+
+    /** Apply physical finger/palm damping on note release. */
+    void damp() noexcept { loopGain = std::min(loopGain, 0.50f); }
 
     /** Zero delay line and all filter registers. */
     void reset() noexcept;
