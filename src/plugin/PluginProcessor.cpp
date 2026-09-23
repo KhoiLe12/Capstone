@@ -2,7 +2,7 @@
 #include "plugin/PluginEditor.h"
 
 // ---------------------------------------------------------------------------
-// Constructor — APVTS is constructed here with the parameter layout
+// Constructor
 // ---------------------------------------------------------------------------
 
 HybridSynthProcessor::HybridSynthProcessor()
@@ -29,7 +29,7 @@ HybridSynthProcessor::createParameterLayout()
         juce::NormalisableRange<float>(0.f, 1.f),
         0.80f));
 
-    // Brightness: spectral content of exciter burst
+    // Brightness: spectral hardness of exciter contact pulse
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "brightness", 1 },
         "Brightness",
@@ -49,6 +49,27 @@ HybridSynthProcessor::createParameterLayout()
         "Stiffness",
         juce::NormalisableRange<float>(0.f, 1.f),
         0.25f));
+
+    // Strum Speed: time stagger between strings (0 = instant keyboard, 1 = slow acoustic rake)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "strumSpeed", 1 },
+        "Strum Speed",
+        juce::NormalisableRange<float>(0.f, 1.f),
+        0.20f));
+
+    // Pickup Position: 0 = Bridge pickup, 1 = Neck pickup
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "pickupPos", 1 },
+        "Pickup Pos",
+        juce::NormalisableRange<float>(0.f, 1.f),
+        0.35f));
+
+    // Guitar Tone: passive tone capacitor lowpass
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "tone", 1 },
+        "Tone",
+        juce::NormalisableRange<float>(0.f, 1.f),
+        0.85f));
 
     // Body Size: modal scaling factor (0.6 = small parlor, 1.6 = jumbo)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -103,6 +124,9 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramBrightness = apvts.getRawParameterValue("brightness")->load();
     synth.paramPickPos    = apvts.getRawParameterValue("pickPosition")->load();
     synth.paramStiffness  = apvts.getRawParameterValue("stiffness")->load();
+    synth.paramStrumSpeed = apvts.getRawParameterValue("strumSpeed")->load();
+    synth.paramPickupPos  = apvts.getRawParameterValue("pickupPos")->load();
+    synth.paramTone       = apvts.getRawParameterValue("tone")->load();
     synth.paramBodySize   = apvts.getRawParameterValue("bodySize")->load();
     synth.paramBodyMix    = apvts.getRawParameterValue("bodyMix")->load();
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
@@ -112,17 +136,27 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
         const auto msg = meta.getMessage();
         if (msg.isNoteOn())
-            synth.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
+        {
+            if (msg.getFloatVelocity() > 0.0001f)
+                synth.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
+            else
+                synth.noteOff(msg.getNoteNumber());
+        }
         else if (msg.isNoteOff())
+        {
             synth.noteOff(msg.getNoteNumber());
-        // All Sounds Off / All Notes Off
+        }
         else if (msg.isAllNotesOff() || msg.isResetAllControllers())
+        {
             synth.reset();
+        }
     }
 
     // Render audio
+    if (buffer.getNumChannels() == 0) return;
+
     auto* outputL = buffer.getWritePointer(0);
-    auto* outputR = buffer.getWritePointer(1);
+    auto* outputR = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : outputL;
     synth.process(outputL, outputR, buffer.getNumSamples());
 }
 
@@ -154,7 +188,7 @@ void HybridSynthProcessor::setStateInformation(const void* data, int sizeInBytes
 }
 
 // ---------------------------------------------------------------------------
-// Plugin factory function (required by JUCE)
+// Plugin factory function
 // ---------------------------------------------------------------------------
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

@@ -40,13 +40,18 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     if (eta < 2.0f) eta = 2.0f;
 
     delayLength = static_cast<int>(eta);
+    float frac = eta - static_cast<float>(delayLength); // in [0, 1)
+
+    // Keep fractional delay away from 0 so allpass pole does not land on the unit circle (z = -1)
+    if (frac < 0.2f && delayLength > 2)
+    {
+        delayLength -= 1;
+        frac += 1.0f;
+    }
 
     // Ensure circular buffer has sufficient capacity
     if (delayLength + 8 > static_cast<int>(delayLine.size()))
         delayLine.resize(static_cast<size_t>(delayLength) + 32, 0.f);
-
-    // Fractional delay required from tuning allpass
-    const float frac = eta - static_cast<float>(delayLength); // in [0, 1)
 
     // Allpass coefficient: C = (1 - frac) / (1 + frac)
     apCoeff = (1.0f - frac) / (1.0f + frac);
@@ -54,10 +59,10 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
 
 void KarplusStrong::setDecay(float decay) noexcept
 {
-    // Map decay 0..1 to loop gain 0.985..0.9998
-    // Higher gain = longer sustain because each reflection loses less energy
+    // Map decay 0..1 to loop gain 0.980..0.9985
+    // Strictly bound below 1.0 to preserve numerical passivity
     const float d = std::max(0.0f, std::min(decay, 1.0f));
-    loopGain = 0.985f + d * 0.0148f;
+    loopGain = 0.980f + d * 0.0185f;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +116,8 @@ float KarplusStrong::tick(float bridgeInjection) noexcept
     float currentApCoeff = apCoeff;
     if (tensionOffset > 0.001f)
     {
-        // Pitch shift: decrease fractional delay -> increase C
-        currentApCoeff = std::min(0.99f, apCoeff + tensionOffset * 0.25f);
+        // Pitch shift: decrease fractional delay -> increase C (clamped to prevent Nyquist resonance)
+        currentApCoeff = std::min(0.75f, apCoeff + tensionOffset * 0.15f);
         tensionOffset *= tensionDecay;
     }
 
@@ -123,7 +128,9 @@ float KarplusStrong::tick(float bridgeInjection) noexcept
     apPrevOut = apOut;
 
     // 7. Inject bridge motion (scattered reflection from mutual string coupling)
-    const float toWrite = apOut + bridgeInjection;
+    //    Passive coupling: bridge motion reflection loss ensures ||S|| < 1.0 (strictly dissipative)
+    constexpr float kBridgeCouplingLoss = 0.003f;
+    const float toWrite = (1.0f - kBridgeCouplingLoss) * apOut + bridgeInjection;
 
     // 8. Write filtered, coupled sample back into delay line
     delayLine[static_cast<size_t>(writeHead)] = toWrite;

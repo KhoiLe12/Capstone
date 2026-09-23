@@ -22,7 +22,7 @@ juce_add_plugin(HybridSynth
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    COPY_PLUGIN_AFTER_BUILD     TRUE
+    COPY_PLUGIN_AFTER_BUILD     FALSE
 )
 
 target_sources(HybridSynth
@@ -33,6 +33,9 @@ target_sources(HybridSynth
         src/dsp/Voice.cpp
         src/dsp/BodyResonance.cpp
         src/dsp/SynthEngine.cpp
+        src/dsp/Fretboard.cpp
+        src/dsp/PickupModel.cpp
+        src/dsp/Strummer.cpp
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
 )

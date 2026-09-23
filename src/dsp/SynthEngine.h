@@ -1,61 +1,62 @@
 #pragma once
 #include "Voice.h"
 #include "BodyResonance.h"
+#include "Fretboard.h"
+#include "PickupModel.h"
+#include "Strummer.h"
 
 /**
- * SynthEngine — Multi-Port Digital Waveguide Orchestrator & Modal Body Coupler.
- *
- * Architecture:
- *   - 6 polyphonic voices with stiffness dispersion & dynamic tension
- *   - Energy-conserving Multi-Port Bridge Scattering Junction:
- *     Transfers downward string forces to the bridge and scatters mutual
- *     energy back into all strings (true physical sympathetic resonance).
- *   - IRCAM Modalys-style 32-mode parallel soundboard model.
+ * SynthEngine — Complete Physical Guitar Engine:
+ *   - 6 Physical Strings (E2, A2, D3, G3, B3, E4) x 22 Frets
+ *   - Intelligent Fretboard Allocation (ergonomic hand position & monophonic strings)
+ *   - Strummer Engine (time-staggered pick sweeping across strings)
+ *   - Multi-Port Bridge Scattering Network (sympathetic resonance)
+ *   - Virtual Magnetic Pickups (spatial comb filter Bridge <-> Neck + RLC tone circuit)
+ *   - IRCAM Modalys 32-Mode Parallel Soundboard Model
  */
 class SynthEngine
 {
 public:
-    static constexpr int NUM_VOICES = 6;
+    static constexpr int NUM_STRINGS = 6;
 
     SynthEngine() = default;
 
-    /** Initialise all voices and body resonance for the given sample rate. */
+    /** Initialise all physical modules for the given sample rate. */
     void init(float sampleRate, int blockSize);
 
-    /** Trigger a new note (MIDI note number + normalised velocity 0..1). */
+    /** Trigger a new note. */
     void noteOn(int midiNote, float velocity);
 
-    /** Release a note (string continues to decay naturally). */
+    /** Release a note. */
     void noteOff(int midiNote);
 
-    /**
-     * Fill outputL and outputR with numSamples of synthesised audio.
-     * Output is mono-summed to both channels.
-     */
+    /** Fill output buffers with synthesized audio. */
     void process(float* outputL, float* outputR, int numSamples) noexcept;
 
-    /** Hard-reset all voices and body resonance. */
+    /** Hard-reset all physical states. */
     void reset();
 
     // -------------------------------------------------------------------
-    // Physical Parameters — set by PluginProcessor
+    // Physical Parameters
     // -------------------------------------------------------------------
     float paramDecay       = 0.80f;   ///< String sustain (0..1)
-    float paramBrightness  = 0.50f;   ///< Exciter brightness (0..1)
+    float paramBrightness  = 0.50f;   ///< Plectrum hardness (0..1)
     float paramPickPos     = 0.12f;   ///< Pick contact point (0.05..0.5)
-    float paramBodyMix     = 0.70f;   ///< Body coupling (0 = solid electric, 1 = acoustic)
-    float paramMasterGain  = 0.80f;   ///< Output master level (0..1)
     float paramStiffness   = 0.25f;   ///< Inharmonicity / metal stiffness (0..1)
-    float paramBodySize    = 1.00f;   ///< Soundboard size / scale (0.6..1.8)
+    float paramBodySize    = 1.00f;   ///< Soundboard scale (0.6..1.8)
+    float paramBodyMix     = 0.70f;   ///< Electric (0) vs. Acoustic (1)
+    float paramMasterGain  = 0.80f;   ///< Master output level (0..1)
+    float paramPickupPos   = 0.35f;   ///< Virtual pickup (0 = Bridge, 1 = Neck)
+    float paramTone        = 0.85f;   ///< Guitar tone pot (0 = Dark rolled off, 1 = Open)
+    float paramStrumSpeed  = 0.20f;   ///< Strum sweep speed (0 = Instant, 1 = Slow rake)
 
 private:
-    Voice         voices[NUM_VOICES];
+    Voice         voices[NUM_STRINGS];
     BodyResonance body;
+    Fretboard     fretboard;
+    PickupModel   pickup;
+    Strummer      strummer;
+
     float         sampleRate = 44100.f;
-
-    // Bridge scattering feedback memory for the 6 strings
-    float lastBridgeReflections[NUM_VOICES] = {};
-
-    int findFreeVoice() const noexcept;
-    int findVoiceForNote(int midiNote) const noexcept;
+    float         lastBridgeReflections[NUM_STRINGS] = {};
 };

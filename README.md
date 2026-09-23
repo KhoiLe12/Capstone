@@ -8,13 +8,17 @@ All audio is synthesized in real time from mechanical and acoustic first princip
 
 ## 🎵 Physical Architecture
 
-The synthesizer combines an energy-conserving **Multi-Port Waveguide Network** with an **IRCAM Modalys-style 32-mode parallel soundboard**:
+The synthesizer combines a **Physical 6-String Fretboard Matrix**, a **Mechanical Strumming Engine**, an energy-conserving **Multi-Port Waveguide Network**, **Virtual Magnetic Pickups**, and an **IRCAM Modalys-style 32-mode parallel soundboard**:
 
 ```
-MIDI In ──► SynthEngine (6 Physical String Voices)
+MIDI In ──► Strummer Engine (Time-staggered pick sweep & down/upstroke dynamics)
                   │
-        ┌─────────┴─────────────────────────────────────────────┐
-        │  Each Voice:                                          │
+                  ▼
+            Fretboard Matrix (6 strings: EADGBE x 22 frets, ergonomic hand solver)
+                  │  Trigger per physical string
+                  ▼
+        ┌───────────────────────────────────────────────────────┐
+        │  Each Physical String (0..5):                         │
         │  1. Plectrum Exciter (Velocity-dependent 1-3ms pulse) │
         │  2. Waveguide with Allpass Pitch Tuning               │
         │  3. Stiffness Dispersion Allpass (Inharmonicity)      │
@@ -24,21 +28,22 @@ MIDI In ──► SynthEngine (6 Physical String Voices)
                   ▼
         ┌───────────────────────────────────────────────────────┐
         │  Multi-Port Bridge Scattering Junction                │
-        │  - Computes mutual string forces at the bridge saddle │
-        │  - Scatters energy back into open strings             │
-        │    (True Physical Sympathetic Resonance)              │
+        │  - Mutual physical string coupling at the bridge      │
+        │  - True Physical Sympathetic Resonance                │
         └─────────┬─────────────────────────────────────────────┘
-                  │  Bridge velocity
-                  ▼
-        ┌───────────────────────────────────────────────────────┐
-        │  IRCAM Modalys 32-Mode Parallel Soundboard            │
-        │  - Helmholtz air mode (A0 @ 105 Hz)                   │
-        │  - Top-plate dipoles (T(1,1) @ 185 Hz & 225 Hz)       │
-        │  - Longitudinal wood modes & presence formants        │
-        │  - Continuous Solid-Body Electric ◄► Acoustic Morph   │
-        └─────────┬─────────────────────────────────────────────┘
-                  ▼
-       Master Gain & Stereo Audio Out
+                  │
+        ┌─────────┴─────────────────────────────────────────────┐
+        ▼                                                       ▼
+┌──────────────────────────────┐        ┌──────────────────────────────┐
+│  Virtual Magnetic Pickups    │        │  IRCAM Modalys 32-Mode Body  │
+│  - Spatial comb filter       │        │  - Helmholtz A0 (105 Hz)     │
+│    (Bridge vs. Neck position)│        │  - Plate dipoles & formants  │
+│  - Passive RLC Tone Circuit  │        │  - Continuous Acoustic Morph │
+└──────────────┬───────────────┘        └──────────────┬───────────────┘
+               │                                       │
+               └───────────────────┬───────────────────┘
+                                   ▼
+                    Master Gain & Stereo Audio Out
 ```
 
 ---
@@ -47,25 +52,38 @@ MIDI In ──► SynthEngine (6 Physical String Voices)
 
 | Module | File | Physical Description |
 |---|---|---|
-| `BiquadFilter` | `src/dsp/BiquadFilter.*` | Direct Form I second-order IIR; provides peaking EQ and bandpass modal resonator design. |
-| `Exciter` | `src/dsp/Exciter.*` | Velocity-dependent finite contact pulse (1–3 ms), winding micro-friction texture, pick-position comb filter ($H(z) = 1 - z^{-M}$), and brightness LPF. |
+| `Fretboard` | `src/dsp/Fretboard.*` | Models the physical 6-string neck ($E_2, A_2, D_3, G_3, B_3, E_4$) $\times$ 22 frets. Enforces physical 1-note-per-string monophony and ergonomic chord fingering. |
+| `Strummer` | `src/dsp/Strummer.*` | Staggers chord plucks across physical strings (10–35 ms sweep) with alternating downstroke/upstroke dynamics. |
+| `PickupModel` | `src/dsp/PickupModel.*` | Models virtual electric guitar magnetic pickups (spatial comb $H(\omega) = \sin(\omega d / c)$ from Bridge to Neck) and passive 1-pole RLC guitar tone circuit. |
 | `KarplusStrong` | `src/dsp/KarplusStrong.*` | 1D digital waveguide with sub-sample allpass tuning, 1st-order stiffness dispersion filter ($f_n \approx n f_0 \sqrt{1 + B n^2}$), dynamic tension modulation, and bridge injection. |
+| `Exciter` | `src/dsp/Exciter.*` | Velocity-dependent finite contact pulse (1–3 ms), winding micro-friction texture, pick-position comb filter, and brightness LPF. |
 | `Voice` | `src/dsp/Voice.*` | Encapsulates a single string (Exciter + Waveguide) with zero-allocation audio-thread scratch buffers. |
 | `BodyResonance` | `src/dsp/BodyResonance.*` | 32-mode parallel acoustic soundboard model based on empirical luthier laser-vibrometry measurements. Supports modal scaling (`bodySize`) and electric/acoustic coupling (`bodyMix`). |
-| `SynthEngine` | `src/dsp/SynthEngine.*` | 6-voice polyphonic orchestrator with an energy-conserving Multi-Port Bridge Scattering Junction (sympathetic resonance) and leaky RMS energy voice-stealing. |
+| `SynthEngine` | `src/dsp/SynthEngine.*` | Orchestrates fretboard note allocation, strumming delays, multi-port bridge scattering (sympathetic resonance), pickup tone, and modal soundboard. |
+| `BiquadFilter` | `src/dsp/BiquadFilter.*` | Direct Form I second-order IIR; provides peaking EQ and bandpass modal resonator design. |
 
 ---
 
 ## 🎛️ Parameters
 
+The user interface is organized into a clean 2-row layout (640 × 290 px):
+
+### Row 1: String & Strum
 | Knob | Range | Default | Physical Effect |
 |---|---|---|---|
 | **Decay** | 0.0 – 1.0 | 0.80 | String sustain (waveguide loop gain). |
 | **Brightness** | 0.0 – 1.0 | 0.50 | Spectral hardness of the plectrum contact pulse (1.5 kHz – 20 kHz). |
 | **Pick Pos** | 0.05 – 0.50 | 0.12 | Plectrum contact point along the string fraction (bridge vs. 12th fret). |
 | **Stiffness** | 0.0 – 1.0 | 0.25 | String inharmonicity / dispersion (0 = pure nylon, 1 = metallic steel twang). |
+| **Strum** | 0.0 – 1.0 | 0.20 | Pick sweep timing (0 = instant keyboard chord, 1 = slow acoustic rake). |
+
+### Row 2: Electronics & Body
+| Knob | Range | Default | Physical Effect |
+|---|---|---|---|
+| **Pickup Pos** | 0.0 – 1.0 | 0.35 | Virtual pickup placement: 0.0 = biting Bridge pickup; 1.0 = warm, hollow Neck pickup. |
+| **Tone** | 0.0 – 1.0 | 0.85 | Passive guitar tone capacitor (700 Hz rolled off $\leftrightarrow$ 18 kHz wide open). |
 | **Body Size** | 0.6 – 1.6 | 1.00 | Soundboard modal frequency scale (parlor $\leftrightarrow$ dreadnought $\leftrightarrow$ jumbo). |
-| **Body Coupl** | 0.0 – 1.0 | 0.70 | Body coupling: 0.0 = solid-body electric (maximum sustain); 1.0 = acoustic soundboard bloom. |
+| **Body Coupl** | 0.0 – 1.0 | 0.70 | Body coupling: 0.0 = solid-body electric (max sustain); 1.0 = acoustic soundboard bloom. |
 | **Gain** | 0.0 – 1.0 | 0.80 | Master output level. |
 
 ---
