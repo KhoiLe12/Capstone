@@ -52,5 +52,6 @@ private:
     std::array<StrumEvent, MAX_PENDING> queue{};
     bool lastWasDownstroke = false;
     int samplesSinceLastPluck = 99999;
+    int chordNoteIndex = 0;
 };
 

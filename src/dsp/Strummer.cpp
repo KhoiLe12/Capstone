@@ -25,30 +25,22 @@ void Strummer::scheduleNote(int stringIndex, int midiNote, float velocity, float
         return;
     }
 
-    // A chord cluster window is ~50 ms. If new notes arrive after 50 ms, it's a new strum stroke.
-    const int newStrokeThreshold = static_cast<int>(0.050f * sampleRate);
-    if (samplesSinceLastPluck > newStrokeThreshold)
+    // Chord clustering window: notes arriving within 35 ms of each other belong to the same strum stroke
+    const int chordWindowSamples = static_cast<int>(0.035f * sampleRate);
+    if (samplesSinceLastPluck > chordWindowSamples)
     {
-        lastWasDownstroke = !lastWasDownstroke;
+        // New stroke begins: the first note always strikes with 0 delay (instant melody/first note)
+        chordNoteIndex        = 0;
         samplesSinceLastPluck = 0;
+        lastWasDownstroke     = !lastWasDownstroke;
     }
 
-    // Delay per string: 3 ms to 18 ms per string depending on speed
-    const float gapSec = 0.003f + speed * 0.015f;
-    float delaySec = 0.f;
-
-    if (lastWasDownstroke)
-    {
-        // Downstroke: Low E (string 0) plucks first -> High E (string 5) last
-        delaySec = static_cast<float>(stringIndex) * gapSec;
-    }
-    else
-    {
-        // Upstroke: High E (string 5) plucks first -> Low E (string 0) last
-        delaySec = static_cast<float>(5 - stringIndex) * gapSec;
-    }
-
+    // Stagger delay between successive strings in the chord (6 ms to 30 ms)
+    const float gapSec = 0.006f + speed * 0.024f;
+    const float delaySec = static_cast<float>(chordNoteIndex) * gapSec;
     const int delaySamples = static_cast<int>(delaySec * sampleRate);
+
+    ++chordNoteIndex;
 
     // Insert into queue
     for (auto& ev : queue)
@@ -91,5 +83,6 @@ void Strummer::reset() noexcept
         ev.active = false;
     lastWasDownstroke     = false;
     samplesSinceLastPluck = 99999;
+    chordNoteIndex        = 0;
 }
 

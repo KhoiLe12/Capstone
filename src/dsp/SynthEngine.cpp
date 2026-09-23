@@ -104,8 +104,10 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             lastBridgeReflections[v] = sympatheticStrength * mutualForce;
         }
 
-        // Normalise by string count to keep headroom constant
-        const float bridgeSignal = totalBridgeForce / static_cast<float>(NUM_STRINGS);
+        // Dynamic analog soft-saturation:
+        // Single melody notes pass unattenuated for full acoustic volume and rich modal resonance.
+        // Full chords are smoothly saturated (analog wood compression) to protect digital headroom.
+        const float bridgeSignal = std::tanh(totalBridgeForce * 1.8f) * 0.75f;
 
         // 4. Virtual Magnetic Pickup (Electric tone with spatial comb & tone circuit)
         const float pickupSignal = pickup.process(bridgeSignal, paramPickupPos, paramTone);
