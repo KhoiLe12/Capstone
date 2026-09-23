@@ -43,10 +43,24 @@ HybridSynthProcessor::createParameterLayout()
         juce::NormalisableRange<float>(0.05f, 0.50f),
         0.12f));
 
-    // Body Mix: dry/wet blend of BodyResonance
+    // Stiffness: string inharmonicity / dispersion (0 = nylon, 1 = metallic steel)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "stiffness", 1 },
+        "Stiffness",
+        juce::NormalisableRange<float>(0.f, 1.f),
+        0.25f));
+
+    // Body Size: modal scaling factor (0.6 = small parlor, 1.6 = jumbo)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "bodySize", 1 },
+        "Body Size",
+        juce::NormalisableRange<float>(0.6f, 1.6f),
+        1.00f));
+
+    // Body Coupling: 0 = solid body electric (max sustain), 1 = full acoustic soundboard
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "bodyMix", 1 },
-        "Body Mix",
+        "Body Coupling",
         juce::NormalisableRange<float>(0.f, 1.f),
         0.70f));
 
@@ -88,6 +102,8 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramDecay      = apvts.getRawParameterValue("decay")->load();
     synth.paramBrightness = apvts.getRawParameterValue("brightness")->load();
     synth.paramPickPos    = apvts.getRawParameterValue("pickPosition")->load();
+    synth.paramStiffness  = apvts.getRawParameterValue("stiffness")->load();
+    synth.paramBodySize   = apvts.getRawParameterValue("bodySize")->load();
     synth.paramBodyMix    = apvts.getRawParameterValue("bodyMix")->load();
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
 
@@ -145,4 +161,3 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new HybridSynthProcessor();
 }
-

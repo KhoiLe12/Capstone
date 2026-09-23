@@ -4,17 +4,18 @@
 /** The type of initial impulse to generate. */
 enum class ExciterType
 {
-    WHITE_NOISE,     ///< Flat-spectrum noise burst — neutral, full-range excitation
-    PLECTRUM_MODEL   ///< Pick-position comb + brightness shaping — more guitarlike
+    WHITE_NOISE,     ///< Flat-spectrum noise burst
+    PLECTRUM_MODEL   ///< Finite-duration asymmetric contact pulse + pick comb + brightness
 };
 
 /**
- * Exciter — generates the transient burst used to seed the Karplus-Strong delay line.
+ * Exciter — generates the transient contact burst used to seed the waveguide.
  *
- * Uses an xorshift32 PRNG (deterministic, fast, no stdlib rand() dependency)
- * and applies two optional spectral shaping stages:
- *   1. Pick-position comb filter  (PlectrumModel only)
- *   2. Brightness single-pole lowpass
+ * Models a physical plectrum:
+ *   1. Finite contact duration pulse (~1-3 ms, velocity-dependent)
+ *   2. Micro-friction texture against string windings
+ *   3. Pick-position comb filter (H(z) = 1 - z^-M)
+ *   4. Brightness lowpass filter
  */
 class Exciter
 {
@@ -24,37 +25,31 @@ public:
     /**
      * Fill outBuffer[0..length-1] with the exciter signal.
      *
-     * @param outBuffer     Destination float array (caller-allocated, length >= length)
-     * @param length        Number of samples to generate (should equal delay-line length)
+     * @param outBuffer     Destination float array
+     * @param length        Number of samples in the waveguide
+     * @param velocity      Normalised velocity 0..1 (controls contact duration and energy)
      * @param type          WHITE_NOISE or PLECTRUM_MODEL
-     * @param brightness    0 = dark (fc ≈ 2 kHz), 1 = bright (fc ≈ 20 kHz)
-     * @param pickPosition  Fractional position of plectrum along string (0.05 – 0.5)
+     * @param brightness    0 = dark (felt pick), 1 = bright (hard acrylic pick)
+     * @param pickPosition  Fraction of string length where plectrum strikes (0.05 – 0.5)
      * @param sampleRate    Audio sample rate in Hz
      */
     void fill(float* outBuffer, int length,
+              float velocity          = 0.8f,
               ExciterType type        = ExciterType::PLECTRUM_MODEL,
               float brightness        = 0.5f,
               float pickPosition      = 0.12f,
               float sampleRate        = 44100.f);
 
 private:
-    uint32_t prngState = 12345u;   ///< xorshift32 state (never 0)
+    uint32_t prngState = 12345u;   ///< xorshift32 state
 
     /** Advance PRNG and return one sample in [-1, +1]. */
     float nextSample() noexcept;
 
-    /**
-     * Apply 1-pole IIR lowpass to shape spectral brightness.
-     * Higher brightness → higher cutoff → more high-frequency content.
-     */
+    /** Apply 1-pole IIR lowpass to shape spectral brightness. */
     void applyBrightness(float* buf, int length,
                          float brightness, float sampleRate) noexcept;
 
-    /**
-     * Comb filter H(z) = 1 − z^{−M}, M = round(pickPos × length).
-     * Suppresses harmonics at integer multiples of 1/pickPos,
-     * mimicking a plectrum contacting the string at that point.
-     */
+    /** Comb filter H(z) = 1 - z^-M, M = round(pickPos * length). */
     void applyPickPosition(float* buf, int length, float pickPos) noexcept;
 };
-

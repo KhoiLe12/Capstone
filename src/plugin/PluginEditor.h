@@ -3,18 +3,8 @@
 #include "PluginProcessor.h"
 
 /**
- * HybridSynthEditor — minimal knob-based UI for the 5 synth parameters.
- *
- * Layout (500 × 220 px):
- *
- *   ┌─────────────────────────────────────────────────┐
- *   │      Hybrid Physical Modeling Synth              │
- *   │  [Decay] [Bright] [PickPos] [Body Mix] [Gain]   │
- *   │   (rotary knobs with value boxes below)          │
- *   └─────────────────────────────────────────────────┘
- *
- * All knobs are wired to the APVTS via SliderAttachment
- * (no manual listener boilerplate required).
+ * HybridSynthEditor — rotary knob UI for the 7 physical modeling parameters:
+ *   [Decay] [Brightness] [Pick Pos] [Stiffness] [Body Size] [Body Coupling] [Gain]
  */
 class HybridSynthEditor : public juce::AudioProcessorEditor
 {
@@ -26,19 +16,19 @@ public:
     void resized() override;
 
 private:
-    HybridSynthProcessor& processorRef;
 
-    // Knobs
-    juce::Slider decayKnob, brightnessKnob, pickPosKnob, bodyMixKnob, gainKnob;
+    // 7 Physical modeling knobs
+    juce::Slider decayKnob, brightnessKnob, pickPosKnob,
+                 stiffnessKnob, bodySizeKnob, bodyMixKnob, gainKnob;
 
-    // Labels below each knob
-    juce::Label  decayLabel, brightnessLabel, pickPosLabel, bodyMixLabel, gainLabel;
+    // Labels
+    juce::Label  decayLabel, brightnessLabel, pickPosLabel,
+                 stiffnessLabel, bodySizeLabel, bodyMixLabel, gainLabel;
 
-    // APVTS attachments keep knob ↔ parameter in sync (thread-safe)
+    // APVTS Slider Attachments
     using Attachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     Attachment decayAttach, brightnessAttach, pickPosAttach,
-               bodyMixAttach, gainAttach;
+               stiffnessAttach, bodySizeAttach, bodyMixAttach, gainAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HybridSynthEditor)
 };
-

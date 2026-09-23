@@ -11,29 +11,24 @@ static constexpr float kPi = 3.14159265358979323846f;
 
 float Exciter::nextSample() noexcept
 {
-    // xorshift32 — period 2^32 − 1, passes Diehard, safe on embedded targets
     prngState ^= prngState << 13u;
     prngState ^= prngState >> 17u;
     prngState ^= prngState << 5u;
-    // Interpret bit pattern as signed, normalise to [-1, +1]
     return static_cast<float>(static_cast<int32_t>(prngState))
            / static_cast<float>(0x7FFFFFFFu);
 }
 
 // ---------------------------------------------------------------------------
-// Spectral shaping helpers
+// Spectral Shaping Helpers
 // ---------------------------------------------------------------------------
 
 void Exciter::applyBrightness(float* buf, int length,
-                               float brightness, float sampleRate) noexcept
+                              float brightness, float sampleRate) noexcept
 {
-    // Single-pole IIR lowpass (bilinear approximation):
-    //   y[n] = y[n-1] + alpha * (x[n] - y[n-1])
-    //
-    // Cutoff maps linearly: 0 → 2 kHz (dark),  1 → 20 kHz (bright)
-    const float fc    = 2000.f + brightness * 18000.f;
+    // Cutoff maps: 0 -> 1.5 kHz (soft felt), 1 -> 20 kHz (hard pick)
+    const float b     = std::max(0.0f, std::min(brightness, 1.0f));
+    const float fc    = 1500.f + b * 18500.f;
     const float omega = 2.f * kPi * fc / sampleRate;
-    // Exponential decay coefficient (keeps fc accurate for small angles)
     const float alpha = 1.f - std::exp(-omega);
 
     float prev = 0.f;
@@ -46,10 +41,6 @@ void Exciter::applyBrightness(float* buf, int length,
 
 void Exciter::applyPickPosition(float* buf, int length, float pickPos) noexcept
 {
-    // Comb filter:  H(z) = 1 − z^{−M}
-    //   y[i] = x[i] − x[i−M]
-    //
-    // Applied in-place, running backwards to avoid reading already-modified samples.
     int M = static_cast<int>(pickPos * static_cast<float>(length));
     M = std::max(1, std::min(M, length - 1));
 
@@ -58,27 +49,52 @@ void Exciter::applyPickPosition(float* buf, int length, float pickPos) noexcept
 }
 
 // ---------------------------------------------------------------------------
-// Public interface
+// Public Interface
 // ---------------------------------------------------------------------------
 
 void Exciter::fill(float* outBuffer, int length,
+                   float         velocity,
                    ExciterType   type,
                    float         brightness,
                    float         pickPosition,
                    float         sampleRate)
 {
-    // 1. Generate white noise burst
-    for (int i = 0; i < length; ++i)
-        outBuffer[i] = nextSample();
+    std::fill(outBuffer, outBuffer + length, 0.f);
 
-    // 2. Apply pick-position comb (plectrum model only)
-    if (type == ExciterType::PLECTRUM_MODEL)
+    const float vel = std::max(0.05f, std::min(velocity, 1.0f));
+
+    if (type == ExciterType::WHITE_NOISE)
+    {
+        for (int i = 0; i < length; ++i)
+            outBuffer[i] = nextSample();
+    }
+    else
+    {
+        // Plectrum Model:
+        // Contact duration is 1.0 ms (hard snap) to 3.0 ms (gentle finger/felt)
+        const float contactDurationSec = 0.0010f + (1.0f - vel) * 0.0020f;
+        int contactSamples = static_cast<int>(contactDurationSec * sampleRate);
+        contactSamples = std::max(4, std::min(contactSamples, length));
+
+        // Generate smooth Hann-shaped contact pulse + winding friction texture
+        for (int i = 0; i < contactSamples; ++i)
+        {
+            const float phase = static_cast<float>(i) / static_cast<float>(contactSamples);
+            const float pulse = std::sin(kPi * phase); // half-sine window
+            const float envelope = pulse * pulse;      // Hann pulse shape
+
+            // 70% smooth displacement pulse + 30% winding micro-friction noise
+            outBuffer[i] = envelope * (0.70f + 0.30f * nextSample());
+        }
+
+        // Apply pick-position comb filtering
         applyPickPosition(outBuffer, length, pickPosition);
+    }
 
-    // 3. Shape spectral brightness
+    // Shape spectral brightness
     applyBrightness(outBuffer, length, brightness, sampleRate);
 
-    // 4. Peak-normalise to 0.95 FS (prevent overload at delay-line input)
+    // Peak-normalise to 0.95 FS
     float peak = 0.f;
     for (int i = 0; i < length; ++i)
         peak = std::max(peak, std::abs(outBuffer[i]));
@@ -90,4 +106,3 @@ void Exciter::fill(float* outBuffer, int length,
             outBuffer[i] *= scale;
     }
 }
-

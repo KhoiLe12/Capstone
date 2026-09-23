@@ -2,45 +2,50 @@
 #include "BiquadFilter.h"
 
 /**
- * BodyResonance — models acoustic guitar body coloration using a series
- * chain of peaking biquad filters tuned to known plate and air resonance modes.
+ * BodyResonance — IRCAM Modalys-style parallel modal soundboard model.
  *
  * Physical basis:
- *   Real acoustic guitar bodies have several well-studied resonant modes
- *   (Helmholtz/air mode A0, top-plate dipole T(1,1), cross-dipole T(2,1), etc.)
- *   that collectively give the instrument its characteristic warm, woody timbre.
- *   Running biquads in series means each stage sees the spectrally-shaped output
- *   of the previous stage, producing cumulative tonal character similar to what
- *   a real acoustic body imparts on the string vibration it radiates.
+ *   An acoustic guitar body (top plate, back plate, ribs, and soundhole air cavity)
+ *   is represented as a parallel sum of 32 distinct mechanical eigenmodes.
+ *   Unlike an arbitrary EQ effect, each mode corresponds to a physical resonance
+ *   with its own eigenfrequency, quality factor Q (damping), and modal coupling amplitude.
  *
- * Usage:
- *   Call init() once, then pass the summed voice output through process()
- *   sample-by-sample.  Adjust dryMix/wetMix at runtime to blend in resonance.
+ * Macro Controls:
+ *   - bodySize:     Scales modal frequencies (0.7 = small parlor/mandolin, 1.0 = dreadnought, 1.4 = jumbo).
+ *   - bodyDamping:  Scales mode Q factors (low = softer cedar/mahogany, high = resonant maple/spruce).
+ *   - bodyCoupling: Controls bridge energy transfer (0.0 = rigid bridge solid-body electric with infinite sustain,
+ *                   1.0 = responsive lightweight acoustic soundboard).
  */
 class BodyResonance
 {
 public:
-    /** Number of resonant body modes modelled. */
-    static constexpr int N_MODES = 8;
+    static constexpr int N_MODES = 32;
 
     BodyResonance() = default;
 
-    /** Design all filter coefficients for the given sample rate. */
-    void init(float sampleRate);
+    /** Design all modal filter coefficients for the current sample rate and macro parameters. */
+    void init(float sampleRate, float bodySize = 1.0f, float bodyDamping = 1.0f);
+
+    /** Update macro parameters dynamically without clicks. */
+    void setParameters(float bodySize, float bodyDamping, float bodyCoupling);
 
     /**
-     * Process one sample through the body resonance chain.
-     * Returns  dryMix*input + wetMix*(series-filtered output).
+     * Process one sample of bridge excitation through the parallel modal bank.
+     * Returns the radiated acoustic soundboard velocity.
      */
-    float process(float input) noexcept;
+    float process(float bridgeForce) noexcept;
 
-    /** Zero all filter state (call on transport stop / reset). */
+    /** Zero all filter states. */
     void reset() noexcept;
 
-    float dryMix = 0.3f;   ///< Weight of unprocessed signal (0..1)
-    float wetMix = 0.7f;   ///< Weight of body-filtered signal (0..1)
+    float getBodyCoupling() const noexcept { return currentCoupling; }
 
 private:
     BiquadFilter filters[N_MODES];
-};
+    float sampleRate      = 44100.f;
+    float currentSize     = 1.0f;
+    float currentDamping  = 1.0f;
+    float currentCoupling = 0.7f;
 
+    void updateFilters();
+};

@@ -2,27 +2,27 @@
 #include <vector>
 
 /**
- * KarplusStrong — 1-D digital waveguide implementing the Karplus-Strong
- * plucked-string algorithm with accurate pitch tuning.
+ * KarplusStrong — Advanced 1-D digital waveguide with:
+ *   - Sub-sample allpass pitch tuning
+ *   - Inharmonicity / stiffness dispersion allpass filter (metallic steel twang)
+ *   - Dynamic tension modulation (pitch settle on hard plucks)
+ *   - Multi-port bridge velocity injection for sympathetic resonance
  *
- * Signal flow per tick():
+ * Signal flow per tick(bridgeInjection):
  *
- *   delayLine[readHead]
- *        │
- *        ▼
- *   1st-order averaging LPF   ← high-frequency decay each loop
- *        │
- *        ▼
- *   loop gain g                ← sustain / overall decay rate
- *        │
- *        ▼
- *   1st-order allpass          ← fractional delay for sub-sample pitch accuracy
- *        │
- *        ▼
- *   delayLine[writeHead]       (= readHead, overwrite oldest sample)
- *
- * The output returned by tick() is the raw sample read before filtering,
- * which avoids the delay of the loop filter appearing in the output signal.
+ *   delayLine[readHead] ──► Averaging LPF ──► Loop Gain (Decay)
+ *                                │
+ *                                ▼
+ *                     Stiffness Dispersion Allpass (Inharmonicity)
+ *                                │
+ *                                ▼
+ *                     Pitch-Tuning Allpass (+ Tension Modulation)
+ *                                │
+ *                                ▼
+ *                      [ + bridgeInjection ] (Sympathetic coupling)
+ *                                │
+ *                                ▼
+ *                      delayLine[writeHead]
  */
 class KarplusStrong
 {
@@ -33,33 +33,36 @@ public:
     void init(float sampleRate);
 
     /**
-     * Set the fundamental frequency of the string.
-     * Computes integer delay-line length N and allpass coefficient C
-     * so that the total loop delay equals fs/f0 exactly (to sub-sample).
+     * Set fundamental frequency and string stiffness (inharmonicity).
+     * @param freqHz    Fundamental pitch in Hz
+     * @param stiffness 0 = pure harmonic nylon, 1 = stiff metallic steel
      */
-    void setFrequency(float freqHz);
+    void setFrequency(float freqHz, float stiffness = 0.25f);
 
     /**
-     * Set the sustain (loop gain scaling).
-     * decay = 0 → very short staccato.
-     * decay = 1 → very long sustain (~10 s at 440 Hz, 44100 Hz).
+     * Set sustain (loop gain scaling).
+     * decay = 0 -> very short staccato, 1 -> long singing sustain.
      */
     void setDecay(float decay) noexcept;
 
     /**
-     * Seed the delay line with exciter content and reset state.
-     * @param exciterBuf  Source buffer (should have length == delay-line size)
-     * @param length      Number of samples to copy
+     * Seed the delay line with exciter content and trigger tension envelope.
+     * @param exciterBuf Source buffer (length == delay-line size)
+     * @param length     Number of samples to copy
+     * @param velocity   Normalised velocity 0..1 (sets tension pitch gliss)
      */
-    void trigger(const float* exciterBuf, int length);
+    void trigger(const float* exciterBuf, int length, float velocity = 0.8f);
 
-    /** Advance one sample and return the string output. */
-    float tick() noexcept;
+    /**
+     * Advance one sample and return the string output at the bridge.
+     * @param bridgeInjection Velocity/force scattered back from the bridge junction
+     */
+    float tick(float bridgeInjection = 0.f) noexcept;
 
-    /** Zero the delay line and all filter state. */
+    /** Zero delay line and all filter registers. */
     void reset() noexcept;
 
-    /** Leaky RMS energy estimate — used by the voice-stealer. */
+    /** Leaky RMS energy estimate — used by voice-stealer and active checks. */
     float getEnergy() const noexcept { return energyEstimate; }
 
 private:
@@ -70,15 +73,24 @@ private:
     int   writeHead    = 0;
     int   delayLength  = 0;
 
-    // 1st-order averaging LPF state
+    // 1st-order averaging LPF state (high frequency damping per cycle)
     float avgPrev      = 0.f;
 
-    // 1st-order allpass interpolator (fractional delay correction)
+    // 1st-order allpass interpolator (fractional delay sub-sample tuning)
     //   y[n] = C*x[n] + x[n-1] - C*y[n-1]
-    float apCoeff      = 0.f;   ///< Allpass coefficient C
-    float apPrevIn     = 0.f;   ///< x[n-1]
-    float apPrevOut    = 0.f;   ///< y[n-1]
+    float apCoeff      = 0.f;
+    float apPrevIn     = 0.f;
+    float apPrevOut    = 0.f;
+
+    // 1st-order allpass dispersion filter (stiffness / inharmonicity)
+    //   y[n] = D*x[n] + x[n-1] - D*y[n-1]
+    float dispCoeff    = 0.f;   ///< D in [-0.6, 0.0]
+    float dispPrevIn   = 0.f;
+    float dispPrevOut  = 0.f;
+
+    // Dynamic tension modulation (pitch gliss on hard plucks)
+    float tensionOffset = 0.f;
+    float tensionDecay  = 0.9995f;
 
     float energyEstimate = 0.f;
 };
-

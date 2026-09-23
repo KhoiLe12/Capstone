@@ -1,5 +1,6 @@
 #include "Voice.h"
 #include <cmath>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -12,49 +13,50 @@ void Voice::init(float sr)
 }
 
 // ---------------------------------------------------------------------------
-// Note events
+// Note Events
 // ---------------------------------------------------------------------------
 
 void Voice::noteOn(int note, float vel,
-                   float brightness, float pickPosition, float decay)
+                   float brightness, float pickPosition, float decay,
+                   float stiffness)
 {
     midiNote = note;
     velocity = vel;
     active   = true;
 
     const float freq = midiToFreq(note);
-    string.setFrequency(freq);
+    string.setFrequency(freq, stiffness);
     string.setDecay(decay);
 
-    // Clamp exciter length to the pre-allocated scratch buffer.
-    // No heap allocation here — safe to call from the audio thread.
+    // Exciter length matches one wavelength (delay-line size)
     const int exciterLen = std::min(static_cast<int>(sampleRate / freq),
                                     kMaxExciterLength);
 
+    // Fill with velocity-dependent physical plectrum pulse
     exciter.fill(exciterScratch, exciterLen,
+                 velocity,
                  ExciterType::PLECTRUM_MODEL,
                  brightness,
                  pickPosition,
                  sampleRate);
 
-    string.trigger(exciterScratch, exciterLen);
+    string.trigger(exciterScratch, exciterLen, velocity);
 }
 
 void Voice::noteOff() noexcept
 {
-    // Karplus-Strong strings decay naturally; we simply let the energy drain.
-    // A future enhancement could reduce loopGain here to simulate muting.
+    // Natural Karplus-Strong string decay continues
 }
 
 // ---------------------------------------------------------------------------
-// Per-sample processing
+// Per-Sample Processing
 // ---------------------------------------------------------------------------
 
-float Voice::tick() noexcept
+float Voice::tick(float bridgeInjection) noexcept
 {
     if (!active) return 0.f;
 
-    const float out = string.tick() * velocity;
+    const float out = string.tick(bridgeInjection) * velocity;
 
     // Auto-deactivate when energy is negligibly small
     if (string.getEnergy() < kSilenceThreshold)
@@ -79,7 +81,6 @@ void Voice::reset() noexcept
 
 float Voice::midiToFreq(int note) noexcept
 {
-    // Standard equal-temperament tuning: A4 = 440 Hz = MIDI note 69
+    // Equal temperament tuning: A4 = 440 Hz = MIDI 69
     return 440.f * std::pow(2.f, (note - 69) / 12.f);
 }
-

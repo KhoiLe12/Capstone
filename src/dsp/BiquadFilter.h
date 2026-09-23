@@ -19,6 +19,12 @@ public:
      */
     void setResonator(float freqHz, float Q, float gainDB, float sampleRate);
 
+    /**
+     * Design a 2nd-order bandpass modal resonator centered at freqHz with quality factor Q
+     * and linear peak gain. Perfect for summing in parallel in a Modalys-style soundboard.
+     */
+    void setModalResonator(float freqHz, float Q, float linearGain, float sampleRate) noexcept;
+
     /** Load raw biquad coefficients directly (b0, b1, b2, a1, a2 normalised). */
     void setCoefficients(float b0, float b1, float b2, float a1, float a2) noexcept;
 
