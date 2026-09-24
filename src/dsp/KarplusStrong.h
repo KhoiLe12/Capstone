@@ -69,8 +69,11 @@ public:
     /** Leaky RMS energy estimate — used by voice-stealer and active checks. */
     float getEnergy() const noexcept { return energyEstimate; }
 
-private:
-    float sampleRate = 44100.f;
+    float sampleRate   = 44100.f;
+    float currentFreq  = 196.0f;
+    float currentDecay = 0.80f;
+
+    void updateLoopGains() noexcept;
 
     // Double-decay loop gains (Vertical = fast attack, Horizontal = singing sustain)
     float loopGainV  = 0.965f;

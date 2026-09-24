@@ -30,10 +30,18 @@ public:
     void setParameters(float bodySize, float bodyDamping, float bodyCoupling);
 
     /**
-     * Process one sample of bridge excitation through the parallel modal bank.
-     * Returns the radiated acoustic soundboard velocity.
+     * Process one sample of stereo bridge excitation through the parallel modal bank.
+     * Radiates true acoustic soundboard velocity in stereo.
      */
-    float process(float bridgeForce) noexcept;
+    void processStereo(float bridgeForceL, float bridgeForceR, float& outL, float& outR) noexcept;
+
+    /** Mono convenience overload. */
+    float process(float bridgeForce) noexcept
+    {
+        float l = 0.f, r = 0.f;
+        processStereo(bridgeForce, bridgeForce, l, r);
+        return 0.5f * (l + r);
+    }
 
     /** Zero all filter states. */
     void reset() noexcept;
@@ -46,6 +54,12 @@ private:
     float currentSize     = 1.0f;
     float currentDamping  = 1.0f;
     float currentCoupling = 0.7f;
+
+    // Cross-plate soundboard acoustic diffusion (Haas delay ~0.3ms)
+    static constexpr int CROSS_DELAY_LEN = 32;
+    float crossDelayL[CROSS_DELAY_LEN] = {};
+    float crossDelayR[CROSS_DELAY_LEN] = {};
+    int   crossDelayIdx = 0;
 
     void updateFilters();
 };

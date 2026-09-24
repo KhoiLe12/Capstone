@@ -56,33 +56,60 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
 
     for (int i = 0; i < numSamples; ++i)
     {
-        // 1. Advance all active string voices and sum bridge force
-        float totalBridgeForce = 0.f;
+        // 1. Advance all active string voices and sum bridge force in stereo
+        float totalBridgeForceL = 0.f;
+        float totalBridgeForceR = 0.f;
 
         for (int v = 0; v < NUM_VOICES; ++v)
         {
-            totalBridgeForce += voices[v].tick();
+            if (!voices[v].isActive())
+                continue;
+
+            const float s = voices[v].tick();
+            const int note = voices[v].getMidiNote();
+
+            // Physical string position across the bridge saddle (55mm width):
+            // Low E (MIDI 40) sits on the bass side (-0.18 pan)
+            // High E (MIDI 64) sits on the treble side (+0.18 pan)
+            float stringPan = 0.0f;
+            if (note > 0)
+            {
+                stringPan = std::clamp((static_cast<float>(note) - 52.0f) / 24.0f, -1.0f, 1.0f) * 0.18f;
+            }
+
+            totalBridgeForceL += s * (1.0f - stringPan);
+            totalBridgeForceR += s * (1.0f + stringPan);
         }
 
         // 2. Drive the 32-mode IRCAM Modalys spruce soundboard
-        // Linear summing preserves harmonic clarity and prevents intermodulation distortion on chords
-        const float bridgeSignal = totalBridgeForce * 0.28f;
+        // Linear summing preserves harmonic clarity and prevents intermodulation distortion on chords.
+        // Scaled to 0.50f (+3.1 dB makeup gain) for full acoustic punch and presence.
+        const float bridgeSignalL = totalBridgeForceL * 0.50f;
+        const float bridgeSignalR = totalBridgeForceR * 0.50f;
 
-        // 3. Excite the soundboard
-        float outputSample = body.process(bridgeSignal);
+        // 3. Excite the soundboard in stereo
+        float outL = 0.f;
+        float outR = 0.f;
+        body.processStereo(bridgeSignalL, bridgeSignalR, outL, outR);
 
         // 4. Master gain
-        outputSample *= paramMasterGain;
+        outL *= paramMasterGain;
+        outR *= paramMasterGain;
 
         // 5. Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS DAC ceiling
-        if (std::abs(outputSample) > 0.88f)
+        if (std::abs(outL) > 0.88f)
         {
-            const float sign = outputSample > 0.f ? 1.f : -1.f;
-            outputSample = sign * (0.88f + 0.10f * std::tanh((std::abs(outputSample) - 0.88f) / 0.10f));
+            const float sign = outL > 0.f ? 1.f : -1.f;
+            outL = sign * (0.88f + 0.10f * std::tanh((std::abs(outL) - 0.88f) / 0.10f));
+        }
+        if (std::abs(outR) > 0.88f)
+        {
+            const float sign = outR > 0.f ? 1.f : -1.f;
+            outR = sign * (0.88f + 0.10f * std::tanh((std::abs(outR) - 0.88f) / 0.10f));
         }
 
-        outputL[i] = outputSample;
-        outputR[i] = outputSample;
+        outputL[i] = outL;
+        outputR[i] = outR;
     }
 }
 

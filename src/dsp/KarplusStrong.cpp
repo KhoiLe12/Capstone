@@ -72,16 +72,32 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
         delayLineH.resize(static_cast<size_t>(delayLengthH) + 32, 0.f);
 
     apCoeffH = (1.0f - fracH) / (1.0f + fracH);
+
+    currentFreq = f0;
+    updateLoopGains();
 }
 
 void KarplusStrong::setDecay(float decay) noexcept
 {
-    // Double-decay physics:
-    // Vertical plane drives bridge saddle directly -> fast woody attack (0.940 .. 0.975)
-    // Horizontal plane has high bridge impedance -> long singing sustain (0.975 .. 0.996)
-    const float d = std::max(0.0f, std::min(decay, 1.0f));
-    loopGainV = 0.940f + d * 0.035f;
-    loopGainH = 0.975f + d * 0.021f;
+    currentDecay = std::max(0.0f, std::min(decay, 1.0f));
+    updateLoopGains();
+}
+
+void KarplusStrong::updateLoopGains() noexcept
+{
+    // Physics-based frequency-calibrated loop gains:
+    // tau is the exponential decay time constant in seconds.
+    // Vertical polarization (soundboard saddle attack thump): 0.10s .. 0.28s
+    const float tauV = 0.10f + currentDecay * 0.18f;
+    // Horizontal polarization (singing sustain floor): 0.80s .. 3.20s
+    const float tauH = 0.80f + currentDecay * 2.40f;
+
+    const float f0 = std::max(60.0f, currentFreq);
+
+    // loopGain = exp(-1 / (f0 * tau))
+    // Calibrates decay time in seconds across all pitches from low E to high E
+    loopGainV = std::min(0.985f, std::exp(-1.0f / (f0 * tauV)));
+    loopGainH = std::min(0.9990f, std::exp(-1.0f / (f0 * tauH)));
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +107,7 @@ void KarplusStrong::setDecay(float decay) noexcept
 void KarplusStrong::trigger(const float* exciterBuf, int length, float velocity)
 {
     reset();
+    updateLoopGains();
 
     // Pluck angle ~45 degrees decomposes energy into orthogonal planes:
     // v_V = sin(45 deg) * exciter, v_H = cos(45 deg) * exciter
