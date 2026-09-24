@@ -25,9 +25,9 @@ float Exciter::nextSample() noexcept
 void Exciter::applyBrightness(float* buf, int length,
                               float brightness, float sampleRate) noexcept
 {
-    // Cutoff maps: 0 -> 1.5 kHz (soft felt), 1 -> 20 kHz (hard pick)
+    // Cutoff maps: 0 -> 2.5 kHz (warm), 1 -> 22 kHz (crisp articulation)
     const float b     = std::max(0.0f, std::min(brightness, 1.0f));
-    const float fc    = 1500.f + b * 18500.f;
+    const float fc    = 2500.f + b * 19500.f;
     const float omega = 2.f * kPi * fc / sampleRate;
     const float alpha = 1.f - std::exp(-omega);
 
@@ -57,7 +57,8 @@ void Exciter::fill(float* outBuffer, int length,
                    ExciterType   type,
                    float         brightness,
                    float         pickPosition,
-                   float         sampleRate)
+                   float         sampleRate,
+                   float         /*stringFreqHz*/)
 {
     std::fill(outBuffer, outBuffer + length, 0.f);
 
@@ -70,24 +71,44 @@ void Exciter::fill(float* outBuffer, int length,
     }
     else
     {
-        // Plectrum Model:
-        // Contact duration is 1.0 ms (hard snap) to 3.0 ms (gentle finger/felt)
-        const float contactDurationSec = 0.0010f + (1.0f - vel) * 0.0020f;
+        // Physical Plucked String Contact & Release Model:
+        // Contact duration: 0.8 ms (hard strike) to 1.8 ms (soft strike)
+        const float contactDurationSec = 0.0008f + (1.0f - vel) * 0.0010f;
         int contactSamples = static_cast<int>(contactDurationSec * sampleRate);
-        contactSamples = std::max(4, std::min(contactSamples, length));
+        contactSamples = std::max(6, std::min(contactSamples, length));
 
-        // Generate smooth Hann-shaped contact pulse + winding friction texture
+        // Asymmetric release point: 75% rise (displacement), 25% steep release snap
+        const int releasePoint = static_cast<int>(contactSamples * 0.75f);
+
+        float lastNoise = 0.f;
+
         for (int i = 0; i < contactSamples; ++i)
         {
-            const float phase = static_cast<float>(i) / static_cast<float>(contactSamples);
-            const float pulse = std::sin(kPi * phase); // half-sine window
-            const float envelope = pulse * pulse;      // Hann pulse shape
+            float displacement = 0.f;
+            if (i <= releasePoint)
+            {
+                // Smooth rise ramp (string pulled aside)
+                const float phase = static_cast<float>(i) / static_cast<float>(releasePoint);
+                displacement = std::sin(0.5f * kPi * phase);
+            }
+            else
+            {
+                // Steep release edge (string slips free from nail/plectrum)
+                const float phase = static_cast<float>(i - releasePoint) / static_cast<float>(contactSamples - releasePoint);
+                displacement = std::cos(0.5f * kPi * phase);
+            }
 
-            // 70% smooth displacement pulse + 30% winding micro-friction noise
-            outBuffer[i] = envelope * (0.70f + 0.30f * nextSample());
+            // High-pass filtered micro-scrape (tactile string slip articulation: 3-10 kHz)
+            const float noise = nextSample();
+            const float scrape = noise - 0.85f * lastNoise;
+            lastNoise = noise;
+
+            // Release articulation burst is strongest during the steep slip
+            const float scrapeWeight = (i >= releasePoint) ? 0.40f : 0.15f;
+
+            outBuffer[i] = displacement * 0.75f + scrape * scrapeWeight * (0.8f + 0.6f * brightness);
         }
 
-        // Apply pick-position comb filtering
         applyPickPosition(outBuffer, length, pickPosition);
     }
 

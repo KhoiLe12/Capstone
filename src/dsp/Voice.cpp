@@ -32,13 +32,14 @@ void Voice::noteOn(int note, float vel,
     const int exciterLen = std::min(static_cast<int>(sampleRate / freq),
                                     kMaxExciterLength);
 
-    // Fill with velocity-dependent physical plectrum pulse
+    // Fill with velocity-dependent physical classical nylon finger pulse (flesh + nail)
     exciter.fill(exciterScratch, exciterLen,
                  velocity,
-                 ExciterType::PLECTRUM_MODEL,
+                 ExciterType::NYLON_FINGER_MODEL,
                  brightness,
                  pickPosition,
-                 sampleRate);
+                 sampleRate,
+                 freq);
 
     string.trigger(exciterScratch, exciterLen, velocity);
 }

@@ -35,7 +35,8 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
 
     // 1. Vertical Polarization (y-axis: perpendicular to soundboard, fundamental f0)
     const float totalDelayV = sampleRate / f0;
-    float etaV = totalDelayV - 0.5f - dispDelay;
+    // DC group delay of 1st-order FIR loss filter (1 - S) + S * z^-1 is exactly S samples
+    float etaV = totalDelayV - sCoeffV - dispDelay;
     if (etaV < 2.0f) etaV = 2.0f;
 
     delayLengthV = static_cast<int>(etaV);
@@ -56,7 +57,7 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // 2. Horizontal Polarization (x-axis: parallel to soundboard, anisotropic micro-detuning ~0.18 Hz)
     const float fH = f0 + 0.18f;
     const float totalDelayH = sampleRate / fH;
-    float etaH = totalDelayH - 0.5f - dispDelay;
+    float etaH = totalDelayH - sCoeffH - dispDelay;
     if (etaH < 2.0f) etaH = 2.0f;
 
     delayLengthH = static_cast<int>(etaH);
@@ -154,9 +155,10 @@ float KarplusStrong::tick() noexcept
 
     // --- 1. Vertical Waveguide (y-axis: perpendicular to soundboard) ---
     const float xV = delayLineV[static_cast<size_t>(writeHeadV)];
-    const float avgV = 0.5f * (xV + avgPrevV);
+    // Calibrated viscoelastic nylon loss filter
+    const float lossV = (1.0f - sCoeffV) * xV + sCoeffV * avgPrevV;
     avgPrevV = xV;
-    const float gainedV = avgV * loopGainV;
+    const float gainedV = lossV * loopGainV;
 
     const float dispOutV = dispCoeff * gainedV + dispPrevInV - dispCoeff * dispPrevOutV;
     dispPrevInV  = gainedV;
@@ -171,9 +173,10 @@ float KarplusStrong::tick() noexcept
 
     // --- 2. Horizontal Waveguide (x-axis: parallel to soundboard) ---
     const float xH = delayLineH[static_cast<size_t>(writeHeadH)];
-    const float avgH = 0.5f * (xH + avgPrevH);
+    // Calibrated nylon loss filter (preserves crisp fingernail harmonic detail)
+    const float lossH = (1.0f - sCoeffH) * xH + sCoeffH * avgPrevH;
     avgPrevH = xH;
-    const float gainedH = avgH * loopGainH;
+    const float gainedH = lossH * loopGainH;
 
     const float dispOutH = dispCoeff * gainedH + dispPrevInH - dispCoeff * dispPrevOutH;
     dispPrevInH  = gainedH;

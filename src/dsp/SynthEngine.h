@@ -41,11 +41,11 @@ public:
     // Physical Parameters — set by PluginProcessor
     // -------------------------------------------------------------------
     float paramDecay       = 0.80f;   ///< String sustain (0..1)
-    float paramBrightness  = 0.50f;   ///< Exciter brightness (0..1)
-    float paramPickPos     = 0.12f;   ///< Pick contact point (0.05..0.5)
+    float paramBrightness  = 0.60f;   ///< Exciter brightness / nail polish (0..1)
+    float paramPickPos     = 0.13f;   ///< Pick/finger strike position (0.05..0.5)
     float paramBodyMix     = 0.70f;   ///< Body coupling (0 = solid electric, 1 = acoustic)
     float paramMasterGain  = 0.80f;   ///< Output master level (0..1)
-    float paramStiffness   = 0.25f;   ///< Inharmonicity / metal stiffness (0..1)
+    float paramStiffness   = 0.20f;   ///< Inharmonicity / acoustic string dispersion (0..1)
     float paramBodySize    = 1.00f;   ///< Soundboard size / scale (0.6..1.8)
 
 private:

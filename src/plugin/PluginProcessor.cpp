@@ -29,26 +29,26 @@ HybridSynthProcessor::createParameterLayout()
         juce::NormalisableRange<float>(0.f, 1.f),
         0.80f));
 
-    // Brightness: spectral content of exciter burst
+    // Brightness: spectral content of exciter burst / fingernail polish
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "brightness", 1 },
         "Brightness",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.50f));
+        0.60f));
 
-    // Pick Position: fractional position of plectrum along string
+    // Pick Position: fractional position of plectrum/finger along string
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "pickPosition", 1 },
         "Pick Position",
         juce::NormalisableRange<float>(0.05f, 0.50f),
-        0.12f));
+        0.13f));
 
-    // Stiffness: string inharmonicity / dispersion (0 = nylon, 1 = metallic steel)
+    // Stiffness: string inharmonicity / dispersion (0 = pure harmonic, 1 = metallic steel)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "stiffness", 1 },
         "Stiffness",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.25f));
+        0.20f));
 
     // Body Size: modal scaling factor (0.6 = small parlor, 1.6 = jumbo)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

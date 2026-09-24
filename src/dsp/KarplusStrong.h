@@ -79,6 +79,13 @@ public:
     float loopGainV  = 0.965f;
     float loopGainH  = 0.994f;
 
+    // Nylon string viscoelastic loss filter coefficients S in [0.05, 0.45]
+    // y[n] = (1 - S) * x[n] + S * x[n-1]
+    // S_V (vertical, higher bridge loss): 0.28
+    // S_H (horizontal, singing sustain & fingernail overtone preservation): 0.16
+    static constexpr float sCoeffV = 0.28f;
+    static constexpr float sCoeffH = 0.16f;
+
     // --- Vertical Polarization (y: perpendicular to top plate) ---
     std::vector<float> delayLineV;
     int   writeHeadV   = 0;
