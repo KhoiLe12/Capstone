@@ -1,6 +1,7 @@
 #include "BodyResonance.h"
 #include <cmath>
 #include <algorithm>
+#include <iterator>
 
 // ---------------------------------------------------------------------------
 // 32-Mode Acoustic Guitar Body Dataset
@@ -159,7 +160,7 @@ void BodyResonance::reset() noexcept
 {
     for (auto& f : filters)
         f.reset();
-    std::fill(std::begin(crossDelayL), std::end(crossDelayL), 0.f);
-    std::fill(std::begin(crossDelayR), std::end(crossDelayR), 0.f);
+    std::fill_n(crossDelayL, CROSS_DELAY_LEN, 0.f);
+    std::fill_n(crossDelayR, CROSS_DELAY_LEN, 0.f);
     crossDelayIdx = 0;
 }
