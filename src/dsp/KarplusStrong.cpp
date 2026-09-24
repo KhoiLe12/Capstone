@@ -25,10 +25,20 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // Clamp frequency to reasonable guitar range (60 Hz drop-B to Nyquist * 0.35)
     const float f0 = std::max(60.0f, std::min(freqHz, sampleRate * 0.35f));
 
-    // Map stiffness [0, 1] to dispersion allpass coefficient D in [-0.55, 0.0]
-    // D = 0: pure harmonic; D < 0: higher partials travel faster (stiff metal string)
+    // Map stiffness [0, 1] to dispersion allpass coefficient D in [-0.15, 0.0]
+    // Nylon strings have very low inharmonicity compared to steel wires.
     const float clampedStiffness = std::max(0.0f, std::min(stiffness, 1.0f));
-    dispCoeff = -0.55f * clampedStiffness;
+    dispCoeff = -0.15f * clampedStiffness;
+
+    // Frequency-adaptive vertical and horizontal loss filter coefficients.
+    // Low notes have long delay lines where high harmonics circulate many more
+    // times before the fundamental decays — they accumulate and sound harsh/buzzy.
+    // Ramp S from 0.46 at 60 Hz down to 0.26 at 500 Hz.
+    {
+        const float t = std::max(0.0f, std::min((f0 - 60.0f) / (500.0f - 60.0f), 1.0f));
+        sCoeffV_computed = 0.46f - t * (0.46f - 0.26f);   // 0.46 (bass warmth) → 0.26 (treble sparkle)
+        sCoeffH_computed = 0.38f - t * (0.38f - 0.20f);   // 0.38 (tames bass buzz) → 0.20 (singing sustain)
+    }
 
     // DC group delay of the dispersion allpass filter: tau = (1 - D) / (1 + D)
     const float dispDelay = (1.0f - dispCoeff) / (1.0f + dispCoeff);
@@ -36,7 +46,7 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // 1. Vertical Polarization (y-axis: perpendicular to soundboard, fundamental f0)
     const float totalDelayV = sampleRate / f0;
     // DC group delay of 1st-order FIR loss filter (1 - S) + S * z^-1 is exactly S samples
-    float etaV = totalDelayV - sCoeffV - dispDelay;
+    float etaV = totalDelayV - sCoeffV_computed - dispDelay;
     if (etaV < 2.0f) etaV = 2.0f;
 
     delayLengthV = static_cast<int>(etaV);
@@ -57,7 +67,7 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // 2. Horizontal Polarization (x-axis: parallel to soundboard, anisotropic micro-detuning ~0.18 Hz)
     const float fH = f0 + 0.18f;
     const float totalDelayH = sampleRate / fH;
-    float etaH = totalDelayH - sCoeffH - dispDelay;
+    float etaH = totalDelayH - sCoeffH_computed - dispDelay;
     if (etaH < 2.0f) etaH = 2.0f;
 
     delayLengthH = static_cast<int>(etaH);
@@ -107,6 +117,7 @@ void KarplusStrong::updateLoopGains() noexcept
 
 void KarplusStrong::trigger(const float* exciterBuf, int length, float velocity)
 {
+    (void)velocity;
     reset();
     updateLoopGains();
 
@@ -125,10 +136,9 @@ void KarplusStrong::trigger(const float* exciterBuf, int length, float velocity)
     writeHeadV = 0;
     writeHeadH = 0;
 
-    // Hard plucks increase initial tension (shortens effective string length)
-    // Settle time corresponds to ~50-80 ms
-    const float vel = std::max(0.0f, std::min(velocity, 1.0f));
-    tensionOffset = 0.85f * (vel * vel);
+    // Dynamic tension modulation disabled for classical nylon string
+    // to maintain rock-solid acoustic tuning and avoid laser/synthesizer pitch artifacts.
+    tensionOffset = 0.f;
 
     // Start energy estimate high so voice stealer does not immediately reclaim
     energyEstimate = 1.0f;
@@ -142,21 +152,14 @@ float KarplusStrong::tick() noexcept
 {
     if (delayLengthV <= 0 || delayLengthH <= 0) return 0.f;
 
-    // Dynamic tension modulation (pitch gliss on hard plucks)
-    float currentApCoeffV = apCoeffV;
-    float currentApCoeffH = apCoeffH;
-    if (tensionOffset > 0.001f)
-    {
-        const float pitchOffset = tensionOffset * 0.15f;
-        currentApCoeffV = std::min(0.75f, apCoeffV + pitchOffset);
-        currentApCoeffH = std::min(0.75f, apCoeffH + pitchOffset);
-        tensionOffset *= tensionDecay;
-    }
+    // Stable sub-sample allpass coefficients (zero chirp)
+    const float currentApCoeffV = apCoeffV;
+    const float currentApCoeffH = apCoeffH;
 
     // --- 1. Vertical Waveguide (y-axis: perpendicular to soundboard) ---
     const float xV = delayLineV[static_cast<size_t>(writeHeadV)];
-    // Calibrated viscoelastic nylon loss filter
-    const float lossV = (1.0f - sCoeffV) * xV + sCoeffV * avgPrevV;
+    // Frequency-adaptive viscoelastic nylon loss filter (warmer at bass, crisper at treble)
+    const float lossV = (1.0f - sCoeffV_computed) * xV + sCoeffV_computed * avgPrevV;
     avgPrevV = xV;
     const float gainedV = lossV * loopGainV;
 
@@ -173,8 +176,8 @@ float KarplusStrong::tick() noexcept
 
     // --- 2. Horizontal Waveguide (x-axis: parallel to soundboard) ---
     const float xH = delayLineH[static_cast<size_t>(writeHeadH)];
-    // Calibrated nylon loss filter (preserves crisp fingernail harmonic detail)
-    const float lossH = (1.0f - sCoeffH) * xH + sCoeffH * avgPrevH;
+    // Calibrated nylon loss filter (tames metallic buzz on lower strings)
+    const float lossH = (1.0f - sCoeffH_computed) * xH + sCoeffH_computed * avgPrevH;
     avgPrevH = xH;
     const float gainedH = lossH * loopGainH;
 

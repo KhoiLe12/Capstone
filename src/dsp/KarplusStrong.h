@@ -59,8 +59,9 @@ public:
     /** Apply physical finger/palm damping on note release. */
     void damp() noexcept
     {
-        loopGainV = std::min(loopGainV, 0.35f);
-        loopGainH = std::min(loopGainH, 0.35f);
+        // Kept no-op inside the circulating delay line: instantaneous loopGain
+        // changes inject step discontinuities that circulate and crackle.
+        // Note-off release is cleanly handled by Voice's acoustic release envelope.
     }
 
     /** Zero delay lines and all filter registers. */
@@ -79,12 +80,12 @@ public:
     float loopGainV  = 0.965f;
     float loopGainH  = 0.994f;
 
-    // Nylon string viscoelastic loss filter coefficients S in [0.05, 0.45]
+    // Nylon string viscoelastic loss filter coefficients S in [0.05, 0.48]
     // y[n] = (1 - S) * x[n] + S * x[n-1]
-    // S_V (vertical, higher bridge loss): 0.28
-    // S_H (horizontal, singing sustain & fingernail overtone preservation): 0.16
-    static constexpr float sCoeffV = 0.28f;
-    static constexpr float sCoeffH = 0.16f;
+    // Both vertical and horizontal coefficients are frequency-adaptive to warmly
+    // damp high harmonics at low pitches while keeping treble notes crisp.
+    float sCoeffV_computed = 0.32f;
+    float sCoeffH_computed = 0.25f;
 
     // --- Vertical Polarization (y: perpendicular to top plate) ---
     std::vector<float> delayLineV;

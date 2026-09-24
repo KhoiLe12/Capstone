@@ -39,7 +39,7 @@ public:
 
     bool  isActive()    const noexcept { return active; }
     int   getMidiNote() const noexcept { return midiNote; }
-    float getEnergy()   const noexcept { return string.getEnergy(); }
+    float getEnergy()   const noexcept { return string.getEnergy() * (releasing ? releaseGain : 1.0f); }
 
     /** Hard-stop and reset. */
     void reset() noexcept;
@@ -52,6 +52,12 @@ private:
     float velocity   = 1.f;
     bool  active     = false;
     float sampleRate = 44100.f;
+
+    // Smooth acoustic release envelope and zero-crossing anti-click fade
+    bool  releasing       = false;
+    float releaseGain     = 1.0f;
+    float releaseCoeff    = 0.999f;
+    int   fadeSamplesLeft = -1;
 
     static float midiToFreq(int note) noexcept;
     static constexpr float kSilenceThreshold = 1e-9f;

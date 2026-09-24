@@ -55,4 +55,10 @@ private:
 
     int findFreeVoice() const noexcept;
     int findVoiceForNote(int midiNote) const noexcept;
+
+    // 18 Hz Acoustic DC Blocker state (removes sub-bass DC bias)
+    float dcX_L = 0.f;
+    float dcY_L = 0.f;
+    float dcX_R = 0.f;
+    float dcY_R = 0.f;
 };

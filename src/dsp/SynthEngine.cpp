@@ -1,6 +1,7 @@
 #include "SynthEngine.h"
 #include <limits>
 #include <algorithm>
+#include <cmath>
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -82,21 +83,32 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         }
 
         // 2. Drive the 32-mode IRCAM Modalys spruce soundboard
-        // Linear summing preserves harmonic clarity and prevents intermodulation distortion on chords.
-        // Scaled to 0.50f (+3.1 dB makeup gain) for full acoustic punch and presence.
-        const float bridgeSignalL = totalBridgeForceL * 0.50f;
-        const float bridgeSignalR = totalBridgeForceR * 0.50f;
+        // Scaled to 0.65f for clean headroom with zero limiter saturation on plucks.
+        const float bridgeSignalL = totalBridgeForceL * 0.65f;
+        const float bridgeSignalR = totalBridgeForceR * 0.65f;
 
         // 3. Excite the soundboard in stereo
         float outL = 0.f;
         float outR = 0.f;
         body.processStereo(bridgeSignalL, bridgeSignalR, outL, outR);
 
-        // 4. Master gain
+        // 4. Acoustic 18 Hz DC Blocker (guarantees zero DC offset and true acoustic centering)
+        constexpr float R = 0.9974f;
+        const float dcOutL = outL - dcX_L + R * dcY_L;
+        dcX_L = outL;
+        dcY_L = dcOutL;
+        outL = dcOutL;
+
+        const float dcOutR = outR - dcX_R + R * dcY_R;
+        dcX_R = outR;
+        dcY_R = dcOutR;
+        outR = dcOutR;
+
+        // 5. Master gain
         outL *= paramMasterGain;
         outR *= paramMasterGain;
 
-        // 5. Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS DAC ceiling
+        // 6. Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS DAC ceiling
         if (std::abs(outL) > 0.88f)
         {
             const float sign = outL > 0.f ? 1.f : -1.f;
@@ -122,6 +134,8 @@ void SynthEngine::reset()
     for (auto& v : voices)
         v.reset();
     body.reset();
+    dcX_L = 0.f; dcY_L = 0.f;
+    dcX_R = 0.f; dcY_R = 0.f;
 }
 
 // ---------------------------------------------------------------------------

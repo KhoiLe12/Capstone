@@ -10,6 +10,8 @@ void Voice::init(float sr)
 {
     sampleRate = sr;
     string.init(sr);
+    // Classical finger/palm damping time constant ~35ms: smooth, natural decay
+    releaseCoeff = std::exp(-1.0f / (0.035f * sampleRate));
 }
 
 // ---------------------------------------------------------------------------
@@ -23,6 +25,9 @@ void Voice::noteOn(int note, float vel,
     midiNote = note;
     velocity = vel;
     active   = true;
+    releasing = false;
+    releaseGain = 1.0f;
+    fadeSamplesLeft = -1;
 
     const float freq = midiToFreq(note);
     string.setFrequency(freq, stiffness);
@@ -46,7 +51,8 @@ void Voice::noteOn(int note, float vel,
 
 void Voice::noteOff() noexcept
 {
-    // Apply physical finger/palm damping to the vibrating string
+    // Begin smooth acoustic release envelope
+    releasing = true;
     string.damp();
 }
 
@@ -58,13 +64,41 @@ float Voice::tick() noexcept
 {
     if (!active) return 0.f;
 
-    const float out = string.tick() * velocity;
+    float out = string.tick() * velocity;
 
-    // Auto-deactivate when energy is negligibly small
-    if (string.getEnergy() < 1e-7f)
+    // Apply smooth exponential release envelope on note-off
+    if (releasing)
     {
-        active   = false;
-        midiNote = -1;
+        out *= releaseGain;
+        releaseGain *= releaseCoeff;
+
+        // When release gain has decayed into near-inaudibility (-46 dB),
+        // trigger an anti-click linear fade to zero
+        if (releaseGain < 0.005f && fadeSamplesLeft < 0)
+        {
+            fadeSamplesLeft = 64;
+        }
+    }
+    else if (string.getEnergy() < 1e-7f && fadeSamplesLeft < 0)
+    {
+        // Natural ring-out also fades out cleanly instead of hard-cutting
+        fadeSamplesLeft = 64;
+    }
+
+    // 64-sample linear fade-out to guarantee zero DC or step click
+    if (fadeSamplesLeft > 0)
+    {
+        const float fadeFactor = static_cast<float>(fadeSamplesLeft) / 64.0f;
+        out *= fadeFactor;
+        --fadeSamplesLeft;
+
+        if (fadeSamplesLeft == 0)
+        {
+            active = false;
+            releasing = false;
+            midiNote = -1;
+            return 0.f;
+        }
     }
 
     return out;
@@ -77,7 +111,10 @@ float Voice::tick() noexcept
 void Voice::reset() noexcept
 {
     string.reset();
-    active   = false;
+    active = false;
+    releasing = false;
+    releaseGain = 1.0f;
+    fadeSamplesLeft = -1;
     midiNote = -1;
 }
 
