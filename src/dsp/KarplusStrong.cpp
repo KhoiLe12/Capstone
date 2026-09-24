@@ -11,17 +11,18 @@ void KarplusStrong::init(float sr)
     sampleRate = sr;
     // Pre-allocate for lowest expected pitch (~20 Hz = 2205 samples at 44100)
     const int maxLen = static_cast<int>(sr / 20.f) + 32;
-    delayLine.assign(static_cast<size_t>(maxLen), 0.f);
+    delayLineV.assign(static_cast<size_t>(maxLen), 0.f);
+    delayLineH.assign(static_cast<size_t>(maxLen), 0.f);
     reset();
 }
 
 // ---------------------------------------------------------------------------
-// Parameter Setters & Pitch Calibration
+// Parameter Setters & Pitch Calibration (2D Dual-Polarization)
 // ---------------------------------------------------------------------------
 
 void KarplusStrong::setFrequency(float freqHz, float stiffness)
 {
-    // Clamp frequency to reasonable guitar range (60 Hz drop-B to Nyquist / 3)
+    // Clamp frequency to reasonable guitar range (60 Hz drop-B to Nyquist * 0.35)
     const float f0 = std::max(60.0f, std::min(freqHz, sampleRate * 0.35f));
 
     // Map stiffness [0, 1] to dispersion allpass coefficient D in [-0.55, 0.0]
@@ -32,52 +33,79 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // DC group delay of the dispersion allpass filter: tau = (1 - D) / (1 + D)
     const float dispDelay = (1.0f - dispCoeff) / (1.0f + dispCoeff);
 
-    // Total desired loop delay in samples: T = fs / f0
-    const float totalDelay = sampleRate / f0;
+    // 1. Vertical Polarization (y-axis: perpendicular to soundboard, fundamental f0)
+    const float totalDelayV = sampleRate / f0;
+    float etaV = totalDelayV - 0.5f - dispDelay;
+    if (etaV < 2.0f) etaV = 2.0f;
 
-    // Subtract 1st-order averaging LPF delay (~0.5 samples) and dispersion delay
-    float eta = totalDelay - 0.5f - dispDelay;
-    if (eta < 2.0f) eta = 2.0f;
+    delayLengthV = static_cast<int>(etaV);
+    float fracV = etaV - static_cast<float>(delayLengthV); // in [0, 1)
 
-    delayLength = static_cast<int>(eta);
-    float frac = eta - static_cast<float>(delayLength); // in [0, 1)
-
-    // Keep fractional delay away from 0 so allpass pole does not land on the unit circle (z = -1)
-    if (frac < 0.2f && delayLength > 2)
+    // Keep fractional delay away from 0 so allpass pole does not land on unit circle (z = -1)
+    if (fracV < 0.2f && delayLengthV > 2)
     {
-        delayLength -= 1;
-        frac += 1.0f;
+        delayLengthV -= 1;
+        fracV += 1.0f;
     }
 
-    // Ensure circular buffer has sufficient capacity
-    if (delayLength + 8 > static_cast<int>(delayLine.size()))
-        delayLine.resize(static_cast<size_t>(delayLength) + 32, 0.f);
+    if (delayLengthV + 8 > static_cast<int>(delayLineV.size()))
+        delayLineV.resize(static_cast<size_t>(delayLengthV) + 32, 0.f);
 
-    // Allpass coefficient: C = (1 - frac) / (1 + frac)
-    apCoeff = (1.0f - frac) / (1.0f + frac);
+    apCoeffV = (1.0f - fracV) / (1.0f + fracV);
+
+    // 2. Horizontal Polarization (x-axis: parallel to soundboard, anisotropic micro-detuning ~0.18 Hz)
+    const float fH = f0 + 0.18f;
+    const float totalDelayH = sampleRate / fH;
+    float etaH = totalDelayH - 0.5f - dispDelay;
+    if (etaH < 2.0f) etaH = 2.0f;
+
+    delayLengthH = static_cast<int>(etaH);
+    float fracH = etaH - static_cast<float>(delayLengthH); // in [0, 1)
+
+    if (fracH < 0.2f && delayLengthH > 2)
+    {
+        delayLengthH -= 1;
+        fracH += 1.0f;
+    }
+
+    if (delayLengthH + 8 > static_cast<int>(delayLineH.size()))
+        delayLineH.resize(static_cast<size_t>(delayLengthH) + 32, 0.f);
+
+    apCoeffH = (1.0f - fracH) / (1.0f + fracH);
 }
 
 void KarplusStrong::setDecay(float decay) noexcept
 {
-    // Map decay 0..1 to loop gain 0.965..0.996
-    // Strictly bounds loop gain so notes decay naturally within 3-6s
+    // Double-decay physics:
+    // Vertical plane drives bridge saddle directly -> fast woody attack (0.940 .. 0.975)
+    // Horizontal plane has high bridge impedance -> long singing sustain (0.975 .. 0.996)
     const float d = std::max(0.0f, std::min(decay, 1.0f));
-    loopGain = 0.965f + d * 0.031f;
+    loopGainV = 0.940f + d * 0.035f;
+    loopGainH = 0.975f + d * 0.021f;
 }
 
 // ---------------------------------------------------------------------------
-// Trigger & Dynamic Tension
+// Trigger & Dynamic Tension (45-degree pluck decomposition)
 // ---------------------------------------------------------------------------
 
 void KarplusStrong::trigger(const float* exciterBuf, int length, float velocity)
 {
     reset();
 
-    const int copyLen = std::min(length, delayLength);
-    for (int i = 0; i < copyLen; ++i)
-        delayLine[static_cast<size_t>(i)] = exciterBuf[i];
+    // Pluck angle ~45 degrees decomposes energy into orthogonal planes:
+    // v_V = sin(45 deg) * exciter, v_H = cos(45 deg) * exciter
+    constexpr float kPluckDecomp = 0.70710678f; // 1 / sqrt(2)
 
-    writeHead = 0;
+    const int copyLenV = std::min(length, delayLengthV);
+    for (int i = 0; i < copyLenV; ++i)
+        delayLineV[static_cast<size_t>(i)] = exciterBuf[i] * kPluckDecomp;
+
+    const int copyLenH = std::min(length, delayLengthH);
+    for (int i = 0; i < copyLenH; ++i)
+        delayLineH[static_cast<size_t>(i)] = exciterBuf[i] * kPluckDecomp;
+
+    writeHeadV = 0;
+    writeHeadH = 0;
 
     // Hard plucks increase initial tension (shortens effective string length)
     // Settle time corresponds to ~50-80 ms
@@ -89,52 +117,67 @@ void KarplusStrong::trigger(const float* exciterBuf, int length, float velocity)
 }
 
 // ---------------------------------------------------------------------------
-// Per-Sample Tick with Multi-Port Bridge Coupling
+// Per-Sample Tick: 2D Waveguide + Cross-Polarization Bridge Sum
 // ---------------------------------------------------------------------------
 
 float KarplusStrong::tick() noexcept
 {
-    if (delayLength <= 0) return 0.f;
+    if (delayLengthV <= 0 || delayLengthH <= 0) return 0.f;
 
-    // 1. Read the wave currently arriving at the bridge
-    const float x = delayLine[static_cast<size_t>(writeHead)];
-
-    // 2. Averaging lowpass filter (high-frequency air and internal friction loss)
-    const float averaged = 0.5f * (x + avgPrev);
-    avgPrev = x;
-
-    // 3. Loop gain (overall sustain)
-    const float gained = averaged * loopGain;
-
-    // 4. Stiffness dispersion allpass filter (inharmonicity)
-    //    y[n] = D*x[n] + x[n-1] - D*y[n-1]
-    const float dispOut = dispCoeff * gained + dispPrevIn - dispCoeff * dispPrevOut;
-    dispPrevIn  = gained;
-    dispPrevOut = dispOut;
-
-    // 5. Dynamic tension modulation (adjust allpass coefficient slightly on pluck onset)
-    float currentApCoeff = apCoeff;
+    // Dynamic tension modulation (pitch gliss on hard plucks)
+    float currentApCoeffV = apCoeffV;
+    float currentApCoeffH = apCoeffH;
     if (tensionOffset > 0.001f)
     {
-        // Pitch shift: decrease fractional delay -> increase C (clamped to prevent Nyquist resonance)
-        currentApCoeff = std::min(0.75f, apCoeff + tensionOffset * 0.15f);
+        const float pitchOffset = tensionOffset * 0.15f;
+        currentApCoeffV = std::min(0.75f, apCoeffV + pitchOffset);
+        currentApCoeffH = std::min(0.75f, apCoeffH + pitchOffset);
         tensionOffset *= tensionDecay;
     }
 
-    // 6. Sub-sample pitch tuning allpass filter
-    //    y[n] = C*x[n] + x[n-1] - C*y[n-1]
-    const float apOut = currentApCoeff * dispOut + apPrevIn - currentApCoeff * apPrevOut;
-    apPrevIn  = dispOut;
-    apPrevOut = apOut;
+    // --- 1. Vertical Waveguide (y-axis: perpendicular to soundboard) ---
+    const float xV = delayLineV[static_cast<size_t>(writeHeadV)];
+    const float avgV = 0.5f * (xV + avgPrevV);
+    avgPrevV = xV;
+    const float gainedV = avgV * loopGainV;
 
-    // 7. Write pure string wave back into delay line (strictly stable 1D waveguide)
-    delayLine[static_cast<size_t>(writeHead)] = apOut;
-    writeHead = (writeHead + 1) % delayLength;
+    const float dispOutV = dispCoeff * gainedV + dispPrevInV - dispCoeff * dispPrevOutV;
+    dispPrevInV  = gainedV;
+    dispPrevOutV = dispOutV;
 
-    // 8. Update leaky RMS energy estimate
-    energyEstimate = 0.9999f * energyEstimate + 0.0001f * x * x;
+    const float apOutV = currentApCoeffV * dispOutV + apPrevInV - currentApCoeffV * apPrevOutV;
+    apPrevInV  = dispOutV;
+    apPrevOutV = apOutV;
 
-    return x;
+    delayLineV[static_cast<size_t>(writeHeadV)] = apOutV;
+    writeHeadV = (writeHeadV + 1) % delayLengthV;
+
+    // --- 2. Horizontal Waveguide (x-axis: parallel to soundboard) ---
+    const float xH = delayLineH[static_cast<size_t>(writeHeadH)];
+    const float avgH = 0.5f * (xH + avgPrevH);
+    avgPrevH = xH;
+    const float gainedH = avgH * loopGainH;
+
+    const float dispOutH = dispCoeff * gainedH + dispPrevInH - dispCoeff * dispPrevOutH;
+    dispPrevInH  = gainedH;
+    dispPrevOutH = dispOutH;
+
+    const float apOutH = currentApCoeffH * dispOutH + apPrevInH - currentApCoeffH * apPrevOutH;
+    apPrevInH  = dispOutH;
+    apPrevOutH = apOutH;
+
+    delayLineH[static_cast<size_t>(writeHeadH)] = apOutH;
+    writeHeadH = (writeHeadH + 1) % delayLengthH;
+
+    // --- 3. Soundboard Bridge Summing ---
+    // Vertical vibration directly drives the bridge (1.0).
+    // Horizontal vibration couples into bridge rocking/soundboard motion (~0.22).
+    const float bridgeSignal = xV + 0.22f * xH;
+
+    // Update leaky RMS energy estimate
+    energyEstimate = 0.9999f * energyEstimate + 0.0001f * (bridgeSignal * bridgeSignal);
+
+    return bridgeSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,13 +186,20 @@ float KarplusStrong::tick() noexcept
 
 void KarplusStrong::reset() noexcept
 {
-    std::fill(delayLine.begin(), delayLine.end(), 0.f);
-    writeHead      = 0;
-    avgPrev        = 0.f;
-    apPrevIn       = 0.f;
-    apPrevOut      = 0.f;
-    dispPrevIn     = 0.f;
-    dispPrevOut    = 0.f;
+    std::fill(delayLineV.begin(), delayLineV.end(), 0.f);
+    std::fill(delayLineH.begin(), delayLineH.end(), 0.f);
+    writeHeadV     = 0;
+    writeHeadH     = 0;
+    avgPrevV       = 0.f;
+    avgPrevH       = 0.f;
+    apPrevInV      = 0.f;
+    apPrevOutV     = 0.f;
+    apPrevInH      = 0.f;
+    apPrevOutH     = 0.f;
+    dispPrevInV    = 0.f;
+    dispPrevOutV   = 0.f;
+    dispPrevInH    = 0.f;
+    dispPrevOutH   = 0.f;
     tensionOffset  = 0.f;
     energyEstimate = 0.f;
 }

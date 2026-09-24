@@ -57,36 +57,49 @@ public:
     float tick() noexcept;
 
     /** Apply physical finger/palm damping on note release. */
-    void damp() noexcept { loopGain = std::min(loopGain, 0.50f); }
+    void damp() noexcept
+    {
+        loopGainV = std::min(loopGainV, 0.35f);
+        loopGainH = std::min(loopGainH, 0.35f);
+    }
 
-    /** Zero delay line and all filter registers. */
+    /** Zero delay lines and all filter registers. */
     void reset() noexcept;
 
     /** Leaky RMS energy estimate — used by voice-stealer and active checks. */
     float getEnergy() const noexcept { return energyEstimate; }
 
 private:
-    float sampleRate   = 44100.f;
-    float loopGain     = 0.9980f;
+    float sampleRate = 44100.f;
 
-    std::vector<float> delayLine;
-    int   writeHead    = 0;
-    int   delayLength  = 0;
+    // Double-decay loop gains (Vertical = fast attack, Horizontal = singing sustain)
+    float loopGainV  = 0.965f;
+    float loopGainH  = 0.994f;
 
-    // 1st-order averaging LPF state (high frequency damping per cycle)
-    float avgPrev      = 0.f;
+    // --- Vertical Polarization (y: perpendicular to top plate) ---
+    std::vector<float> delayLineV;
+    int   writeHeadV   = 0;
+    int   delayLengthV = 0;
+    float avgPrevV     = 0.f;
+    float apCoeffV     = 0.f;
+    float apPrevInV    = 0.f;
+    float apPrevOutV   = 0.f;
+    float dispPrevInV  = 0.f;
+    float dispPrevOutV = 0.f;
 
-    // 1st-order allpass interpolator (fractional delay sub-sample tuning)
-    //   y[n] = C*x[n] + x[n-1] - C*y[n-1]
-    float apCoeff      = 0.f;
-    float apPrevIn     = 0.f;
-    float apPrevOut    = 0.f;
+    // --- Horizontal Polarization (x: parallel to top plate) ---
+    std::vector<float> delayLineH;
+    int   writeHeadH   = 0;
+    int   delayLengthH = 0;
+    float avgPrevH     = 0.f;
+    float apCoeffH     = 0.f;
+    float apPrevInH    = 0.f;
+    float apPrevOutH   = 0.f;
+    float dispPrevInH  = 0.f;
+    float dispPrevOutH = 0.f;
 
-    // 1st-order allpass dispersion filter (stiffness / inharmonicity)
-    //   y[n] = D*x[n] + x[n-1] - D*y[n-1]
-    float dispCoeff    = 0.f;   ///< D in [-0.6, 0.0]
-    float dispPrevIn   = 0.f;
-    float dispPrevOut  = 0.f;
+    // Shared inharmonicity dispersion allpass coefficient (stiffness D)
+    float dispCoeff    = 0.f;
 
     // Dynamic tension modulation (pitch gliss on hard plucks)
     float tensionOffset = 0.f;
