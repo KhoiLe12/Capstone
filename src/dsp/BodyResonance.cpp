@@ -73,18 +73,12 @@ BodyResonance::BodyResonance()
 void BodyResonance::init(float sr, int blockSize, float bodySize, float bodyDamping)
 {
     sampleRate     = sr;
-    maxBlockSize   = std::max(blockSize, 64);
+    maxBlockSize   = std::max(blockSize, 4096);
     currentSize    = bodySize;
     currentDamping = bodyDamping;
 
     convBufferL.assign(static_cast<size_t>(maxBlockSize), 0.f);
     convBufferR.assign(static_cast<size_t>(maxBlockSize), 0.f);
-
-    juce::dsp::ProcessSpec spec;
-    spec.sampleRate       = static_cast<double>(sampleRate);
-    spec.maximumBlockSize = static_cast<juce::uint32>(convBufferL.size());
-    spec.numChannels      = 2;
-    convolution.prepare(spec);
 
     updateFilters();
     loadInternalIR(currentBodyType);
@@ -99,7 +93,7 @@ void BodyResonance::loadInternalIR(int type)
                                         juce::dsp::Convolution::Stereo::yes,
                                         juce::dsp::Convolution::Trim::no,
                                         0,
-                                        juce::dsp::Convolution::Normalise::yes);
+                                        juce::dsp::Convolution::Normalise::no);
         loadedIRType = ClassicalNylonIR;
     }
     else if (type == GibsonAcousticIR)
@@ -109,9 +103,18 @@ void BodyResonance::loadInternalIR(int type)
                                         juce::dsp::Convolution::Stereo::yes,
                                         juce::dsp::Convolution::Trim::no,
                                         0,
-                                        juce::dsp::Convolution::Normalise::yes);
+                                        juce::dsp::Convolution::Normalise::no);
         loadedIRType = GibsonAcousticIR;
     }
+
+    // Immediately call prepare() to force synchronous initialisation on the caller thread.
+    // This executes JUCE's background message queue popAll() synchronously, ensuring
+    // the convolution engine is fully constructed and active before audio begins.
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate       = static_cast<double>(sampleRate);
+    spec.maximumBlockSize = static_cast<juce::uint32>(convBufferL.size());
+    spec.numChannels      = 2;
+    convolution.prepare(spec);
 }
 
 void BodyResonance::loadCustomIR(const juce::File& file)
@@ -122,8 +125,14 @@ void BodyResonance::loadCustomIR(const juce::File& file)
                                         juce::dsp::Convolution::Stereo::yes,
                                         juce::dsp::Convolution::Trim::no,
                                         0,
-                                        juce::dsp::Convolution::Normalise::yes);
+                                        juce::dsp::Convolution::Normalise::no);
         loadedIRType = 99;
+
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate       = static_cast<double>(sampleRate);
+        spec.maximumBlockSize = static_cast<juce::uint32>(convBufferL.size());
+        spec.numChannels      = 2;
+        convolution.prepare(spec);
     }
 }
 
@@ -184,31 +193,38 @@ void BodyResonance::processBlock(float* channelL, float* channelR, int numSample
     }
     else
     {
-        // Zero-latency acoustic body IR convolution
-        if (static_cast<size_t>(numSamples) > convBufferL.size())
-        {
-            convBufferL.resize(static_cast<size_t>(numSamples), 0.f);
-            convBufferR.resize(static_cast<size_t>(numSamples), 0.f);
-        }
-
-        std::copy(channelL, channelL + numSamples, convBufferL.begin());
-        std::copy(channelR, channelR + numSamples, convBufferR.begin());
-
-        float* channels[2] = { convBufferL.data(), convBufferR.data() };
-        juce::dsp::AudioBlock<float> block(channels, 2, static_cast<size_t>(numSamples));
-        juce::dsp::ProcessContextReplacing<float> context(block);
-        convolution.process(context);
-
         // Physical acoustic radiation blend:
         // currentCoupling = 1.0 -> 100% radiated acoustic soundboard (zero piezo quack)
         // currentCoupling = 0.0 -> 100% direct bridge string (dry DI pickup)
-        const float dryGain = 1.0f - currentCoupling * 0.85f;
-        const float wetGain = currentCoupling * 2.8f;
+        const float dryFactor = std::clamp(1.0f - currentCoupling, 0.0f, 1.0f);
+        const float dryGain   = dryFactor * dryFactor;
+        const float wetGain   = 1.00f * std::sqrt(std::clamp(currentCoupling, 0.0f, 1.0f));
 
-        for (int i = 0; i < numSamples; ++i)
+        // Process in chunks of convBufferL.size() to handle any arbitrary host block size
+        // without heap reallocations on the audio thread.
+        int remaining = numSamples;
+        int offset = 0;
+        const int chunkSize = static_cast<int>(convBufferL.size());
+
+        while (remaining > 0)
         {
-            channelL[i] = dryGain * channelL[i] + wetGain * convBufferL[static_cast<size_t>(i)];
-            channelR[i] = dryGain * channelR[i] + wetGain * convBufferR[static_cast<size_t>(i)];
+            const int currentChunk = std::min(remaining, chunkSize);
+            std::copy(channelL + offset, channelL + offset + currentChunk, convBufferL.begin());
+            std::copy(channelR + offset, channelR + offset + currentChunk, convBufferR.begin());
+
+            float* channels[2] = { convBufferL.data(), convBufferR.data() };
+            juce::dsp::AudioBlock<float> block(channels, 2, static_cast<size_t>(currentChunk));
+            juce::dsp::ProcessContextReplacing<float> context(block);
+            convolution.process(context);
+
+            for (int i = 0; i < currentChunk; ++i)
+            {
+                channelL[offset + i] = dryGain * channelL[offset + i] + wetGain * convBufferL[static_cast<size_t>(i)];
+                channelR[offset + i] = dryGain * channelR[offset + i] + wetGain * convBufferR[static_cast<size_t>(i)];
+            }
+
+            offset += currentChunk;
+            remaining -= currentChunk;
         }
     }
 }

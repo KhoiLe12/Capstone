@@ -108,9 +108,9 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         dcY_R = dcOutR;
         outR = dcOutR;
 
-        // Master gain (doubled final output volume: 2.0x / +6 dB)
-        outL *= (paramMasterGain * 2.0f);
-        outR *= (paramMasterGain * 2.0f);
+        // Master gain (calibrated concert acoustic level matching reference: 1.25x)
+        outL *= (paramMasterGain * 1.25f);
+        outR *= (paramMasterGain * 1.25f);
 
         // Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS ceiling
         if (std::abs(outL) > 0.92f)

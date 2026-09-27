@@ -48,7 +48,7 @@ HybridSynthProcessor::createParameterLayout()
         juce::ParameterID{ "stiffness", 1 },
         "Stiffness",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.20f));
+        0.05f));
 
     // Body Size: modal scaling factor (0.6 = small parlor, 1.6 = jumbo)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

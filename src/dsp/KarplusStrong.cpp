@@ -25,20 +25,20 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // Clamp frequency to reasonable guitar range (60 Hz drop-B to Nyquist * 0.35)
     const float f0 = std::max(60.0f, std::min(freqHz, sampleRate * 0.35f));
 
-    // Map stiffness [0, 1] to dispersion allpass coefficient D in [-0.15, 0.0]
-    // Nylon strings have very low inharmonicity compared to steel wires.
+    // Map stiffness [0, 1] to dispersion allpass coefficient D in [-0.015, 0.0]
+    // Nylon strings have negligible inharmonicity compared to steel.
+    // Taming dispersion eliminates artificial metallic banjo/harpsichord "twang",
+    // restoring pure acoustic harmonic integers.
     const float clampedStiffness = std::max(0.0f, std::min(stiffness, 1.0f));
-    dispCoeff = -0.15f * clampedStiffness;
+    dispCoeff = -0.015f * clampedStiffness;
 
     // Frequency-adaptive vertical and horizontal loss filter coefficients.
-    // Low notes have long delay lines where high harmonics circulate many more
-    // times before the fundamental decays.
-    // Classical nylon loss filter: S in [0.14, 0.28] provides warm, sustained bloom
-    // without choking the natural body ring or creating artificial buzz.
+    // Low notes have long delay lines where high harmonics circulate many more times.
+    // S in [0.16, 0.32] provides deep, full-bodied low-end fundamental warmth.
     {
         const float t = std::max(0.0f, std::min((f0 - 60.0f) / (500.0f - 60.0f), 1.0f));
-        sCoeffV_computed = 0.28f - t * (0.28f - 0.16f);   // 0.28 (warm bass bloom) → 0.16 (treble chime)
-        sCoeffH_computed = 0.22f - t * (0.22f - 0.12f);   // 0.22 (smooth fundamental) → 0.12 (singing sustain)
+        sCoeffV_computed = 0.32f - t * (0.32f - 0.16f);   // 0.32 (deep warm bass) → 0.16 (treble chime)
+        sCoeffH_computed = 0.25f - t * (0.25f - 0.12f);   // 0.25 (solid fundamental) → 0.12 (singing sustain)
     }
 
     // DC group delay of the dispersion allpass filter: tau = (1 - D) / (1 + D)
@@ -193,10 +193,25 @@ float KarplusStrong::tick() noexcept
     delayLineH[static_cast<size_t>(writeHeadH)] = apOutH;
     writeHeadH = (writeHeadH + 1) % delayLengthH;
 
-    // --- 3. Soundboard Bridge Summing ---
-    // Vertical vibration directly drives the bridge (1.0).
-    // Horizontal vibration couples into bridge rocking/soundboard motion (~0.38).
-    const float bridgeSignal = xV + 0.38f * xH;
+    // --- 3. Soundboard Bridge Summing (Acoustic Bridge Force Velocity) ---
+    // Physical force on the soundboard saddle is proportional to string velocity at termination.
+    // Compensated by (fs / 2pi f0) to maintain uniform acoustic soundboard drive across registers.
+    const float velV = xV - prevXV;
+    prevXV = xV;
+
+    const float velH = xH - prevXH;
+    prevXH = xH;
+
+    // Equal-loudness physical register scaling across all 6 guitar strings:
+    // Balances total acoustic energy from low E2 (82 Hz) to high E4 (330 Hz+)
+    const float f0 = std::max(60.0f, currentFreq);
+    const float registerScale = 52.0f * std::sqrt(f0 / 164.81f);
+
+    const float bridgeForceV = velV * registerScale;
+    const float bridgeForceH = velH * registerScale;
+
+    // Direct vertical soundboard drive (1.0) + horizontal rocking saddle couple (~0.35)
+    const float bridgeSignal = bridgeForceV + 0.35f * bridgeForceH;
 
     // Update leaky RMS energy estimate
     energyEstimate = 0.9999f * energyEstimate + 0.0001f * (bridgeSignal * bridgeSignal);
@@ -224,6 +239,8 @@ void KarplusStrong::reset() noexcept
     dispPrevOutV   = 0.f;
     dispPrevInH    = 0.f;
     dispPrevOutH   = 0.f;
+    prevXV         = 0.f;
+    prevXH         = 0.f;
     tensionOffset  = 0.f;
     energyEstimate = 0.f;
 }

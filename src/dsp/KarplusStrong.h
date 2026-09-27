@@ -116,5 +116,9 @@ public:
     float tensionOffset = 0.f;
     float tensionDecay  = 0.9995f;
 
+    // Bridge force velocity states
+    float prevXV = 0.f;
+    float prevXH = 0.f;
+
     float energyEstimate = 0.f;
 };

@@ -37,6 +37,8 @@ public:
     /** Hard-reset all voices and body resonance. */
     void reset();
 
+    BodyResonance& getBodyResonance() noexcept { return body; }
+
     // -------------------------------------------------------------------
     // Physical Parameters — set by PluginProcessor
     // -------------------------------------------------------------------
@@ -45,7 +47,7 @@ public:
     float paramPickPos     = 0.13f;   ///< Pick/finger strike position (0.05..0.5)
     float paramBodyMix     = 0.70f;   ///< Body coupling (0 = solid electric, 1 = acoustic)
     float paramMasterGain  = 0.80f;   ///< Output master level (0..1)
-    float paramStiffness   = 0.20f;   ///< Inharmonicity / acoustic string dispersion (0..1)
+    float paramStiffness   = 0.05f;   ///< Inharmonicity / acoustic string dispersion (0..1)
     float paramBodySize    = 1.00f;   ///< Soundboard size / scale (0.6..1.8)
     float paramBodyType    = 0.0f;    ///< Body Model (0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank)
 

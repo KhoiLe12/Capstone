@@ -62,6 +62,7 @@ public:
 
     float getBodyCoupling() const noexcept { return currentCoupling; }
     int   getBodyType() const noexcept     { return currentBodyType; }
+    int   getIRSize() const noexcept       { return convolution.getCurrentIRSize(); }
 
     /** Load a custom external WAV impulse response file. */
     void loadCustomIR(const juce::File& file);

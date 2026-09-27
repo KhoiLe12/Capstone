@@ -25,9 +25,10 @@ float Exciter::nextSample() noexcept
 void Exciter::applyBrightness(float* buf, int length,
                               float brightness, float sampleRate) noexcept
 {
-    // Cutoff frequency maps from 2.5 kHz (warm fingertip) to 22.0 kHz (crisp fingernail/pick)
+    // Cutoff frequency maps from 1.8 kHz (warm fleshy thumb) to 7.5 kHz (crisp polished fingernail)
+    // Tames harsh ultra-high frequencies, keeping classical nylon warm and full-bodied
     const float b     = std::max(0.0f, std::min(brightness, 1.0f));
-    const float fc    = 2500.f + b * 19500.f;
+    const float fc    = 1800.f + b * 5700.f;
     const float omega = 2.f * kPi * fc / sampleRate;
     const float alpha = 1.f - std::exp(-omega);
 
@@ -103,11 +104,11 @@ void Exciter::fill(float* outBuffer, int length,
         // Wound strings have longer slip over winding ridges; plain treble strings have crisp fast snap
         const float baseSnapSec = 0.00035f + bassFactor * 0.00045f + (1.0f - clampedVel) * 0.0005f;
         const int snapSamples = std::max(3, std::min(length / 3, static_cast<int>(baseSnapSec * sampleRate)));
-        const float snapStrength = (0.40f + 0.60f * clampedVel) * (0.45f + 0.55f * effBrightness);
+        const float snapStrength = (0.15f + 0.22f * clampedVel) * (0.30f + 0.50f * effBrightness);
 
         // Wound strings exhibit more metallic silver friction scrape; plain strings have clean snappy pop
-        const float scrapeMix = 0.35f + bassFactor * 0.45f;
-        const float hfFilter  = 0.70f + bassFactor * 0.20f; // High-pass differentiation for winding ridges
+        const float scrapeMix = 0.25f + bassFactor * 0.35f;
+        const float hfFilter  = 0.65f + bassFactor * 0.15f; // High-pass differentiation for winding ridges
 
         float lastNoise = 0.f;
         for (int k = 0; k < snapSamples; ++k)
