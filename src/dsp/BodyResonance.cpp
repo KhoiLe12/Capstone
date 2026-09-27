@@ -1,10 +1,11 @@
 #include "BodyResonance.h"
+#include "EmbeddedIRs.h"
 #include <cmath>
 #include <algorithm>
 #include <iterator>
 
 // ---------------------------------------------------------------------------
-// 32-Mode Acoustic Guitar Body Dataset
+// 32-Mode Acoustic Guitar Body Dataset (IRCAM Modalys Physical Model)
 // ---------------------------------------------------------------------------
 // Literature-grounded modal eigenfrequencies, Q factors, and coupling weights
 // for a master-built spruce/rosewood acoustic guitar (Rossing 2010; Fletcher 1998).
@@ -58,34 +59,91 @@ static constexpr ModalSpec kModalDataset[BodyResonance::N_MODES] =
     { 4400.f,  6.f, 0.06f,  0.05f }, // Top sheen formant (right)
     { 4820.f,  5.f, 0.05f, -0.05f }, // Top sheen formant (left)
     { 5270.f,  5.f, 0.04f,  0.04f }, // High frequency wood loss (right)
-    { 5750.f,  5.f, 0.03f, -0.04f }  // High frequency wood loss (left)
+    { 5750.f,  5.f, 0.03f, -0.04f }, // Extreme air boundary loss (left)
 };
 
 // ---------------------------------------------------------------------------
-// Lifecycle & Parameter Updates
+// Constructor & Lifecycle
 // ---------------------------------------------------------------------------
 
-void BodyResonance::init(float sr, float bodySize, float bodyDamping)
+BodyResonance::BodyResonance()
 {
-    sampleRate      = sr;
-    currentSize     = std::max(0.5f, std::min(bodySize, 2.0f));
-    currentDamping  = std::max(0.2f, std::min(bodyDamping, 3.0f));
-    updateFilters();
-    reset();
 }
 
-void BodyResonance::setParameters(float bodySize, float bodyDamping, float bodyCoupling)
+void BodyResonance::init(float sr, int blockSize, float bodySize, float bodyDamping)
 {
-    const float clampedSize     = std::max(0.5f, std::min(bodySize, 2.0f));
-    const float clampedDamping  = std::max(0.2f, std::min(bodyDamping, 3.0f));
-    currentCoupling             = std::max(0.0f, std::min(bodyCoupling, 1.0f));
+    sampleRate     = sr;
+    maxBlockSize   = std::max(blockSize, 64);
+    currentSize    = bodySize;
+    currentDamping = bodyDamping;
 
-    // Only redesign filter coefficients if frequency or Q scaling changed
-    if (std::abs(clampedSize - currentSize) > 0.005f ||
-        std::abs(clampedDamping - currentDamping) > 0.005f)
+    convBufferL.assign(static_cast<size_t>(maxBlockSize), 0.f);
+    convBufferR.assign(static_cast<size_t>(maxBlockSize), 0.f);
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate       = static_cast<double>(sampleRate);
+    spec.maximumBlockSize = static_cast<juce::uint32>(convBufferL.size());
+    spec.numChannels      = 2;
+    convolution.prepare(spec);
+
+    updateFilters();
+    loadInternalIR(currentBodyType);
+}
+
+void BodyResonance::loadInternalIR(int type)
+{
+    if (type == ClassicalNylonIR)
     {
-        currentSize    = clampedSize;
-        currentDamping = clampedDamping;
+        convolution.loadImpulseResponse(kClassicalNylonWav_data,
+                                        kClassicalNylonWav_size,
+                                        juce::dsp::Convolution::Stereo::yes,
+                                        juce::dsp::Convolution::Trim::no,
+                                        0,
+                                        juce::dsp::Convolution::Normalise::yes);
+        loadedIRType = ClassicalNylonIR;
+    }
+    else if (type == GibsonAcousticIR)
+    {
+        convolution.loadImpulseResponse(kGibsonAcousticWav_data,
+                                        kGibsonAcousticWav_size,
+                                        juce::dsp::Convolution::Stereo::yes,
+                                        juce::dsp::Convolution::Trim::no,
+                                        0,
+                                        juce::dsp::Convolution::Normalise::yes);
+        loadedIRType = GibsonAcousticIR;
+    }
+}
+
+void BodyResonance::loadCustomIR(const juce::File& file)
+{
+    if (file.existsAsFile())
+    {
+        convolution.loadImpulseResponse(file,
+                                        juce::dsp::Convolution::Stereo::yes,
+                                        juce::dsp::Convolution::Trim::no,
+                                        0,
+                                        juce::dsp::Convolution::Normalise::yes);
+        loadedIRType = 99;
+    }
+}
+
+void BodyResonance::setParameters(float bodySize, float bodyDamping, float bodyCoupling, int bodyType)
+{
+    currentCoupling = std::clamp(bodyCoupling, 0.0f, 1.0f);
+
+    if (bodyType != currentBodyType)
+    {
+        currentBodyType = bodyType;
+        if (currentBodyType == ClassicalNylonIR || currentBodyType == GibsonAcousticIR)
+        {
+            loadInternalIR(currentBodyType);
+        }
+    }
+
+    if (std::abs(bodySize - currentSize) > 0.005f || std::abs(bodyDamping - currentDamping) > 0.005f)
+    {
+        currentSize    = std::clamp(bodySize, 0.5f, 2.0f);
+        currentDamping = std::clamp(bodyDamping, 0.2f, 3.0f);
         updateFilters();
     }
 }
@@ -107,7 +165,56 @@ void BodyResonance::updateFilters()
 }
 
 // ---------------------------------------------------------------------------
-// Stereo Soundboard Radiation & Diffusion
+// Block Audio Processing
+// ---------------------------------------------------------------------------
+
+void BodyResonance::processBlock(float* channelL, float* channelR, int numSamples) noexcept
+{
+    if (currentBodyType == ModalResonatorBank)
+    {
+        // Modal Resonator Bank (IRCAM Modalys parallel biquad filters)
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float outL = 0.f;
+            float outR = 0.f;
+            processStereo(channelL[i], channelR[i], outL, outR);
+            channelL[i] = outL;
+            channelR[i] = outR;
+        }
+    }
+    else
+    {
+        // Zero-latency acoustic body IR convolution
+        if (static_cast<size_t>(numSamples) > convBufferL.size())
+        {
+            convBufferL.resize(static_cast<size_t>(numSamples), 0.f);
+            convBufferR.resize(static_cast<size_t>(numSamples), 0.f);
+        }
+
+        std::copy(channelL, channelL + numSamples, convBufferL.begin());
+        std::copy(channelR, channelR + numSamples, convBufferR.begin());
+
+        float* channels[2] = { convBufferL.data(), convBufferR.data() };
+        juce::dsp::AudioBlock<float> block(channels, 2, static_cast<size_t>(numSamples));
+        juce::dsp::ProcessContextReplacing<float> context(block);
+        convolution.process(context);
+
+        // Physical acoustic radiation blend:
+        // currentCoupling = 1.0 -> 100% radiated acoustic soundboard (zero piezo quack)
+        // currentCoupling = 0.0 -> 100% direct bridge string (dry DI pickup)
+        const float dryGain = 1.0f - currentCoupling * 0.85f;
+        const float wetGain = currentCoupling * 2.8f;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            channelL[i] = dryGain * channelL[i] + wetGain * convBufferL[static_cast<size_t>(i)];
+            channelR[i] = dryGain * channelR[i] + wetGain * convBufferR[static_cast<size_t>(i)];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stereo Soundboard Radiation & Diffusion (Modal Bank Fallback)
 // ---------------------------------------------------------------------------
 
 void BodyResonance::processStereo(float bridgeForceL, float bridgeForceR, float& outL, float& outR) noexcept
@@ -147,8 +254,6 @@ void BodyResonance::processStereo(float bridgeForceL, float bridgeForceR, float&
     const float soundboardR = (modalR + kCrossBleed * crossL) / (1.0f + kCrossBleed);
 
     // 3. Physical acoustic soundboard radiation vs direct mechanical bridge pick
-    // In an acoustic instrument, ~85-90% of the acoustic field radiating to the listener's
-    // ear comes from the resonant top plate and soundhole, not the thin string vibrating in air.
     const float dryGain = 1.0f - currentCoupling * 0.85f;
     const float wetGain = currentCoupling * 4.2f;
 
@@ -163,4 +268,5 @@ void BodyResonance::reset() noexcept
     std::fill_n(crossDelayL, CROSS_DELAY_LEN, 0.f);
     std::fill_n(crossDelayR, CROSS_DELAY_LEN, 0.f);
     crossDelayIdx = 0;
+    convolution.reset();
 }

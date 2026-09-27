@@ -3,7 +3,8 @@
 #include "PluginProcessor.h"
 
 /**
- * HybridSynthEditor — rotary knob UI for the 7 physical modeling parameters:
+ * HybridSynthEditor — UI with Body Model selector and rotary knobs:
+ *   [Body Model Selector]
  *   [Decay] [Brightness] [Pick Pos] [Stiffness] [Body Size] [Body Coupling] [Gain]
  */
 class HybridSynthEditor : public juce::AudioProcessorEditor
@@ -16,6 +17,10 @@ public:
     void resized() override;
 
 private:
+    // Body Model Selection ComboBox
+    juce::ComboBox bodyModelBox;
+    juce::Label    bodyModelLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bodyModelAttach;
 
     // 7 Physical modeling knobs
     juce::Slider decayKnob, brightnessKnob, pickPosKnob,
@@ -26,9 +31,9 @@ private:
                  stiffnessLabel, bodySizeLabel, bodyMixLabel, gainLabel;
 
     // APVTS Slider Attachments
-    using Attachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    Attachment decayAttach, brightnessAttach, pickPosAttach,
-               stiffnessAttach, bodySizeAttach, bodyMixAttach, gainAttach;
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    SliderAttachment decayAttach, brightnessAttach, pickPosAttach,
+                     stiffnessAttach, bodySizeAttach, bodyMixAttach, gainAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HybridSynthEditor)
 };

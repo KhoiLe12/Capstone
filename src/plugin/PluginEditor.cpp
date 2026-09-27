@@ -14,6 +14,21 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
       bodyMixAttach   (p.apvts, "bodyMix",      bodyMixKnob),
       gainAttach      (p.apvts, "masterGain",   gainKnob)
 {
+    // Body Model Selection ComboBox
+    bodyModelBox.addItem("Classical Nylon (IR)", 1);
+    bodyModelBox.addItem("Gibson Acoustic (IR)", 2);
+    bodyModelBox.addItem("Modal Bank (32-Mode)", 3);
+    addAndMakeVisible(bodyModelBox);
+
+    bodyModelAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        p.apvts, "bodyModel", bodyModelBox);
+
+    bodyModelLabel.setText("Body Model:", juce::dontSendNotification);
+    bodyModelLabel.setFont(juce::FontOptions(12.f, juce::Font::bold));
+    bodyModelLabel.setColour(juce::Label::textColourId, juce::Colour(0xffa0c0e0));
+    bodyModelLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(bodyModelLabel);
+
     auto setupKnob = [this](juce::Slider& knob, juce::Label& label,
                             const juce::String& name)
     {
@@ -35,7 +50,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     setupKnob(bodyMixKnob,    bodyMixLabel,    "Body Coupl");
     setupKnob(gainKnob,       gainLabel,       "Gain");
 
-    setSize(680, 220);
+    setSize(720, 250);
     setResizable(false, false);
 }
 
@@ -50,20 +65,21 @@ void HybridSynthEditor::paint(juce::Graphics& g)
 
     // Title bar gradient
     juce::ColourGradient titleGrad(juce::Colour(0xff1a233a), 0.f, 0.f,
-                                   juce::Colour(0xff0d2b45), 680.f, 0.f, false);
+                                   juce::Colour(0xff0d2b45), static_cast<float>(getWidth()), 0.f, false);
     g.setGradientFill(titleGrad);
     g.fillRect(0, 0, getWidth(), 36);
 
     // Title text
     g.setColour(juce::Colour(0xfff0f0f0));
     g.setFont(juce::FontOptions(14.f, juce::Font::bold));
-    g.drawText("Hybrid Physical Modeling Synthesizer — Modalys & Multi-Port Engine",
+    g.drawText("Hybrid Physical Modeling Synthesizer — Acoustic IR & Modal Engine",
                juce::Rectangle<int>(0, 0, getWidth(), 36),
                juce::Justification::centred);
 
-    // Subtle separator line
+    // Subtle separator lines
     g.setColour(juce::Colour(0xff203a58));
     g.drawHorizontalLine(36, 0.f, static_cast<float>(getWidth()));
+    g.drawHorizontalLine(74, 0.f, static_cast<float>(getWidth()));
 }
 
 // ---------------------------------------------------------------------------
@@ -73,15 +89,23 @@ void HybridSynthEditor::paint(juce::Graphics& g)
 void HybridSynthEditor::resized()
 {
     auto area = getLocalBounds();
-    area.removeFromTop(40); // title bar
+    area.removeFromTop(38); // title bar
 
+    // Body Model Selection Strip
+    auto strip = area.removeFromTop(34).reduced(8, 3);
+    const int labelW = 100;
+    bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
+    strip.removeFromLeft(8);
+    bodyModelBox.setBounds(strip.removeFromLeft(200));
+
+    // Rotary Knobs Section
     const int numKnobs  = 7;
     const int knobW     = area.getWidth() / numKnobs;
     const int labelH    = 22;
 
     auto layoutKnob = [&](juce::Slider& knob, juce::Label& label)
     {
-        auto col = area.removeFromLeft(knobW).reduced(3, 4);
+        auto col = area.removeFromLeft(knobW).reduced(4, 4);
         label.setBounds(col.removeFromBottom(labelH));
         knob.setBounds(col);
     };

@@ -47,6 +47,7 @@ public:
     float paramMasterGain  = 0.80f;   ///< Output master level (0..1)
     float paramStiffness   = 0.20f;   ///< Inharmonicity / acoustic string dispersion (0..1)
     float paramBodySize    = 1.00f;   ///< Soundboard size / scale (0.6..1.8)
+    float paramBodyType    = 0.0f;    ///< Body Model (0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank)
 
 private:
     Voice         voices[NUM_VOICES];

@@ -64,6 +64,13 @@ HybridSynthProcessor::createParameterLayout()
         juce::NormalisableRange<float>(0.f, 1.f),
         0.70f));
 
+    // Body Model: 0 = Classical Nylon (IR), 1 = Gibson Acoustic (IR), 2 = Modal Bank (32-Mode)
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "bodyModel", 1 },
+        "Body Model",
+        juce::StringArray{ "Classical Nylon (IR)", "Gibson Acoustic (IR)", "Modal Bank (32-Mode)" },
+        0));
+
     // Master Gain: output level
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "masterGain", 1 },
@@ -105,6 +112,7 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramStiffness  = apvts.getRawParameterValue("stiffness")->load();
     synth.paramBodySize   = apvts.getRawParameterValue("bodySize")->load();
     synth.paramBodyMix    = apvts.getRawParameterValue("bodyMix")->load();
+    synth.paramBodyType   = apvts.getRawParameterValue("bodyModel")->load();
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
 
     // Process MIDI events

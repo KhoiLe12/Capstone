@@ -7,12 +7,12 @@
 // Initialisation
 // ---------------------------------------------------------------------------
 
-void SynthEngine::init(float sr, int /*blockSize*/)
+void SynthEngine::init(float sr, int blockSize)
 {
     sampleRate = sr;
     for (auto& v : voices)
         v.init(sr);
-    body.init(sr, paramBodySize, 1.0f);
+    body.init(sr, blockSize, paramBodySize, 1.0f);
     reset();
 }
 
@@ -52,12 +52,13 @@ void SynthEngine::noteOff(int midiNote)
 
 void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexcept
 {
-    // Update body modal parameters (size, damping, coupling)
-    body.setParameters(paramBodySize, 1.0f, paramBodyMix);
+    // Update body parameters (size, damping, coupling, bodyType)
+    const int bodyType = static_cast<int>(std::round(paramBodyType));
+    body.setParameters(paramBodySize, 1.0f, paramBodyMix, bodyType);
 
+    // 1. Advance all active string voices and sum bridge force into output buffers
     for (int i = 0; i < numSamples; ++i)
     {
-        // 1. Advance all active string voices and sum bridge force in stereo
         float totalBridgeForceL = 0.f;
         float totalBridgeForceR = 0.f;
 
@@ -82,18 +83,21 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             totalBridgeForceR += s * (1.0f + stringPan);
         }
 
-        // 2. Drive the 32-mode IRCAM Modalys spruce soundboard
-        // Scaled to 0.65f for clean headroom with zero limiter saturation on plucks.
-        const float bridgeSignalL = totalBridgeForceL * 0.65f;
-        const float bridgeSignalR = totalBridgeForceR * 0.65f;
+        outputL[i] = totalBridgeForceL * 1.0f;
+        outputR[i] = totalBridgeForceR * 1.0f;
+    }
 
-        // 3. Excite the soundboard in stereo
-        float outL = 0.f;
-        float outR = 0.f;
-        body.processStereo(bridgeSignalL, bridgeSignalR, outL, outR);
+    // 2. Drive the acoustic body soundboard (IR convolution or Modal Bank)
+    body.processBlock(outputL, outputR, numSamples);
 
-        // 4. Acoustic 18 Hz DC Blocker (guarantees zero DC offset and true acoustic centering)
-        constexpr float R = 0.9974f;
+    // 3. DC Blocker, Master Gain, and Soft Limiter
+    constexpr float R = 0.9974f;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float outL = outputL[i];
+        float outR = outputR[i];
+
+        // 18 Hz Acoustic DC Blocker (guarantees zero DC offset and true acoustic centering)
         const float dcOutL = outL - dcX_L + R * dcY_L;
         dcX_L = outL;
         dcY_L = dcOutL;
@@ -104,11 +108,11 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         dcY_R = dcOutR;
         outR = dcOutR;
 
-        // 5. Master gain
+        // Master gain
         outL *= paramMasterGain;
         outR *= paramMasterGain;
 
-        // 6. Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS DAC ceiling
+        // Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS ceiling
         if (std::abs(outL) > 0.88f)
         {
             const float sign = outL > 0.f ? 1.f : -1.f;

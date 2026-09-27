@@ -1,38 +1,52 @@
 #pragma once
 #include "BiquadFilter.h"
+#include <juce_dsp/juce_dsp.h>
+#include <vector>
 
 /**
- * BodyResonance — IRCAM Modalys-style parallel modal soundboard model.
+ * BodyResonance — Dual-Engine Acoustic Guitar Body Model.
  *
- * Physical basis:
- *   An acoustic guitar body (top plate, back plate, ribs, and soundhole air cavity)
- *   is represented as a parallel sum of 32 distinct mechanical eigenmodes.
- *   Unlike an arbitrary EQ effect, each mode corresponds to a physical resonance
- *   with its own eigenfrequency, quality factor Q (damping), and modal coupling amplitude.
+ * Engines:
+ *   1. Classical Nylon (Studio Mic IR) - High-resolution zero-latency partitioned
+ *      convolution with stereo small-diaphragm condenser microphone acoustic field.
+ *   2. Gibson Acoustic (Studio Mic IR) - Authentic measured acoustic guitar pickup-to-mic
+ *      transfer function IR capturing rich dreadnought wood bloom.
+ *   3. Modal Resonator Bank - 32-mode IRCAM Modalys parallel biquad physical soundboard.
  *
  * Macro Controls:
- *   - bodySize:     Scales modal frequencies (0.7 = small parlor/mandolin, 1.0 = dreadnought, 1.4 = jumbo).
- *   - bodyDamping:  Scales mode Q factors (low = softer cedar/mahogany, high = resonant maple/spruce).
- *   - bodyCoupling: Controls bridge energy transfer (0.0 = rigid bridge solid-body electric with infinite sustain,
- *                   1.0 = responsive lightweight acoustic soundboard).
+ *   - bodyType:     Selects between IR convolution and Modal Resonator Bank.
+ *   - bodyCoupling: Blends between direct bridge string (0.0 = DI pickup) and
+ *                   100% radiated acoustic soundboard (1.0 = studio mic).
+ *   - bodySize:     Scales modal frequencies (in Modal Bank mode).
+ *   - bodyDamping:  Scales mode Q factors (in Modal Bank mode).
  */
 class BodyResonance
 {
 public:
     static constexpr int N_MODES = 32;
 
-    BodyResonance() = default;
+    enum BodyType
+    {
+        ClassicalNylonIR = 0,
+        GibsonAcousticIR = 1,
+        ModalResonatorBank = 2
+    };
 
-    /** Design all modal filter coefficients for the current sample rate and macro parameters. */
-    void init(float sampleRate, float bodySize = 1.0f, float bodyDamping = 1.0f);
+    BodyResonance();
+
+    /** Design all modal filter coefficients and prepare convolution for the current sample rate. */
+    void init(float sampleRate, int blockSize = 512, float bodySize = 1.0f, float bodyDamping = 1.0f);
 
     /** Update macro parameters dynamically without clicks. */
-    void setParameters(float bodySize, float bodyDamping, float bodyCoupling);
+    void setParameters(float bodySize, float bodyDamping, float bodyCoupling, int bodyType = 0);
 
     /**
-     * Process one sample of stereo bridge excitation through the parallel modal bank.
+     * Process an audio block in-place (stereo).
      * Radiates true acoustic soundboard velocity in stereo.
      */
+    void processBlock(float* channelL, float* channelR, int numSamples) noexcept;
+
+    /** Per-sample stereo fallback. */
     void processStereo(float bridgeForceL, float bridgeForceR, float& outL, float& outR) noexcept;
 
     /** Mono convenience overload. */
@@ -43,23 +57,38 @@ public:
         return 0.5f * (l + r);
     }
 
-    /** Zero all filter states. */
+    /** Zero all filter and convolution states. */
     void reset() noexcept;
 
     float getBodyCoupling() const noexcept { return currentCoupling; }
+    int   getBodyType() const noexcept     { return currentBodyType; }
+
+    /** Load a custom external WAV impulse response file. */
+    void loadCustomIR(const juce::File& file);
 
 private:
     BiquadFilter filters[N_MODES];
     float sampleRate      = 44100.f;
+    int   maxBlockSize    = 512;
     float currentSize     = 1.0f;
     float currentDamping  = 1.0f;
     float currentCoupling = 0.7f;
+    int   currentBodyType = 0; // 0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank
 
-    // Cross-plate soundboard acoustic diffusion (Haas delay ~0.3ms)
+    // Cross-plate soundboard acoustic diffusion (Haas delay ~0.3ms) for modal bank
     static constexpr int CROSS_DELAY_LEN = 32;
     float crossDelayL[CROSS_DELAY_LEN] = {};
     float crossDelayR[CROSS_DELAY_LEN] = {};
     int   crossDelayIdx = 0;
 
+    // Zero-latency partitioned stereo convolution engine
+    juce::dsp::Convolution convolution { juce::dsp::Convolution::Latency { 0 } };
+    int loadedIRType = -1;
+
+    // Scratch buffers for block convolution
+    std::vector<float> convBufferL;
+    std::vector<float> convBufferR;
+
     void updateFilters();
+    void loadInternalIR(int type);
 };
