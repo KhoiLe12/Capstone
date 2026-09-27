@@ -108,20 +108,20 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         dcY_R = dcOutR;
         outR = dcOutR;
 
-        // Master gain
-        outL *= paramMasterGain;
-        outR *= paramMasterGain;
+        // Master gain (doubled final output volume: 2.0x / +6 dB)
+        outL *= (paramMasterGain * 2.0f);
+        outR *= (paramMasterGain * 2.0f);
 
         // Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS ceiling
-        if (std::abs(outL) > 0.88f)
+        if (std::abs(outL) > 0.92f)
         {
             const float sign = outL > 0.f ? 1.f : -1.f;
-            outL = sign * (0.88f + 0.10f * std::tanh((std::abs(outL) - 0.88f) / 0.10f));
+            outL = sign * (0.92f + 0.07f * std::tanh((std::abs(outL) - 0.92f) / 0.07f));
         }
-        if (std::abs(outR) > 0.88f)
+        if (std::abs(outR) > 0.92f)
         {
             const float sign = outR > 0.f ? 1.f : -1.f;
-            outR = sign * (0.88f + 0.10f * std::tanh((std::abs(outR) - 0.88f) / 0.10f));
+            outR = sign * (0.92f + 0.07f * std::tanh((std::abs(outR) - 0.92f) / 0.07f));
         }
 
         outputL[i] = outL;
