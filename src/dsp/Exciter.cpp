@@ -59,7 +59,7 @@ void Exciter::fill(float* outBuffer, int length,
                    float         brightness,
                    float         pickPosition,
                    float         sampleRate,
-                   float         /*stringFreqHz*/)
+                   float         stringFreqHz)
 {
     std::fill(outBuffer, outBuffer + length, 0.f);
     if (length <= 2) return;
@@ -75,9 +75,16 @@ void Exciter::fill(float* outBuffer, int length,
     }
     else
     {
-        // 1. Physical Triangular Plucked String Displacement (d'Alembert wave equation)
-        // String pulled aside at strike position M, falling linearly to 0 at both bridge and nut
-        const float clampedPick = std::max(0.06f, std::min(pickPosition, 0.48f));
+        // 1. Register-dependent nylon string physics:
+        // Wound bass strings (E2..D3: ~82 - 150 Hz) have silver-plated copper wire coils
+        // producing tactile winding friction and wider slip, while treble strings (G3..E4+: 196+ Hz)
+        // are plain glassy extruded nylon with crisp, instantaneous slip snap.
+        const float bassFactor = std::clamp((196.0f - stringFreqHz) / (196.0f - 82.0f), 0.0f, 1.0f);
+
+        // Subtle human stroke micro-variation: pick position jitter (+/- 1.5%) prevents robotic repetition
+        const float pickJitter = 0.015f * nextSample();
+        const float clampedPick = std::clamp(pickPosition + pickJitter, 0.06f, 0.48f);
+
         int M = static_cast<int>(std::round(clampedPick * static_cast<float>(length)));
         M = std::max(1, std::min(M, length - 1));
 
@@ -92,12 +99,15 @@ void Exciter::fill(float* outBuffer, int length,
                 outBuffer[i] = static_cast<float>(length - i) * invTail;
         }
 
-        // 2. Physical Fingernail/Plectrum Slip Snap & Tactile Scrape Texture
-        // When the string slips off the fingernail edge, it injects a high-frequency
-        // velocity release snap right at the release point (producing realistic string texture)
-        const int snapSamples = std::max(3, std::min(length / 4,
-            static_cast<int>((0.0004f + (1.0f - clampedVel) * 0.0008f) * sampleRate)));
-        const float snapStrength = (0.35f + 0.65f * clampedVel) * (0.4f + 0.6f * effBrightness);
+        // 2. Physical Fingernail / Plectrum Slip Snap & Tactile Scrape Texture
+        // Wound strings have longer slip over winding ridges; plain treble strings have crisp fast snap
+        const float baseSnapSec = 0.00035f + bassFactor * 0.00045f + (1.0f - clampedVel) * 0.0005f;
+        const int snapSamples = std::max(3, std::min(length / 3, static_cast<int>(baseSnapSec * sampleRate)));
+        const float snapStrength = (0.40f + 0.60f * clampedVel) * (0.45f + 0.55f * effBrightness);
+
+        // Wound strings exhibit more metallic silver friction scrape; plain strings have clean snappy pop
+        const float scrapeMix = 0.35f + bassFactor * 0.45f;
+        const float hfFilter  = 0.70f + bassFactor * 0.20f; // High-pass differentiation for winding ridges
 
         float lastNoise = 0.f;
         for (int k = 0; k < snapSamples; ++k)
@@ -106,12 +116,12 @@ void Exciter::fill(float* outBuffer, int length,
             const float phase = static_cast<float>(k) / static_cast<float>(snapSamples);
             const float win = std::sin(kPi * phase);
 
-            // Tactile high-frequency nylon/wound scrape (3 - 12 kHz)
             const float noise = nextSample();
-            const float scrape = noise - 0.80f * lastNoise;
+            const float scrape = noise - hfFilter * lastNoise;
             lastNoise = noise;
 
-            outBuffer[idx] += win * snapStrength * (0.55f + 0.45f * scrape);
+            const float tactilePulse = (1.0f - scrapeMix) + scrapeMix * scrape;
+            outBuffer[idx] += win * snapStrength * tactilePulse;
         }
     }
 
@@ -125,8 +135,8 @@ void Exciter::fill(float* outBuffer, int length,
 
     if (peak > 1e-6f)
     {
-        // Natural dynamic velocity response (vel^1.25 gives rich expressive piano-to-forte range)
-        const float velScale = 0.20f + 0.80f * std::pow(clampedVel, 1.25f);
+        // Natural dynamic velocity response (vel^1.15 gives rich expressive piano-to-forte range)
+        const float velScale = 0.30f + 0.70f * std::pow(clampedVel, 1.15f);
         const float scale = (0.95f * velScale) / peak;
         for (int i = 0; i < length; ++i)
             outBuffer[i] *= scale;

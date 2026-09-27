@@ -32,12 +32,13 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
 
     // Frequency-adaptive vertical and horizontal loss filter coefficients.
     // Low notes have long delay lines where high harmonics circulate many more
-    // times before the fundamental decays — they accumulate and sound harsh/buzzy.
-    // Ramp S from 0.46 at 60 Hz down to 0.26 at 500 Hz.
+    // times before the fundamental decays.
+    // Classical nylon loss filter: S in [0.14, 0.28] provides warm, sustained bloom
+    // without choking the natural body ring or creating artificial buzz.
     {
         const float t = std::max(0.0f, std::min((f0 - 60.0f) / (500.0f - 60.0f), 1.0f));
-        sCoeffV_computed = 0.46f - t * (0.46f - 0.26f);   // 0.46 (bass warmth) → 0.26 (treble sparkle)
-        sCoeffH_computed = 0.38f - t * (0.38f - 0.20f);   // 0.38 (tames bass buzz) → 0.20 (singing sustain)
+        sCoeffV_computed = 0.28f - t * (0.28f - 0.16f);   // 0.28 (warm bass bloom) → 0.16 (treble chime)
+        sCoeffH_computed = 0.22f - t * (0.22f - 0.12f);   // 0.22 (smooth fundamental) → 0.12 (singing sustain)
     }
 
     // DC group delay of the dispersion allpass filter: tau = (1 - D) / (1 + D)
@@ -98,17 +99,17 @@ void KarplusStrong::updateLoopGains() noexcept
 {
     // Physics-based frequency-calibrated loop gains:
     // tau is the exponential decay time constant in seconds.
-    // Vertical polarization (soundboard saddle attack thump): 0.10s .. 0.28s
-    const float tauV = 0.10f + currentDecay * 0.18f;
-    // Horizontal polarization (singing sustain floor): 0.80s .. 3.20s
-    const float tauH = 0.80f + currentDecay * 2.40f;
+    // Vertical polarization (soundboard saddle attack thump): 0.25s .. 0.85s
+    const float tauV = 0.25f + currentDecay * 0.60f;
+    // Horizontal polarization (singing sustain floor): 1.20s .. 4.50s
+    const float tauH = 1.20f + currentDecay * 3.30f;
 
     const float f0 = std::max(60.0f, currentFreq);
 
     // loopGain = exp(-1 / (f0 * tau))
     // Calibrates decay time in seconds across all pitches from low E to high E
-    loopGainV = std::min(0.985f, std::exp(-1.0f / (f0 * tauV)));
-    loopGainH = std::min(0.9990f, std::exp(-1.0f / (f0 * tauH)));
+    loopGainV = std::min(0.992f, std::exp(-1.0f / (f0 * tauV)));
+    loopGainH = std::min(0.9994f, std::exp(-1.0f / (f0 * tauH)));
 }
 
 // ---------------------------------------------------------------------------
@@ -194,8 +195,8 @@ float KarplusStrong::tick() noexcept
 
     // --- 3. Soundboard Bridge Summing ---
     // Vertical vibration directly drives the bridge (1.0).
-    // Horizontal vibration couples into bridge rocking/soundboard motion (~0.22).
-    const float bridgeSignal = xV + 0.22f * xH;
+    // Horizontal vibration couples into bridge rocking/soundboard motion (~0.38).
+    const float bridgeSignal = xV + 0.38f * xH;
 
     // Update leaky RMS energy estimate
     energyEstimate = 0.9999f * energyEstimate + 0.0001f * (bridgeSignal * bridgeSignal);

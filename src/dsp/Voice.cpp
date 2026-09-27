@@ -64,7 +64,8 @@ float Voice::tick() noexcept
 {
     if (!active) return 0.f;
 
-    float out = string.tick() * velocity;
+    // String displacement is already physical-velocity scaled during excitation
+    float out = string.tick();
 
     // Apply smooth exponential release envelope on note-off
     if (releasing)

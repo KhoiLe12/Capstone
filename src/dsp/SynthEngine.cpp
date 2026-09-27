@@ -71,12 +71,12 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             const int note = voices[v].getMidiNote();
 
             // Physical string position across the bridge saddle (55mm width):
-            // Low E (MIDI 40) sits on the bass side (-0.18 pan)
-            // High E (MIDI 64) sits on the treble side (+0.18 pan)
+            // Low E (MIDI 40) sits on the bass side (-0.28 pan)
+            // High E (MIDI 64) sits on the treble side (+0.28 pan)
             float stringPan = 0.0f;
             if (note > 0)
             {
-                stringPan = std::clamp((static_cast<float>(note) - 52.0f) / 24.0f, -1.0f, 1.0f) * 0.18f;
+                stringPan = std::clamp((static_cast<float>(note) - 52.0f) / 24.0f, -1.0f, 1.0f) * 0.28f;
             }
 
             totalBridgeForceL += s * (1.0f - stringPan);
