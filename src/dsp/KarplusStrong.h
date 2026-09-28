@@ -116,9 +116,13 @@ public:
     float tensionOffset = 0.f;
     float tensionDecay  = 0.9995f;
 
-    // Bridge force velocity states
-    float prevXV = 0.f;
-    float prevXH = 0.f;
+    // Physical bridge force & saddle terminating impedance filter states
+    float prevXV            = 0.f;
+    float prevXH            = 0.f;
+    float saddleFilterV     = 0.f;
+    float saddleFilterH     = 0.f;
+    float saddleBeta        = 0.f;
+    float bridgeNormFactor  = 1.f;
 
     float energyEstimate = 0.f;
 };

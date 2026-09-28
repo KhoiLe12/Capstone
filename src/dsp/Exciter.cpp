@@ -104,11 +104,11 @@ void Exciter::fill(float* outBuffer, int length,
         // Wound strings have longer slip over winding ridges; plain treble strings have crisp fast snap
         const float baseSnapSec = 0.00035f + bassFactor * 0.00045f + (1.0f - clampedVel) * 0.0005f;
         const int snapSamples = std::max(3, std::min(length / 3, static_cast<int>(baseSnapSec * sampleRate)));
-        const float snapStrength = (0.15f + 0.22f * clampedVel) * (0.30f + 0.50f * effBrightness);
+        const float snapStrength = (0.35f + 0.50f * clampedVel) * (0.40f + 0.60f * effBrightness);
 
         // Wound strings exhibit more metallic silver friction scrape; plain strings have clean snappy pop
-        const float scrapeMix = 0.25f + bassFactor * 0.35f;
-        const float hfFilter  = 0.65f + bassFactor * 0.15f; // High-pass differentiation for winding ridges
+        const float scrapeMix = 0.35f + bassFactor * 0.40f;
+        const float hfFilter  = 0.70f + bassFactor * 0.20f; // High-pass differentiation for winding ridges
 
         float lastNoise = 0.f;
         for (int k = 0; k < snapSamples; ++k)

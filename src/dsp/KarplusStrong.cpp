@@ -2,6 +2,8 @@
 #include <cmath>
 #include <algorithm>
 
+static constexpr float kPi = 3.14159265358979323846f;
+
 // ---------------------------------------------------------------------------
 // Initialisation
 // ---------------------------------------------------------------------------
@@ -9,6 +11,7 @@
 void KarplusStrong::init(float sr)
 {
     sampleRate = sr;
+    saddleBeta = std::exp(-2.0f * kPi * 4500.0f / sampleRate);
     // Pre-allocate for lowest expected pitch (~20 Hz = 2205 samples at 44100)
     const int maxLen = static_cast<int>(sr / 20.f) + 32;
     delayLineV.assign(static_cast<size_t>(maxLen), 0.f);
@@ -24,6 +27,7 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
 {
     // Clamp frequency to reasonable guitar range (60 Hz drop-B to Nyquist * 0.35)
     const float f0 = std::max(60.0f, std::min(freqHz, sampleRate * 0.35f));
+    bridgeNormFactor = sampleRate / (2.0f * kPi * f0);
 
     // Map stiffness [0, 1] to dispersion allpass coefficient D in [-0.015, 0.0]
     // Nylon strings have negligible inharmonicity compared to steel.
@@ -193,25 +197,21 @@ float KarplusStrong::tick() noexcept
     delayLineH[static_cast<size_t>(writeHeadH)] = apOutH;
     writeHeadH = (writeHeadH + 1) % delayLengthH;
 
-    // --- 3. Soundboard Bridge Summing (Acoustic Bridge Force Velocity) ---
-    // Physical force on the soundboard saddle is proportional to string velocity at termination.
-    // Compensated by (fs / 2pi f0) to maintain uniform acoustic soundboard drive across registers.
-    const float velV = xV - prevXV;
+    // --- 3. Soundboard Bridge Summing (Physical Bridge Force with Saddle Impedance) ---
+    // Physical force on the soundboard saddle is proportional to string spatial slope at termination,
+    // computed from velocity (dx/dt) normalized by (fs / 2pi f0).
+    // The bone saddle termination introduces mechanical impedance, rolling off high frequencies
+    // above 4.5 kHz to eliminate differentiator hash and prevent body mode clipping.
+    const float velV = (xV - prevXV) * bridgeNormFactor;
     prevXV = xV;
+    saddleFilterV = (1.0f - saddleBeta) * velV + saddleBeta * saddleFilterV;
 
-    const float velH = xH - prevXH;
+    const float velH = (xH - prevXH) * bridgeNormFactor;
     prevXH = xH;
-
-    // Equal-loudness physical register scaling across all 6 guitar strings:
-    // Balances total acoustic energy from low E2 (82 Hz) to high E4 (330 Hz+)
-    const float f0 = std::max(60.0f, currentFreq);
-    const float registerScale = 52.0f * std::sqrt(f0 / 164.81f);
-
-    const float bridgeForceV = velV * registerScale;
-    const float bridgeForceH = velH * registerScale;
+    saddleFilterH = (1.0f - saddleBeta) * velH + saddleBeta * saddleFilterH;
 
     // Direct vertical soundboard drive (1.0) + horizontal rocking saddle couple (~0.35)
-    const float bridgeSignal = bridgeForceV + 0.35f * bridgeForceH;
+    const float bridgeSignal = saddleFilterV + 0.35f * saddleFilterH;
 
     // Update leaky RMS energy estimate
     energyEstimate = 0.9999f * energyEstimate + 0.0001f * (bridgeSignal * bridgeSignal);
@@ -241,6 +241,8 @@ void KarplusStrong::reset() noexcept
     dispPrevOutH   = 0.f;
     prevXV         = 0.f;
     prevXH         = 0.f;
+    saddleFilterV  = 0.f;
+    saddleFilterH  = 0.f;
     tensionOffset  = 0.f;
     energyEstimate = 0.f;
 }
