@@ -86,9 +86,9 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         }
 
         // Polyphonic bridge impedance headroom:
-        // Acoustic top plate mechanical impedance distributes multi-string chord displacement
+        // Acoustic soundboard mechanical impedance distributes multi-string chord displacement (1 / sqrt(N))
         const float polyScale = (activeVoices > 1)
-            ? (1.0f / std::sqrt(1.0f + 0.35f * static_cast<float>(activeVoices - 1)))
+            ? (1.0f / std::sqrt(static_cast<float>(activeVoices)))
             : 1.0f;
 
         outputL[i] = totalBridgeForceL * polyScale;

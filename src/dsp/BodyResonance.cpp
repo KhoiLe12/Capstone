@@ -199,10 +199,10 @@ void BodyResonance::processBlock(float* channelL, float* channelR, int numSample
         const float dryFactor = std::clamp(1.0f - currentCoupling, 0.0f, 1.0f);
         const float dryGain   = dryFactor * dryFactor;
 
-        // Calibrate wetGain: Classical Nylon has a warm, woody acoustic spectrum with lower HF density;
-        // 1.35x (+2.6 dB) brings its loudness into perfect parity with steel-string Gibson Acoustic.
-        const float irScale   = (loadedIRType == ClassicalNylonIR) ? 1.35f : 1.00f;
-        const float wetGain   = irScale * std::sqrt(std::clamp(currentCoupling, 0.0f, 1.0f));
+        // Both Classical Nylon and Gibson Acoustic IRs are matched in RMS energy and chord peaks.
+        // Wet gain of 0.85 provides uniform perceived volume across the entire Body Coupling blend
+        // while preserving generous polyphonic headroom for 6-string chords.
+        const float wetGain   = 0.85f * std::sqrt(std::clamp(currentCoupling, 0.0f, 1.0f));
 
         // Process in chunks of convBufferL.size() to handle any arbitrary host block size
         // without heap reallocations on the audio thread.
