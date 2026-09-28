@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "dsp/SynthEngine.h"
+#include "Version.h"
 
 /**
  * HybridSynthProcessor — JUCE AudioProcessor wrapper for the HybridSynth engine.
@@ -26,8 +27,9 @@ public:
 
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
+
     // Plugin metadata
-    const juce::String getName() const override { return "HybridSynth"; }
+    const juce::String getName() const override { return "Hybrid Synth (" HYBRID_SYNTH_VERSION_STRING ")"; }
     bool  acceptsMidi()  const override { return true;  }
     bool  producesMidi() const override { return false; }
     bool  isMidiEffect() const override { return false; }

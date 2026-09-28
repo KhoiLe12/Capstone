@@ -61,12 +61,14 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     {
         float totalBridgeForceL = 0.f;
         float totalBridgeForceR = 0.f;
+        int activeVoices = 0;
 
         for (int v = 0; v < NUM_VOICES; ++v)
         {
             if (!voices[v].isActive())
                 continue;
 
+            activeVoices++;
             const float s = voices[v].tick();
             const int note = voices[v].getMidiNote();
 
@@ -83,15 +85,35 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             totalBridgeForceR += s * (1.0f + stringPan);
         }
 
-        outputL[i] = totalBridgeForceL * 1.0f;
-        outputR[i] = totalBridgeForceR * 1.0f;
+        // Polyphonic bridge impedance headroom:
+        // Acoustic top plate mechanical impedance distributes multi-string chord displacement
+        const float polyScale = (activeVoices > 1)
+            ? (1.0f / std::sqrt(1.0f + 0.35f * static_cast<float>(activeVoices - 1)))
+            : 1.0f;
+
+        outputL[i] = totalBridgeForceL * polyScale;
+        outputR[i] = totalBridgeForceR * polyScale;
     }
 
     // 2. Drive the acoustic body soundboard (IR convolution or Modal Bank)
     body.processBlock(outputL, outputR, numSamples);
 
-    // 3. DC Blocker, Master Gain, and Soft Limiter
+    // 3. DC Blocker, Master Gain, and Transparent Soft Saturation
     constexpr float R = 0.9974f;
+
+    // Smooth acoustic saturation curve (prevents harsh square-wave fuzz on heavy chord plucks)
+    auto softLimit = [](float x) noexcept -> float
+    {
+        constexpr float threshold = 0.75f;
+        constexpr float ceiling   = 0.98f;
+        const float absX = std::abs(x);
+        if (absX <= threshold)
+            return x;
+        const float excess = (absX - threshold) / (1.6f - threshold);
+        const float compressed = threshold + (ceiling - threshold) * std::tanh(excess);
+        return (x > 0.f ? 1.f : -1.f) * std::min(compressed, ceiling);
+    };
+
     for (int i = 0; i < numSamples; ++i)
     {
         float outL = outputL[i];
@@ -108,21 +130,13 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         dcY_R = dcOutR;
         outR = dcOutR;
 
-        // Master gain (calibrated concert acoustic level matching reference: 1.25x)
-        outL *= (paramMasterGain * 1.25f);
-        outR *= (paramMasterGain * 1.25f);
+        // Calibrated master gain matching concert acoustic references with clean chord headroom
+        outL *= (paramMasterGain * 0.92f);
+        outR *= (paramMasterGain * 0.92f);
 
-        // Transparent soft-limiter: guarantees audio never hard-clips against the 0 dBFS ceiling
-        if (std::abs(outL) > 0.92f)
-        {
-            const float sign = outL > 0.f ? 1.f : -1.f;
-            outL = sign * (0.92f + 0.07f * std::tanh((std::abs(outL) - 0.92f) / 0.07f));
-        }
-        if (std::abs(outR) > 0.92f)
-        {
-            const float sign = outR > 0.f ? 1.f : -1.f;
-            outR = sign * (0.92f + 0.07f * std::tanh((std::abs(outR) - 0.92f) / 0.07f));
-        }
+        // Musical soft-limiter: guarantees audio never hard-clips or fuzzes against the ceiling
+        outL = softLimit(outL);
+        outR = softLimit(outR);
 
         outputL[i] = outL;
         outputR[i] = outR;

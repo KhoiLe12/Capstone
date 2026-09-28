@@ -1,4 +1,5 @@
 #include "plugin/PluginEditor.h"
+#include "Version.h"
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -71,10 +72,22 @@ void HybridSynthEditor::paint(juce::Graphics& g)
 
     // Title text
     g.setColour(juce::Colour(0xfff0f0f0));
-    g.setFont(juce::FontOptions(14.f, juce::Font::bold));
+    g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
     g.drawText("Hybrid Physical Modeling Synthesizer — Acoustic IR & Modal Engine",
-               juce::Rectangle<int>(0, 0, getWidth(), 36),
-               juce::Justification::centred);
+               juce::Rectangle<int>(14, 0, getWidth() - 145, 36),
+               juce::Justification::centredLeft);
+
+    // Prominent Version Badge in top-right
+    juce::Rectangle<int> badgeArea(getWidth() - 118, 6, 104, 24);
+    g.setColour(juce::Colour(0xff1d3557));
+    g.fillRoundedRectangle(badgeArea.toFloat(), 4.f);
+    g.setColour(juce::Colour(0xff457b9d));
+    g.drawRoundedRectangle(badgeArea.toFloat(), 4.f, 1.2f);
+    g.setColour(juce::Colour(0xffe63946)); // eye-catching coral red/amber dot
+    g.fillEllipse(static_cast<float>(badgeArea.getX() + 8), static_cast<float>(badgeArea.getY() + 8), 7.f, 7.f);
+    g.setColour(juce::Colour(0xfff1faee));
+    g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+    g.drawText(HYBRID_SYNTH_VERSION_STRING, badgeArea.withTrimmedLeft(16), juce::Justification::centred);
 
     // Subtle separator lines
     g.setColour(juce::Colour(0xff203a58));
