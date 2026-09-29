@@ -43,6 +43,7 @@ public:
     // -------------------------------------------------------------------
     static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24 / FL: C2) Hold Keyswitch
     static constexpr int KEYSWITCH_FULL_MUTE = 26; ///< D1 (MIDI Note 26 / FL: D2) Hold/Choke Keyswitch
+    static constexpr int KEYSWITCH_STRUM_8TH = 28; ///< E1 (MIDI Note 28 / FL: E2) 8th-Note Strum Keyswitch
     static constexpr int GUITAR_MIN_NOTE     = 38; ///< D2 (Standard Drop-D lowest note; standard E2 is 40)
     static constexpr int GUITAR_MAX_NOTE     = 86; ///< D6 (22nd fret high E string)
 
@@ -57,6 +58,23 @@ public:
     float paramStereoWidth = 0.70f;   ///< Stereo soundboard / microphone imaging (0 = mono, 0.7 = natural, 1.0 = wide studio)
     bool  paramPalmMute    = false;   ///< Palm Mute DAW parameter / UI toggle
     bool  paramFullMute    = false;   ///< Full Mute DAW parameter / UI toggle
+    bool  paramStrum       = false;   ///< Strum 8th DAW parameter / UI toggle
+
+    void setBpm(float bpm) noexcept
+    {
+        if (bpm >= 20.f && bpm <= 400.f)
+            currentBpm = bpm;
+    }
+
+    bool isStrumActive() const noexcept
+    {
+        return paramStrum || keyswitchStrumActive;
+    }
+
+    bool isStrumDownstroke() const noexcept
+    {
+        return lastStrumWasDown;
+    }
 
     KarplusStrong::MuteMode getEffectiveMuteMode() const noexcept
     {
@@ -81,10 +99,34 @@ private:
     Voice         voices[NUM_VOICES];
     BodyResonance body;
     float         sampleRate = 44100.f;
+    float         currentBpm = 120.0f;
 
     bool          keyswitchPalmMuteActive = false;
     bool          keyswitchFullMuteActive = false;
+    bool          keyswitchStrumActive    = false;
+    float         strumKeyswitchVelocity  = 0.8f;
+    int           strumSampleCounter      = 0;
+    bool          nextStrumIsDown         = true;
+    bool          lastStrumWasDown        = true;
     KarplusStrong::MuteMode prevMuteMode  = KarplusStrong::MuteMode::Open;
+
+    // Track physically held notes in guitar range
+    float         heldNotes[128]          = { 0.f };
+
+    // Pending scheduled plucks for inter-string strum rake
+    static constexpr int MAX_PENDING_PLUCKS = 16;
+    struct StrumPluck
+    {
+        int   midiNote     = -1;
+        float velocity     = 0.f;
+        float brightness   = 0.f;
+        int   delaySamples = 0;
+        bool  active       = false;
+    };
+    StrumPluck pendingPlucks[MAX_PENDING_PLUCKS];
+
+    void triggerStrum(bool isDownstroke, float velOverride = -1.0f) noexcept;
+    void schedulePluck(int midiNote, float velocity, float brightness, int delaySamples) noexcept;
 
     void syncVoiceMuteModes() noexcept;
 

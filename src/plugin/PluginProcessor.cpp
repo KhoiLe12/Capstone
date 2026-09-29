@@ -97,6 +97,12 @@ HybridSynthProcessor::createParameterLayout()
         "Full Mute",
         false));
 
+    // Strum Pattern: 8th-note alternating strum (also momentary triggered via E1 / FL: E2 keyswitch)
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "strumPattern", 1 },
+        "Strum 8th",
+        false));
+
     return { params.begin(), params.end() };
 }
 
@@ -124,6 +130,16 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
+    // Query DAW tempo for sample-accurate rhythmic sync
+    if (auto* playHead = getPlayHead())
+    {
+        if (auto posOpt = playHead->getPosition())
+        {
+            if (posOpt->getBpm())
+                synth.setBpm(static_cast<float>(*posOpt->getBpm()));
+        }
+    }
+
     // Sync parameters from APVTS to SynthEngine (thread-safe atomic load)
     synth.paramDecay      = apvts.getRawParameterValue("decay")->load();
     synth.paramBrightness = apvts.getRawParameterValue("brightness")->load();
@@ -136,6 +152,7 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
     synth.paramPalmMute   = apvts.getRawParameterValue("palmMute")->load() > 0.5f;
     synth.paramFullMute   = apvts.getRawParameterValue("fullMute")->load() > 0.5f;
+    synth.paramStrum      = apvts.getRawParameterValue("strumPattern")->load() > 0.5f;
 
     // Process MIDI events
     for (const auto meta : midiMessages)

@@ -2,6 +2,7 @@
 #include <limits>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -68,13 +69,27 @@ void SynthEngine::noteOn(int midiNote, float velocity)
         return; // Keyswitch alone is silent if no notes were ringing
     }
 
-    // 3. Strict Physical Guitar Range Validation
+    // 3. Intercept 8th-Note Strum Keyswitch E1 (MIDI 28 / FL: E2)
+    if (midiNote == KEYSWITCH_STRUM_8TH)
+    {
+        keyswitchStrumActive = true;
+        strumKeyswitchVelocity = velocity;
+        const int samplesPer8th = std::max(100, static_cast<int>((30.0f / currentBpm) * sampleRate));
+        strumSampleCounter = samplesPer8th;
+        triggerStrum(true, velocity); // Trigger first downstroke immediately on noteOn
+        nextStrumIsDown = false;      // Next 8th note will be upstroke
+        return;
+    }
+
+    // 4. Strict Physical Guitar Range Validation
     // Standard acoustic guitar range: D2 (38, Drop D) / E2 (40) up to D6 (86, 22nd fret high E)
     // Any notes outside this range are rejected so keyswitches never produce unwanted audio
     if (midiNote < GUITAR_MIN_NOTE || midiNote > GUITAR_MAX_NOTE)
     {
         return;
     }
+
+    heldNotes[midiNote] = velocity;
 
     int idx = findVoiceForNote(midiNote);
     if (idx < 0)
@@ -104,11 +119,20 @@ void SynthEngine::noteOff(int midiNote)
         return;
     }
 
+    // Intercept 8th-Note Strum Keyswitch E1 release
+    if (midiNote == KEYSWITCH_STRUM_8TH)
+    {
+        keyswitchStrumActive = false;
+        return;
+    }
+
     // Discard note-off events outside the guitar range
     if (midiNote < GUITAR_MIN_NOTE || midiNote > GUITAR_MAX_NOTE)
     {
         return;
     }
+
+    heldNotes[midiNote] = 0.0f;
 
     for (auto& v : voices)
     {
@@ -125,6 +149,112 @@ void SynthEngine::syncVoiceMuteModes() noexcept
     {
         if (v.isActive())
             v.setMuteMode(mode);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 8th-Note Strumming & Alternating Stroke Engine
+// ---------------------------------------------------------------------------
+
+void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
+{
+    lastStrumWasDown = isDownstroke;
+
+    // 1. Collect currently held notes from the keyboard
+    std::vector<std::pair<int, float>> chord;
+    chord.reserve(12);
+
+    for (int n = GUITAR_MIN_NOTE; n <= GUITAR_MAX_NOTE; ++n)
+    {
+        if (heldNotes[n] > 0.001f)
+            chord.push_back({ n, heldNotes[n] });
+    }
+
+    // 2. If no keys are physically held, fallback to any actively ringing voices
+    if (chord.empty())
+    {
+        for (const auto& v : voices)
+        {
+            if (v.isActive() && v.getMidiNote() >= GUITAR_MIN_NOTE && v.getMidiNote() <= GUITAR_MAX_NOTE)
+            {
+                int note = v.getMidiNote();
+                bool found = false;
+                for (const auto& p : chord)
+                {
+                    if (p.first == note) { found = true; break; }
+                }
+                if (!found)
+                    chord.push_back({ note, 0.75f });
+            }
+        }
+    }
+
+    if (chord.empty())
+        return; // Nothing to strum
+
+    // 3. Sort notes by stroke direction
+    if (isDownstroke)
+    {
+        // Downstroke: sweep from lowest pitch to highest pitch
+        std::sort(chord.begin(), chord.end(), [](const auto& a, const auto& b) {
+            return a.first < b.first;
+        });
+    }
+    else
+    {
+        // Upstroke: sweep from highest pitch to lowest pitch
+        std::sort(chord.begin(), chord.end(), [](const auto& a, const auto& b) {
+            return a.first > b.first;
+        });
+    }
+
+    // 4. Directional acoustic physics:
+    // Downstroke: standard velocity and brightness
+    // Upstroke: slightly lighter velocity (~82%), brighter glancing edge (~115%)
+    const float strokeVelScale    = isDownstroke ? 1.0f : 0.82f;
+    const float strokeBrightScale = isDownstroke ? 1.0f : 1.15f;
+
+    // Fast acoustic pick rake: ~2.5 ms (down) / ~2.0 ms (up)
+    const float rakeTimeSec = isDownstroke ? 0.0025f : 0.0020f;
+    const int rakeSamples = std::max(1, static_cast<int>(rakeTimeSec * sampleRate));
+
+    for (size_t i = 0; i < chord.size(); ++i)
+    {
+        float baseVel = (velOverride > 0.001f) ? velOverride : chord[i].second;
+        float vel = std::clamp(baseVel * strokeVelScale, 0.05f, 1.0f);
+        float brt = std::clamp(paramBrightness * strokeBrightScale, 0.05f, 1.0f);
+        int delay = static_cast<int>(i) * rakeSamples;
+
+        schedulePluck(chord[i].first, vel, brt, delay);
+    }
+}
+
+void SynthEngine::schedulePluck(int midiNote, float velocity, float brightness, int delaySamples) noexcept
+{
+    if (delaySamples <= 0)
+    {
+        int idx = findVoiceForNote(midiNote);
+        if (idx < 0)
+            idx = findFreeVoice();
+
+        const auto muteMode = getEffectiveMuteMode();
+        voices[idx].noteOn(midiNote, velocity,
+                           brightness, paramPickPos, paramDecay,
+                           paramStiffness, muteMode);
+        return;
+    }
+
+    for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
+    {
+        if (!pendingPlucks[p].active)
+        {
+            pendingPlucks[p].midiNote     = midiNote;
+            pendingPlucks[p].velocity     = velocity;
+            pendingPlucks[p].brightness   = brightness;
+            pendingPlucks[p].delaySamples = delaySamples;
+            pendingPlucks[p].active       = true;
+            return;
+        }
     }
 }
 
@@ -157,12 +287,49 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         prevMuteMode = currentMuteMode;
     }
 
+    // 8th-note interval in samples based on DAW host tempo
+    const int samplesPer8th = std::max(100, static_cast<int>((30.0f / currentBpm) * sampleRate));
+
     // 1. Advance all active string voices and sum bridge force into output buffers.
     // All voices are summed to centre (mono mix-bus before the body IR).
     // Stereo width is applied downstream via the M/S spatializer and body IR cross-delay,
     // which create natural, pitch-independent spatial spread controlled by the Width knob.
     for (int i = 0; i < numSamples; ++i)
     {
+        // Advance 8th-note strum interval timer
+        if (keyswitchStrumActive || paramStrum)
+        {
+            --strumSampleCounter;
+            if (strumSampleCounter <= 0)
+            {
+                strumSampleCounter = samplesPer8th;
+                triggerStrum(nextStrumIsDown, strumKeyswitchVelocity);
+                nextStrumIsDown = !nextStrumIsDown;
+            }
+        }
+
+        // Fire any pending rake plucks whose countdown has reached zero
+        for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
+        {
+            if (pendingPlucks[p].active)
+            {
+                --pendingPlucks[p].delaySamples;
+                if (pendingPlucks[p].delaySamples <= 0)
+                {
+                    int idx = findVoiceForNote(pendingPlucks[p].midiNote);
+                    if (idx < 0)
+                        idx = findFreeVoice();
+                    const auto muteMode = getEffectiveMuteMode();
+                    voices[idx].noteOn(pendingPlucks[p].midiNote,
+                                       pendingPlucks[p].velocity,
+                                       pendingPlucks[p].brightness,
+                                       paramPickPos, paramDecay,
+                                       paramStiffness, muteMode);
+                    pendingPlucks[p].active = false;
+                }
+            }
+        }
+
         float totalBridgeForce = 0.f;
         int activeVoices = 0;
 
@@ -257,6 +424,13 @@ void SynthEngine::reset()
     dcX_R = 0.f; dcY_R = 0.f;
     keyswitchPalmMuteActive = false;
     keyswitchFullMuteActive = false;
+    keyswitchStrumActive    = false;
+    strumSampleCounter      = 0;
+    nextStrumIsDown         = true;
+    lastStrumWasDown        = true;
+    std::fill(std::begin(heldNotes), std::end(heldNotes), 0.f);
+    for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
+        pendingPlucks[p].active = false;
     prevMuteMode            = KarplusStrong::MuteMode::Open;
 }
 

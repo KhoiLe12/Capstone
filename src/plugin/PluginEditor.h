@@ -38,6 +38,12 @@ private:
     bool isFullVisuallyActive = false;
     juce::Rectangle<int> fullBadgeArea;
 
+    // Strum 8th Articulation Toggle & Visual Status
+    juce::ToggleButton strumToggle;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> strumAttach;
+    bool isStrumVisuallyActive = false;
+    juce::Rectangle<int> strumBadgeArea;
+
     // 8 Physical modeling knobs
     juce::Slider decayKnob, brightnessKnob, pickPosKnob,
                  stiffnessKnob, bodySizeKnob, bodyMixKnob, widthKnob, gainKnob;

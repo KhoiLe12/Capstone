@@ -50,6 +50,15 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     fullMuteAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         p.apvts, "fullMute", fullMuteToggle);
 
+    // Strum Pattern Articulation Toggle (UI latch / MIDI keyswitch display E1 / FL: E2)
+    strumToggle.setButtonText("Strum 8th (E1 / FL: E2)");
+    strumToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xfff0f0f0));
+    strumToggle.setColour(juce::ToggleButton::tickColourId, juce::Colour(0xfff4a261));
+    addAndMakeVisible(strumToggle);
+
+    strumAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.apvts, "strumPattern", strumToggle);
+
     auto setupKnob = [this](juce::Slider& knob, juce::Label& label,
                             const juce::String& name)
     {
@@ -74,7 +83,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
 
     startTimerHz(30);
 
-    setSize(780, 250);
+    setSize(860, 250);
     setResizable(false, false);
 }
 
@@ -88,6 +97,8 @@ void HybridSynthEditor::timerCallback()
                           || (processorRef.apvts.getRawParameterValue("palmMute")->load() > 0.5f);
     const bool currentFull = processorRef.getSynth().isFullMuteActive()
                           || (processorRef.apvts.getRawParameterValue("fullMute")->load() > 0.5f);
+    const bool currentStrum = processorRef.getSynth().isStrumActive()
+                           || (processorRef.apvts.getRawParameterValue("strumPattern")->load() > 0.5f);
 
     bool needRepaint = false;
     if (currentPalm != isPalmVisuallyActive)
@@ -100,6 +111,11 @@ void HybridSynthEditor::timerCallback()
         isFullVisuallyActive = currentFull;
         needRepaint = true;
     }
+    if (currentStrum != isStrumVisuallyActive)
+    {
+        isStrumVisuallyActive = currentStrum;
+        needRepaint = true;
+    }
 
     if (needRepaint)
     {
@@ -107,6 +123,8 @@ void HybridSynthEditor::timerCallback()
             repaint(palmBadgeArea.expanded(2));
         if (!fullBadgeArea.isEmpty())
             repaint(fullBadgeArea.expanded(2));
+        if (!strumBadgeArea.isEmpty())
+            repaint(strumBadgeArea.expanded(2));
     }
 }
 
@@ -181,6 +199,12 @@ void HybridSynthEditor::paint(juce::Graphics& g)
                  juce::Colour(0xff500e20), juce::Colour(0xffff2255), juce::Colour(0xffff4070),
                  "CHOKE");
 
+    // Strum 8th LED Badge
+    const char* strumText = processorRef.getSynth().isStrumDownstroke() ? "STRUM v" : "STRUM ^";
+    drawLedBadge(strumBadgeArea, isStrumVisuallyActive,
+                 juce::Colour(0xff5c3a1d), juce::Colour(0xfff4a261), juce::Colour(0xffffb703),
+                 strumText);
+
     // Subtle separator lines
     g.setColour(juce::Colour(0xff203a58));
     g.drawHorizontalLine(36, 0.f, static_cast<float>(getWidth()));
@@ -199,18 +223,22 @@ void HybridSynthEditor::resized()
     // Body Model & Articulation Strip
     auto strip = area.removeFromTop(34).reduced(8, 3);
 
-    const int labelW = 75;
+    const int labelW = 72;
     bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
     strip.removeFromLeft(4);
-    bodyModelBox.setBounds(strip.removeFromLeft(150));
+    bodyModelBox.setBounds(strip.removeFromLeft(145));
 
-    strip.removeFromLeft(14);
-    palmMuteToggle.setBounds(strip.removeFromLeft(145));
-    palmBadgeArea = strip.removeFromLeft(56).reduced(0, 2);
+    strip.removeFromLeft(8);
+    palmMuteToggle.setBounds(strip.removeFromLeft(136));
+    palmBadgeArea = strip.removeFromLeft(54).reduced(0, 2);
 
-    strip.removeFromLeft(12);
-    fullMuteToggle.setBounds(strip.removeFromLeft(145));
-    fullBadgeArea = strip.removeFromLeft(60).reduced(0, 2);
+    strip.removeFromLeft(8);
+    fullMuteToggle.setBounds(strip.removeFromLeft(136));
+    fullBadgeArea = strip.removeFromLeft(56).reduced(0, 2);
+
+    strip.removeFromLeft(8);
+    strumToggle.setBounds(strip.removeFromLeft(142));
+    strumBadgeArea = strip.removeFromLeft(66).reduced(0, 2);
 
     // Rotary Knobs Section
     const int numKnobs  = 8;
