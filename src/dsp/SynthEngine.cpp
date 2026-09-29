@@ -157,16 +157,13 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         prevMuteMode = currentMuteMode;
     }
 
-    // 1. Advance all active string voices and sum bridge force into output buffers
-    // Spatial string spread: Low E sits on the bass side, High E on the treble side.
-    // Constant-power sinusoidal pan law preserves uniform acoustic power across the panorama.
-    const float kPi = 3.14159265358979323846f;
-    const float maxSpread = 0.65f * std::clamp(paramStereoWidth, 0.0f, 1.0f);
-
+    // 1. Advance all active string voices and sum bridge force into output buffers.
+    // All voices are summed to centre (mono mix-bus before the body IR).
+    // Stereo width is applied downstream via the M/S spatializer and body IR cross-delay,
+    // which create natural, pitch-independent spatial spread controlled by the Width knob.
     for (int i = 0; i < numSamples; ++i)
     {
-        float totalBridgeForceL = 0.f;
-        float totalBridgeForceR = 0.f;
+        float totalBridgeForce = 0.f;
         int activeVoices = 0;
 
         for (int v = 0; v < NUM_VOICES; ++v)
@@ -175,25 +172,7 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                 continue;
 
             activeVoices++;
-            const float s = voices[v].tick();
-            const int note = voices[v].getMidiNote();
-
-            // Physical string position across the bridge saddle (55mm width):
-            // Low E (MIDI 40) sits on the bass side (panned left)
-            // High E (MIDI 64) sits on the treble side (panned right)
-            float panNorm = 0.0f;
-            if (note > 0)
-            {
-                panNorm = std::clamp((static_cast<float>(note) - 52.0f) / 24.0f, -1.0f, 1.0f) * maxSpread;
-            }
-
-            // Constant-power pan law (panAngle in [0, pi/2]):
-            const float panAngle = (panNorm + 1.0f) * (0.25f * kPi);
-            const float gainL = std::cos(panAngle) * 1.41421356f;
-            const float gainR = std::sin(panAngle) * 1.41421356f;
-
-            totalBridgeForceL += s * gainL;
-            totalBridgeForceR += s * gainR;
+            totalBridgeForce += voices[v].tick();
         }
 
         // Polyphonic bridge impedance headroom:
@@ -202,8 +181,8 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             ? (1.0f / std::sqrt(static_cast<float>(activeVoices)))
             : 1.0f;
 
-        outputL[i] = totalBridgeForceL * polyScale;
-        outputR[i] = totalBridgeForceR * polyScale;
+        outputL[i] = totalBridgeForce * polyScale;
+        outputR[i] = totalBridgeForce * polyScale;
     }
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)

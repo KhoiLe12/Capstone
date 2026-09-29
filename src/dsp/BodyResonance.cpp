@@ -88,9 +88,11 @@ void BodyResonance::loadInternalIR(int type)
 {
     if (type == ClassicalNylonIR)
     {
+        // Load as mono: JUCE sums both WAV channels into one symmetric IR,
+        // eliminating any L/R imbalance present in the source capture.
         convolution.loadImpulseResponse(kClassicalNylonWav_data,
                                         kClassicalNylonWav_size,
-                                        juce::dsp::Convolution::Stereo::yes,
+                                        juce::dsp::Convolution::Stereo::no,
                                         juce::dsp::Convolution::Trim::no,
                                         0,
                                         juce::dsp::Convolution::Normalise::no);
