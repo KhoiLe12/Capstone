@@ -29,10 +29,14 @@ public:
      */
     void noteOn(int midiNote, float velocity,
                 float brightness, float pickPosition, float decay,
-                float stiffness = 0.25f);
+                float stiffness = 0.25f, bool palmMute = false);
 
     /** Signal note release (string continues natural decay). */
     void noteOff() noexcept;
+
+    /** Enable or disable palm muting on this voice in real-time. */
+    void setPalmMute(bool muted) noexcept { string.setPalmMute(muted); }
+    bool isPalmMuted() const noexcept     { return string.isPalmMuted; }
 
     /** Advance one sample and return voice output at bridge. */
     float tick() noexcept;

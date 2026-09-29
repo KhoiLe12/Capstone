@@ -20,7 +20,7 @@ void Voice::init(float sr)
 
 void Voice::noteOn(int note, float vel,
                    float brightness, float pickPosition, float decay,
-                   float stiffness)
+                   float stiffness, bool palmMute)
 {
     midiNote = note;
     velocity = vel;
@@ -31,6 +31,7 @@ void Voice::noteOn(int note, float vel,
 
     const float freq = midiToFreq(note);
     string.setFrequency(freq, stiffness);
+    string.setPalmMute(palmMute);
     string.setDecay(decay);
 
     // Exciter length matches one wavelength (delay-line size)

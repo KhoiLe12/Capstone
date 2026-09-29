@@ -78,6 +78,12 @@ HybridSynthProcessor::createParameterLayout()
         juce::NormalisableRange<float>(0.f, 1.f),
         0.80f));
 
+    // Palm Mute: physical bridge palm damping (also momentary triggered via C1 / FL: C2 keyswitch)
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "palmMute", 1 },
+        "Palm Mute",
+        false));
+
     return { params.begin(), params.end() };
 }
 
@@ -114,6 +120,7 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramBodyMix    = apvts.getRawParameterValue("bodyMix")->load();
     synth.paramBodyType   = apvts.getRawParameterValue("bodyModel")->load();
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
+    synth.paramPalmMute   = apvts.getRawParameterValue("palmMute")->load() > 0.5f;
 
     // Process MIDI events
     for (const auto meta : midiMessages)

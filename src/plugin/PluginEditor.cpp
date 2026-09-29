@@ -7,6 +7,7 @@
 
 HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     : juce::AudioProcessorEditor(&p),
+      processorRef    (p),
       decayAttach     (p.apvts, "decay",        decayKnob),
       brightnessAttach(p.apvts, "brightness",   brightnessKnob),
       pickPosAttach   (p.apvts, "pickPosition", pickPosKnob),
@@ -30,6 +31,15 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     bodyModelLabel.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(bodyModelLabel);
 
+    // Palm Mute Articulation Toggle (UI latch / MIDI keyswitch display)
+    palmMuteToggle.setButtonText("Palm Mute (Hold C1 / FL: C2)");
+    palmMuteToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xfff0f0f0));
+    palmMuteToggle.setColour(juce::ToggleButton::tickColourId, juce::Colour(0xffe63946));
+    addAndMakeVisible(palmMuteToggle);
+
+    palmMuteAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.apvts, "palmMute", palmMuteToggle);
+
     auto setupKnob = [this](juce::Slider& knob, juce::Label& label,
                             const juce::String& name)
     {
@@ -51,8 +61,26 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     setupKnob(bodyMixKnob,    bodyMixLabel,    "Body Coupl");
     setupKnob(gainKnob,       gainLabel,       "Gain");
 
+    startTimerHz(30);
+
     setSize(720, 250);
     setResizable(false, false);
+}
+
+// ---------------------------------------------------------------------------
+// Timer Callback (Real-time mute status polling)
+// ---------------------------------------------------------------------------
+
+void HybridSynthEditor::timerCallback()
+{
+    const bool currentMute = processorRef.getSynth().isPalmMuteActive()
+                          || (processorRef.apvts.getRawParameterValue("palmMute")->load() > 0.5f);
+    if (currentMute != isMuteVisuallyActive)
+    {
+        isMuteVisuallyActive = currentMute;
+        if (!muteBadgeArea.isEmpty())
+            repaint(muteBadgeArea.expanded(2));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +117,31 @@ void HybridSynthEditor::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
     g.drawText(HYBRID_SYNTH_VERSION_STRING, badgeArea.withTrimmedLeft(16), juce::Justification::centred);
 
+    // Palm Mute Status LED Badge in upper control strip
+    if (!muteBadgeArea.isEmpty())
+    {
+        g.setColour(isMuteVisuallyActive ? juce::Colour(0xff5c1d24) : juce::Colour(0xff182232));
+        g.fillRoundedRectangle(muteBadgeArea.toFloat(), 4.f);
+
+        g.setColour(isMuteVisuallyActive ? juce::Colour(0xffe63946) : juce::Colour(0xff2d4059));
+        g.drawRoundedRectangle(muteBadgeArea.toFloat(), 4.f, 1.2f);
+
+        // Indicator LED dot
+        const float dotSize = 8.f;
+        const float dotX = static_cast<float>(muteBadgeArea.getX() + 8);
+        const float dotY = static_cast<float>(muteBadgeArea.getCentreY()) - dotSize * 0.5f;
+
+        g.setColour(isMuteVisuallyActive ? juce::Colour(0xffff4d6d) : juce::Colour(0xff4a5568));
+        g.fillEllipse(dotX, dotY, dotSize, dotSize);
+
+        // Badge label
+        g.setColour(isMuteVisuallyActive ? juce::Colours::white : juce::Colour(0xff8a99ad));
+        g.setFont(juce::FontOptions(11.f, juce::Font::bold));
+        g.drawText(isMuteVisuallyActive ? "MUTED" : "OPEN",
+                   muteBadgeArea.withTrimmedLeft(20),
+                   juce::Justification::centred);
+    }
+
     // Subtle separator lines
     g.setColour(juce::Colour(0xff203a58));
     g.drawHorizontalLine(36, 0.f, static_cast<float>(getWidth()));
@@ -104,12 +157,20 @@ void HybridSynthEditor::resized()
     auto area = getLocalBounds();
     area.removeFromTop(38); // title bar
 
-    // Body Model Selection Strip
+    // Body Model & Articulation Strip
     auto strip = area.removeFromTop(34).reduced(8, 3);
-    const int labelW = 100;
+    const int labelW = 85;
     bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
+    strip.removeFromLeft(4);
+    bodyModelBox.setBounds(strip.removeFromLeft(175));
+
+    strip.removeFromLeft(24);
+    // Palm mute toggle checkbox
+    palmMuteToggle.setBounds(strip.removeFromLeft(215));
+
     strip.removeFromLeft(8);
-    bodyModelBox.setBounds(strip.removeFromLeft(200));
+    // Mute visual LED badge
+    muteBadgeArea = strip.removeFromLeft(85).reduced(0, 2);
 
     // Rotary Knobs Section
     const int numKnobs  = 7;

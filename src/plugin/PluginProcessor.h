@@ -50,6 +50,9 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    SynthEngine& getSynth() noexcept { return synth; }
+    const SynthEngine& getSynth() const noexcept { return synth; }
+
     // -----------------------------------------------------------------------
     // Parameter tree — public so the editor can attach to it
     // -----------------------------------------------------------------------

@@ -40,8 +40,12 @@ public:
     BodyResonance& getBodyResonance() noexcept { return body; }
 
     // -------------------------------------------------------------------
-    // Physical Parameters — set by PluginProcessor
+    // Physical Parameters & Articulations — set by PluginProcessor
     // -------------------------------------------------------------------
+    static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24) Hold Keyswitch
+    static constexpr int GUITAR_MIN_NOTE     = 38; ///< D2 (Standard Drop-D lowest note; standard E2 is 40)
+    static constexpr int GUITAR_MAX_NOTE     = 86; ///< D6 (22nd fret high E string)
+
     float paramDecay       = 0.80f;   ///< String sustain (0..1)
     float paramBrightness  = 0.60f;   ///< Exciter brightness / nail polish (0..1)
     float paramPickPos     = 0.13f;   ///< Pick/finger strike position (0.05..0.5)
@@ -50,11 +54,17 @@ public:
     float paramStiffness   = 0.05f;   ///< Inharmonicity / acoustic string dispersion (0..1)
     float paramBodySize    = 1.00f;   ///< Soundboard size / scale (0.6..1.8)
     float paramBodyType    = 0.0f;    ///< Body Model (0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank)
+    bool  paramPalmMute    = false;   ///< Palm Mute DAW parameter / UI toggle
+
+    bool isPalmMuteActive() const noexcept { return paramPalmMute || keyswitchMuteActive; }
 
 private:
     Voice         voices[NUM_VOICES];
     BodyResonance body;
     float         sampleRate = 44100.f;
+
+    bool          keyswitchMuteActive = false;
+    bool          prevMuteState       = false;
 
     int findFreeVoice() const noexcept;
     int findVoiceForNote(int midiNote) const noexcept;

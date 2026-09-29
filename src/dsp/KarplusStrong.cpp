@@ -41,8 +41,10 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // S in [0.16, 0.32] provides deep, full-bodied low-end fundamental warmth.
     {
         const float t = std::max(0.0f, std::min((f0 - 60.0f) / (500.0f - 60.0f), 1.0f));
-        sCoeffV_computed = 0.32f - t * (0.32f - 0.16f);   // 0.32 (deep warm bass) → 0.16 (treble chime)
-        sCoeffH_computed = 0.25f - t * (0.25f - 0.12f);   // 0.25 (solid fundamental) → 0.12 (singing sustain)
+        baseSCoeffV = 0.32f - t * (0.32f - 0.16f);   // 0.32 (deep warm bass) → 0.16 (treble chime)
+        baseSCoeffH = 0.25f - t * (0.25f - 0.12f);   // 0.25 (solid fundamental) → 0.12 (singing sustain)
+        sCoeffV_computed = isPalmMuted ? std::min(0.48f, baseSCoeffV * 1.4f) : baseSCoeffV;
+        sCoeffH_computed = isPalmMuted ? std::min(0.48f, baseSCoeffH * 1.4f) : baseSCoeffH;
     }
 
     // DC group delay of the dispersion allpass filter: tau = (1 - D) / (1 + D)
@@ -99,21 +101,57 @@ void KarplusStrong::setDecay(float decay) noexcept
     updateLoopGains();
 }
 
+void KarplusStrong::setPalmMute(bool muted) noexcept
+{
+    if (isPalmMuted != muted)
+    {
+        isPalmMuted = muted;
+        updateLoopGains();
+    }
+}
+
 void KarplusStrong::updateLoopGains() noexcept
 {
-    // Physics-based frequency-calibrated loop gains:
-    // tau is the exponential decay time constant in seconds.
-    // Vertical polarization (soundboard saddle attack thump): 0.25s .. 0.85s
-    const float tauV = 0.25f + currentDecay * 0.60f;
-    // Horizontal polarization (singing sustain floor): 1.20s .. 4.50s
-    const float tauH = 1.20f + currentDecay * 3.30f;
-
     const float f0 = std::max(60.0f, currentFreq);
 
-    // loopGain = exp(-1 / (f0 * tau))
-    // Calibrates decay time in seconds across all pitches from low E to high E
-    loopGainV = std::min(0.992f, std::exp(-1.0f / (f0 * tauV)));
-    loopGainH = std::min(0.9994f, std::exp(-1.0f / (f0 * tauH)));
+    if (isPalmMuted)
+    {
+        // Physical palm mute:
+        // Fleshy side of hand rests on bridge saddle, heavily absorbing vibration energy
+        // Vertical decay constant: ~0.035s .. 0.09s
+        // Horizontal decay constant: ~0.050s .. 0.12s
+        const float tauV = 0.035f + currentDecay * 0.055f;
+        const float tauH = 0.050f + currentDecay * 0.070f;
+
+        loopGainV = std::min(0.92f, std::exp(-1.0f / (f0 * tauV)));
+        loopGainH = std::min(0.95f, std::exp(-1.0f / (f0 * tauH)));
+
+        // Palm damping absorbs high frequencies: lower saddle cutoff to ~1.6 kHz
+        saddleBeta = std::exp(-2.0f * kPi * 1600.0f / sampleRate);
+
+        // Increased high-frequency absorption in loop filter
+        sCoeffV_computed = std::min(0.48f, baseSCoeffV * 1.4f);
+        sCoeffH_computed = std::min(0.48f, baseSCoeffH * 1.4f);
+    }
+    else
+    {
+        // Normal open string decay:
+        // Vertical polarization (soundboard saddle attack thump): 0.25s .. 0.85s
+        const float tauV = 0.25f + currentDecay * 0.60f;
+        // Horizontal polarization (singing sustain floor): 1.20s .. 4.50s
+        const float tauH = 1.20f + currentDecay * 3.30f;
+
+        // loopGain = exp(-1 / (f0 * tau))
+        // Calibrates decay time in seconds across all pitches from low E to high E
+        loopGainV = std::min(0.992f, std::exp(-1.0f / (f0 * tauV)));
+        loopGainH = std::min(0.9994f, std::exp(-1.0f / (f0 * tauH)));
+
+        // Standard bone saddle mechanical impedance cutoff ~4.5 kHz
+        saddleBeta = std::exp(-2.0f * kPi * 4500.0f / sampleRate);
+
+        sCoeffV_computed = baseSCoeffV;
+        sCoeffH_computed = baseSCoeffH;
+    }
 }
 
 // ---------------------------------------------------------------------------
