@@ -14,6 +14,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
       stiffnessAttach (p.apvts, "stiffness",    stiffnessKnob),
       bodySizeAttach  (p.apvts, "bodySize",     bodySizeKnob),
       bodyMixAttach   (p.apvts, "bodyMix",      bodyMixKnob),
+      widthAttach     (p.apvts, "stereoWidth",  widthKnob),
       gainAttach      (p.apvts, "masterGain",   gainKnob)
 {
     // Body Model Selection ComboBox
@@ -68,11 +69,12 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     setupKnob(stiffnessKnob,  stiffnessLabel,  "Stiffness");
     setupKnob(bodySizeKnob,   bodySizeLabel,   "Body Size");
     setupKnob(bodyMixKnob,    bodyMixLabel,    "Body Coupl");
+    setupKnob(widthKnob,      widthLabel,      "Width");
     setupKnob(gainKnob,       gainLabel,       "Gain");
 
     startTimerHz(30);
 
-    setSize(720, 250);
+    setSize(780, 250);
     setResizable(false, false);
 }
 
@@ -211,7 +213,7 @@ void HybridSynthEditor::resized()
     fullBadgeArea = strip.removeFromLeft(60).reduced(0, 2);
 
     // Rotary Knobs Section
-    const int numKnobs  = 7;
+    const int numKnobs  = 8;
     const int knobW     = area.getWidth() / numKnobs;
     const int labelH    = 22;
 
@@ -228,5 +230,6 @@ void HybridSynthEditor::resized()
     layoutKnob(stiffnessKnob,  stiffnessLabel);
     layoutKnob(bodySizeKnob,   bodySizeLabel);
     layoutKnob(bodyMixKnob,    bodyMixLabel);
+    layoutKnob(widthKnob,      widthLabel);
     layoutKnob(gainKnob,       gainLabel);
 }

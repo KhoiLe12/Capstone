@@ -38,18 +38,18 @@ private:
     bool isFullVisuallyActive = false;
     juce::Rectangle<int> fullBadgeArea;
 
-    // 7 Physical modeling knobs
+    // 8 Physical modeling knobs
     juce::Slider decayKnob, brightnessKnob, pickPosKnob,
-                 stiffnessKnob, bodySizeKnob, bodyMixKnob, gainKnob;
+                 stiffnessKnob, bodySizeKnob, bodyMixKnob, widthKnob, gainKnob;
 
     // Labels
     juce::Label  decayLabel, brightnessLabel, pickPosLabel,
-                 stiffnessLabel, bodySizeLabel, bodyMixLabel, gainLabel;
+                 stiffnessLabel, bodySizeLabel, bodyMixLabel, widthLabel, gainLabel;
 
     // APVTS Slider Attachments
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     SliderAttachment decayAttach, brightnessAttach, pickPosAttach,
-                     stiffnessAttach, bodySizeAttach, bodyMixAttach, gainAttach;
+                     stiffnessAttach, bodySizeAttach, bodyMixAttach, widthAttach, gainAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HybridSynthEditor)
 };

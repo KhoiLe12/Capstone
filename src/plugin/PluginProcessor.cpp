@@ -71,6 +71,13 @@ HybridSynthProcessor::createParameterLayout()
         juce::StringArray{ "Classical Nylon (IR)", "Gibson Acoustic (IR)", "Modal Bank (32-Mode)" },
         0));
 
+    // Stereo Width: acoustic soundboard & string stereo field (0 = mono, 0.7 = natural, 1.0 = wide studio)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "stereoWidth", 1 },
+        "Stereo Width",
+        juce::NormalisableRange<float>(0.f, 1.f),
+        0.70f));
+
     // Master Gain: output level
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "masterGain", 1 },
@@ -125,6 +132,7 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramBodySize   = apvts.getRawParameterValue("bodySize")->load();
     synth.paramBodyMix    = apvts.getRawParameterValue("bodyMix")->load();
     synth.paramBodyType   = apvts.getRawParameterValue("bodyModel")->load();
+    synth.paramStereoWidth = apvts.getRawParameterValue("stereoWidth")->load();
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
     synth.paramPalmMute   = apvts.getRawParameterValue("palmMute")->load() > 0.5f;
     synth.paramFullMute   = apvts.getRawParameterValue("fullMute")->load() > 0.5f;
