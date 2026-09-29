@@ -84,23 +84,28 @@ void Voice::choke(float chokeVelocity) noexcept
     // Physical contact with palm/fret hand instantly absorbs string kinetic energy:
     // Damping time constant 1.8ms (chokeCoeff): string ringing drops to <6% in ~5ms
     chokeCoeff = std::exp(-1.0f / (0.0018f * sampleRate));
-    chokeSamplesLeft = static_cast<int>(0.020f * sampleRate); // up to 20ms for hand-slap transient to naturally decay
+    // Transient impulse of ~45ms excites the acoustic body IR without synthetic bass boom
+    chokeSamplesLeft = static_cast<int>(0.045f * sampleRate);
 
     const float freq = midiToFreq(midiNote);
     const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);
 
-    // Hand-slap transient:
-    // Wound strings have heavier mass impact -> lower resonant frequency (~140 Hz) and thicker thud
-    // Plain strings have lighter, crisper fret click (~2200 Hz)
-    const float slapFreq = 140.0f + (1.0f - woundFactor) * 2000.0f;
-    slapPhase = 0.f;
-    slapPhaseInc = 2.0f * kPi * slapFreq / sampleRate;
+    // 1. Soundboard cavity air thud (A0 Helmholtz / lower bout mode):
+    // Wound strings have higher mass impact -> deep, warm 105 Hz thud; plain strings ~145 Hz
+    const float thudFreq = 105.0f + 40.0f * (1.0f - woundFactor);
+    slapThudPhase = 0.f;
+    slapThudPhaseInc = 2.0f * kPi * thudFreq / sampleRate;
+    slapThudAmp = chokeVelocity * (0.07f + 0.07f * woundFactor);
+    const float thudTime = 0.010f + 0.010f * woundFactor; // 10ms (plain) to 20ms (wound)
+    slapThudDecay = std::exp(-1.0f / (thudTime * sampleRate));
 
-    // Amplitude proportional to keyswitch velocity and string mass
-    slapAmp = chokeVelocity * (0.08f + 0.12f * woundFactor);
-    // Transient decays within ~4ms (plain) to ~8ms (wound)
-    const float slapTime = 0.004f + 0.005f * woundFactor;
-    slapDecay = std::exp(-1.0f / (slapTime * sampleRate));
+    // 2. Fret-wire contact snap (sharp high-frequency mechanical transient):
+    const float clickFreq = 1800.0f + 800.0f * (1.0f - woundFactor);
+    slapClickPhase = 0.f;
+    slapClickPhaseInc = 2.0f * kPi * clickFreq / sampleRate;
+    slapClickAmp = chokeVelocity * (0.04f + 0.04f * (1.0f - woundFactor));
+    const float clickTime = 0.003f + 0.003f * woundFactor; // 3ms to 6ms
+    slapClickDecay = std::exp(-1.0f / (clickTime * sampleRate));
 }
 
 // ---------------------------------------------------------------------------
@@ -127,17 +132,27 @@ float Voice::tick() noexcept
             chokeGain = 0.0f;
         }
 
-        if (slapAmp > 1e-5f)
+        float slapOut = 0.f;
+        if (slapThudAmp > 1e-5f)
         {
-            const float slapSignal = slapAmp * std::sin(slapPhase);
-            slapPhase += slapPhaseInc;
-            if (slapPhase >= 2.0f * kPi) slapPhase -= 2.0f * kPi;
-            slapAmp *= slapDecay;
-            out += slapSignal;
+            slapOut += slapThudAmp * std::sin(slapThudPhase);
+            slapThudPhase += slapThudPhaseInc;
+            if (slapThudPhase >= 2.0f * kPi) slapThudPhase -= 2.0f * kPi;
+            slapThudAmp *= slapThudDecay;
         }
 
+        if (slapClickAmp > 1e-5f)
+        {
+            slapOut += slapClickAmp * std::sin(slapClickPhase);
+            slapClickPhase += slapClickPhaseInc;
+            if (slapClickPhase >= 2.0f * kPi) slapClickPhase -= 2.0f * kPi;
+            slapClickAmp *= slapClickDecay;
+        }
+
+        out += slapOut;
+
         --chokeSamplesLeft;
-        if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && slapAmp <= 1e-5f))
+        if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && slapThudAmp <= 1e-5f && slapClickAmp <= 1e-5f))
         {
             active = false;
             choking = false;
@@ -201,7 +216,8 @@ void Voice::reset() noexcept
     choking = false;
     chokeGain = 1.0f;
     chokeSamplesLeft = 0;
-    slapAmp = 0.f;
+    slapThudAmp = 0.f;
+    slapClickAmp = 0.f;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
     midiNote = -1;

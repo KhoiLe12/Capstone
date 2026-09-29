@@ -81,10 +81,19 @@ private:
     float chokeGain        = 1.0f;
     float chokeCoeff       = 0.99f;
     int   chokeSamplesLeft = 0;
-    float slapAmp          = 0.f;
-    float slapPhase        = 0.f;
-    float slapPhaseInc     = 0.f;
-    float slapDecay        = 0.99f;
+
+    // Dual-component acoustic slap:
+    // 1. Low-end soundboard cavity thud (A0 Helmholtz / lower bout mode)
+    float slapThudAmp      = 0.f;
+    float slapThudPhase    = 0.f;
+    float slapThudPhaseInc = 0.f;
+    float slapThudDecay    = 0.99f;
+
+    // 2. Fret-wire contact click (snappy metal/wood contact)
+    float slapClickAmp      = 0.f;
+    float slapClickPhase    = 0.f;
+    float slapClickPhaseInc = 0.f;
+    float slapClickDecay    = 0.99f;
 
     static float midiToFreq(int note) noexcept;
     static constexpr float kSilenceThreshold = 1e-9f;

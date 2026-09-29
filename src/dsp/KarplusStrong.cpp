@@ -146,24 +146,34 @@ void KarplusStrong::updateLoopGains() noexcept
     if (muteMode == MuteMode::Full)
     {
         // Physical Full Mute / Dead Notes ("X" notes):
-        // Fretting hand rests completely across the strings, preventing any standing waves
-        // from circulating. Loop gains are set to near zero (0.02f) so the initial pluck impulse
-        // strikes the bridge and excites the acoustic body IR once, with zero lingering pitch or note tone.
-        loopGainV = 0.02f;
-        loopGainH = 0.02f;
+        // Fretting hand rests across the strings. High harmonics are immediately absorbed
+        // by the soft flesh, leaving a warm wooden acoustic thump on wound strings and a dry,
+        // snappy papery click on plain strings.
+        // We calibrate loop gains (~0.07 - 0.14) and strong loss filtering (sCoeff ~ 0.46) so that:
+        // 1. Standing waves cannot circulate (each cycle decays by >17-23 dB, zero pitch).
+        // 2. The string carries authentic mechanical energy into the soundboard (~15-25ms duration)
+        //    allowing the spruce top plate and body air cavity to breathe naturally (uncramped).
+        const float deadTauV = 0.012f + 0.010f * woundFactor; // 12ms (plain) to 22ms (wound)
+        const float deadTauH = 0.014f + 0.012f * woundFactor;
+
+        const float maxDeadGainV = 0.07f + 0.07f * woundFactor; // 0.07 (plain) -> 0.14 (wound)
+        const float maxDeadGainH = 0.09f + 0.07f * woundFactor; // 0.09 (plain) -> 0.16 (wound)
+
+        loopGainV = std::min(maxDeadGainV, std::exp(-1.0f / (f0 * deadTauV)));
+        loopGainH = std::min(maxDeadGainH, std::exp(-1.0f / (f0 * deadTauH)));
 
         // Dynamic humanization micro-variation across successive dead notes:
         const float humanJitter = 1.0f + 0.05f * humanRand();
 
         // Saddle mechanical impedance cutoff:
-        // Wound strings: deep, woody acoustic body thump (~500 Hz)
-        // Plain treble strings: crisp, papery fret click (~2400 Hz)
-        const float baseCutoff = 2400.0f - woundFactor * 1900.0f; // 500 Hz to 2400 Hz
-        const float saddleCutoff = std::clamp(baseCutoff * humanJitter, 350.0f, 4000.0f);
+        // Wound strings: deep, woody acoustic body thump (~600 Hz)
+        // Plain treble strings: crisp, papery fret click (~2600 Hz)
+        const float baseCutoff = 2600.0f - woundFactor * 2000.0f; // 600 Hz to 2600 Hz
+        const float saddleCutoff = std::clamp(baseCutoff * humanJitter, 400.0f, 4200.0f);
         saddleBeta = std::exp(-2.0f * kPi * saddleCutoff / sampleRate);
 
-        sCoeffV_computed = std::clamp((0.38f + woundFactor * 0.10f) * humanJitter, 0.20f, 0.49f);
-        sCoeffH_computed = std::clamp((0.38f + woundFactor * 0.10f) * humanJitter, 0.20f, 0.49f);
+        sCoeffV_computed = std::clamp(0.44f + woundFactor * 0.04f, 0.40f, 0.485f);
+        sCoeffH_computed = std::clamp(0.44f + woundFactor * 0.04f, 0.40f, 0.485f);
     }
     else if (muteMode == MuteMode::Palm)
     {
@@ -179,20 +189,21 @@ void KarplusStrong::updateLoopGains() noexcept
         const float humanJitter = 1.0f + 0.04f * humanRand();
 
         // Base decay times:
-        // Wound bass strings have deep, chunky low-end "chug" (~55-90ms)
-        // Plain treble strings have light, crisp acoustic "plink" (~25-45ms)
-        const float tauV = ((0.025f + 0.020f * woundFactor) + currentDecay * (0.035f + 0.035f * woundFactor)) * velDampScale * humanJitter;
-        const float tauH = ((0.035f + 0.025f * woundFactor) + currentDecay * (0.045f + 0.045f * woundFactor)) * velDampScale * humanJitter;
+        // Extended low-frequency body resonance time on wound bass strings gives an open,
+        // resonant acoustic "chug" (~70-120ms) instead of a pinched, cramped click.
+        // Plain treble strings have light, crisp acoustic "plink" (~30-50ms).
+        const float tauV = ((0.030f + 0.025f * woundFactor) + currentDecay * (0.040f + 0.040f * woundFactor)) * velDampScale * humanJitter;
+        const float tauH = ((0.042f + 0.030f * woundFactor) + currentDecay * (0.050f + 0.050f * woundFactor)) * velDampScale * humanJitter;
 
-        loopGainV = std::min(0.93f, std::exp(-1.0f / (f0 * tauV)));
-        loopGainH = std::min(0.96f, std::exp(-1.0f / (f0 * tauH)));
+        loopGainV = std::min(0.94f, std::exp(-1.0f / (f0 * tauV)));
+        loopGainH = std::min(0.97f, std::exp(-1.0f / (f0 * tauH)));
 
-        const float baseCutoff = 2200.0f - woundFactor * 800.0f; // 1400 Hz (bass) -> 2200 Hz (treble)
-        const float saddleCutoff = std::clamp(baseCutoff * (0.85f + 0.30f * vel) * humanJitter, 800.0f, 3800.0f);
+        const float baseCutoff = 2400.0f - woundFactor * 850.0f; // 1550 Hz (bass) -> 2400 Hz (treble)
+        const float saddleCutoff = std::clamp(baseCutoff * (0.85f + 0.30f * vel) * humanJitter, 900.0f, 4000.0f);
         saddleBeta = std::exp(-2.0f * kPi * saddleCutoff / sampleRate);
 
-        sCoeffV_computed = std::clamp(baseSCoeffV * (1.2f + 0.3f * woundFactor) * (1.15f - 0.25f * vel) * humanJitter, 0.10f, 0.48f);
-        sCoeffH_computed = std::clamp(baseSCoeffH * (1.2f + 0.3f * woundFactor) * (1.15f - 0.25f * vel) * humanJitter, 0.10f, 0.48f);
+        sCoeffV_computed = std::clamp(baseSCoeffV * (1.15f + 0.25f * woundFactor) * (1.15f - 0.25f * vel) * humanJitter, 0.10f, 0.48f);
+        sCoeffH_computed = std::clamp(baseSCoeffH * (1.15f + 0.25f * woundFactor) * (1.15f - 0.25f * vel) * humanJitter, 0.10f, 0.48f);
     }
     else
     {
