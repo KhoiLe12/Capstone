@@ -45,6 +45,9 @@ public:
      */
     void setDecay(float decay) noexcept;
 
+    /** Enable or disable palm muting on the string. */
+    void setPalmMute(bool muted) noexcept;
+
     /**
      * Seed the delay line with exciter content and trigger tension envelope.
      * @param exciterBuf Source buffer (length == delay-line size)
@@ -73,12 +76,17 @@ public:
     float sampleRate   = 44100.f;
     float currentFreq  = 196.0f;
     float currentDecay = 0.80f;
+    bool  isPalmMuted  = false;
 
     void updateLoopGains() noexcept;
 
     // Double-decay loop gains (Vertical = fast attack, Horizontal = singing sustain)
     float loopGainV  = 0.965f;
     float loopGainH  = 0.994f;
+
+    // Base loss coefficients before palm damping
+    float baseSCoeffV = 0.32f;
+    float baseSCoeffH = 0.25f;
 
     // Nylon string viscoelastic loss filter coefficients S in [0.05, 0.48]
     // y[n] = (1 - S) * x[n] + S * x[n-1]

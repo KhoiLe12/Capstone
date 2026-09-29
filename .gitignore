@@ -2,4 +2,4 @@ build/
 *.user
 .vs/
 .vscode/
-
+scratch/

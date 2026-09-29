@@ -28,17 +28,46 @@ void SynthEngine::noteOn(int midiNote, float velocity)
         return;
     }
 
+    // Intercept Palm Mute Keyswitch C1 (MIDI 24)
+    if (midiNote == KEYSWITCH_PALM_MUTE)
+    {
+        keyswitchMuteActive = true;
+        // Physically clamp all currently ringing strings into palm mute
+        for (auto& v : voices)
+        {
+            if (v.isActive())
+                v.setPalmMute(true);
+        }
+        return; // Keyswitch does not trigger a pitched string voice
+    }
+
     int idx = findVoiceForNote(midiNote);
     if (idx < 0)
         idx = findFreeVoice();
 
+    const bool muteState = isPalmMuteActive();
     voices[idx].noteOn(midiNote, velocity,
                        paramBrightness, paramPickPos, paramDecay,
-                       paramStiffness);
+                       paramStiffness, muteState);
 }
 
 void SynthEngine::noteOff(int midiNote)
 {
+    // Intercept Palm Mute Keyswitch C1 release
+    if (midiNote == KEYSWITCH_PALM_MUTE)
+    {
+        keyswitchMuteActive = false;
+        if (!paramPalmMute)
+        {
+            for (auto& v : voices)
+            {
+                if (v.isActive())
+                    v.setPalmMute(false);
+            }
+        }
+        return;
+    }
+
     for (auto& v : voices)
     {
         if (v.getMidiNote() == midiNote && v.isActive())
@@ -55,6 +84,18 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     // Update body parameters (size, damping, coupling, bodyType)
     const int bodyType = static_cast<int>(std::round(paramBodyType));
     body.setParameters(paramBodySize, 1.0f, paramBodyMix, bodyType);
+
+    // Sync mute state if toggled via DAW automation parameter or UI button
+    const bool currentMute = isPalmMuteActive();
+    if (currentMute != prevMuteState)
+    {
+        prevMuteState = currentMute;
+        for (auto& v : voices)
+        {
+            if (v.isActive())
+                v.setPalmMute(currentMute);
+        }
+    }
 
     // 1. Advance all active string voices and sum bridge force into output buffers
     for (int i = 0; i < numSamples; ++i)
@@ -154,6 +195,8 @@ void SynthEngine::reset()
     body.reset();
     dcX_L = 0.f; dcY_L = 0.f;
     dcX_R = 0.f; dcY_R = 0.f;
+    keyswitchMuteActive = false;
+    prevMuteState       = false;
 }
 
 // ---------------------------------------------------------------------------

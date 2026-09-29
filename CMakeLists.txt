@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 14.0.0)
+project(HybridSynth VERSION 16.0.0)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -59,4 +59,20 @@ target_link_libraries(HybridSynth
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# ---------------------------------------------------------------------------
+# Test Target
+# ---------------------------------------------------------------------------
+add_executable(test_palmmute
+    scratch/test_palmmute.cpp
+    src/dsp/BiquadFilter.cpp
+    src/dsp/Exciter.cpp
+    src/dsp/KarplusStrong.cpp
+    src/dsp/Voice.cpp
+    src/dsp/BodyResonance.cpp
+    src/dsp/SynthEngine.cpp
+)
+
+target_include_directories(test_palmmute PRIVATE src/)
+target_link_libraries(test_palmmute PRIVATE juce::juce_audio_utils juce::juce_dsp)
 
