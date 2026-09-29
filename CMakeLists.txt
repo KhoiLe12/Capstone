@@ -61,18 +61,9 @@ target_link_libraries(HybridSynth
 )
 
 # ---------------------------------------------------------------------------
-# Test Target
+# Test Target (optional scratch test)
 # ---------------------------------------------------------------------------
-add_executable(test_palmmute
-    scratch/test_palmmute.cpp
-    src/dsp/BiquadFilter.cpp
-    src/dsp/Exciter.cpp
-    src/dsp/KarplusStrong.cpp
-    src/dsp/Voice.cpp
-    src/dsp/BodyResonance.cpp
-    src/dsp/SynthEngine.cpp
-)
-
-target_include_directories(test_palmmute PRIVATE src/)
-target_link_libraries(test_palmmute PRIVATE juce::juce_audio_utils juce::juce_dsp)
+# if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scratch/test_palmmute.cpp")
+#     add_executable(test_palmmute scratch/test_palmmute.cpp ...)
+# endif()
 
