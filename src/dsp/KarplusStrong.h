@@ -39,14 +39,29 @@ public:
      */
     void setFrequency(float freqHz, float stiffness = 0.25f);
 
-    /**
-     * Set sustain (loop gain scaling).
+    /** String articulation damping modes. */
+    enum class MuteMode {
+        Open = 0,
+        Palm = 1,
+        Full = 2
+    };
+
+    /** Set sustain (loop gain scaling).
      * decay = 0 -> very short staccato, 1 -> long singing sustain.
      */
     void setDecay(float decay) noexcept;
 
+    /** Set mute mode (Open, Palm, or Full). */
+    void setMuteMode(MuteMode mode) noexcept;
+
     /** Enable or disable palm muting on the string. */
     void setPalmMute(bool muted) noexcept;
+
+    /** Enable or disable full muting / dead notes on the string. */
+    void setFullMute(bool muted) noexcept;
+
+    MuteMode getMuteMode() const noexcept { return muteMode; }
+    float getWoundFactor() const noexcept { return woundFactor; }
 
     /**
      * Seed the delay line with exciter content and trigger tension envelope.
@@ -76,6 +91,8 @@ public:
     float sampleRate   = 44100.f;
     float currentFreq  = 196.0f;
     float currentDecay = 0.80f;
+    float woundFactor  = 0.0f;  ///< 1.0 = heavy wound bass string (E2), 0.0 = plain nylon treble (G3+)
+    MuteMode muteMode  = MuteMode::Open;
     bool  isPalmMuted  = false;
 
     void updateLoopGains() noexcept;

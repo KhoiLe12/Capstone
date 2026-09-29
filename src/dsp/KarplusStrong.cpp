@@ -33,8 +33,12 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // Nylon strings have negligible inharmonicity compared to steel.
     // Taming dispersion eliminates artificial metallic banjo/harpsichord "twang",
     // restoring pure acoustic harmonic integers.
+    // Wound strings (E2..D3: ~82 - 150 Hz) have silver-plated copper wire coils over nylon core.
+    // Plain strings (G3..E4+: 196+ Hz) are smooth extruded rectified nylon.
+    woundFactor = std::clamp((196.0f - f0) / (196.0f - 82.0f), 0.0f, 1.0f);
+
     const float clampedStiffness = std::max(0.0f, std::min(stiffness, 1.0f));
-    dispCoeff = -0.015f * clampedStiffness;
+    dispCoeff = (-0.006f - 0.009f * woundFactor) * clampedStiffness;
 
     // Frequency-adaptive vertical and horizontal loss filter coefficients.
     // Low notes have long delay lines where high harmonics circulate many more times.
@@ -43,8 +47,21 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
         const float t = std::max(0.0f, std::min((f0 - 60.0f) / (500.0f - 60.0f), 1.0f));
         baseSCoeffV = 0.32f - t * (0.32f - 0.16f);   // 0.32 (deep warm bass) → 0.16 (treble chime)
         baseSCoeffH = 0.25f - t * (0.25f - 0.12f);   // 0.25 (solid fundamental) → 0.12 (singing sustain)
-        sCoeffV_computed = isPalmMuted ? std::min(0.48f, baseSCoeffV * 1.4f) : baseSCoeffV;
-        sCoeffH_computed = isPalmMuted ? std::min(0.48f, baseSCoeffH * 1.4f) : baseSCoeffH;
+        if (muteMode == MuteMode::Full)
+        {
+            sCoeffV_computed = 0.35f + woundFactor * 0.12f;
+            sCoeffH_computed = 0.35f + woundFactor * 0.12f;
+        }
+        else if (muteMode == MuteMode::Palm)
+        {
+            sCoeffV_computed = std::min(0.48f, baseSCoeffV * (1.2f + 0.3f * woundFactor));
+            sCoeffH_computed = std::min(0.48f, baseSCoeffH * (1.2f + 0.3f * woundFactor));
+        }
+        else
+        {
+            sCoeffV_computed = baseSCoeffV;
+            sCoeffH_computed = baseSCoeffH;
+        }
     }
 
     // DC group delay of the dispersion allpass filter: tau = (1 - D) / (1 + D)
@@ -101,52 +118,82 @@ void KarplusStrong::setDecay(float decay) noexcept
     updateLoopGains();
 }
 
-void KarplusStrong::setPalmMute(bool muted) noexcept
+void KarplusStrong::setMuteMode(MuteMode mode) noexcept
 {
-    if (isPalmMuted != muted)
+    if (muteMode != mode)
     {
-        isPalmMuted = muted;
+        muteMode = mode;
+        isPalmMuted = (muteMode == MuteMode::Palm);
         updateLoopGains();
     }
+}
+
+void KarplusStrong::setPalmMute(bool muted) noexcept
+{
+    setMuteMode(muted ? MuteMode::Palm : MuteMode::Open);
+}
+
+void KarplusStrong::setFullMute(bool muted) noexcept
+{
+    setMuteMode(muted ? MuteMode::Full : MuteMode::Open);
 }
 
 void KarplusStrong::updateLoopGains() noexcept
 {
     const float f0 = std::max(60.0f, currentFreq);
+    woundFactor = std::clamp((196.0f - f0) / (196.0f - 82.0f), 0.0f, 1.0f);
 
-    if (isPalmMuted)
+    if (muteMode == MuteMode::Full)
     {
-        // Physical palm mute:
-        // Fleshy side of hand rests on bridge saddle, heavily absorbing vibration energy
-        // Vertical decay constant: ~0.035s .. 0.09s
-        // Horizontal decay constant: ~0.050s .. 0.12s
-        const float tauV = 0.035f + currentDecay * 0.055f;
-        const float tauH = 0.050f + currentDecay * 0.070f;
+        // Physical Full Mute / Dead Notes ("X" notes):
+        // Fretting hand rests across strings.
+        // Wound strings (E2..D3): Heavy mass inertia gives a resonant, woody "thump" (~10ms to 18ms decay, loopGain ~0.42).
+        // Plain strings (G3..E4+): Light nylon gives a dry, snappy papery "chick" (~3ms to 6ms decay, loopGain ~0.22).
+        const float tauV = (0.003f + 0.006f * woundFactor) + currentDecay * (0.003f + 0.006f * woundFactor);
+        const float tauH = (0.004f + 0.007f * woundFactor) + currentDecay * (0.004f + 0.007f * woundFactor);
+
+        const float maxGainV = 0.22f + 0.20f * woundFactor; // 0.22 (plain treble) -> 0.42 (wound bass)
+        const float maxGainH = 0.26f + 0.20f * woundFactor; // 0.26 (plain treble) -> 0.46 (wound bass)
+
+        loopGainV = std::min(maxGainV, std::exp(-1.0f / (f0 * tauV)));
+        loopGainH = std::min(maxGainH, std::exp(-1.0f / (f0 * tauH)));
+
+        // Saddle mechanical impedance cutoff:
+        // Low wound strings: saddle cutoff drops to 550 Hz (deep, warm, woody thump)
+        // Plain treble strings: saddle cutoff 2400 Hz (crisp, snappy transient click)
+        const float saddleCutoff = 2400.0f - woundFactor * 1850.0f; // 550 Hz to 2400 Hz
+        saddleBeta = std::exp(-2.0f * kPi * saddleCutoff / sampleRate);
+
+        sCoeffV_computed = 0.35f + woundFactor * 0.12f;
+        sCoeffH_computed = 0.35f + woundFactor * 0.12f;
+    }
+    else if (muteMode == MuteMode::Palm)
+    {
+        // Palm Muting:
+        // Fleshy edge of hand rests on bridge saddles.
+        // Wound bass strings have deep, chunky low-end "chug" (~55-90ms)
+        // Plain treble strings have light, crisp acoustic "plink" (~25-45ms)
+        const float tauV = (0.025f + 0.020f * woundFactor) + currentDecay * (0.035f + 0.035f * woundFactor);
+        const float tauH = (0.035f + 0.025f * woundFactor) + currentDecay * (0.045f + 0.045f * woundFactor);
 
         loopGainV = std::min(0.92f, std::exp(-1.0f / (f0 * tauV)));
         loopGainH = std::min(0.95f, std::exp(-1.0f / (f0 * tauH)));
 
-        // Palm damping absorbs high frequencies: lower saddle cutoff to ~1.6 kHz
-        saddleBeta = std::exp(-2.0f * kPi * 1600.0f / sampleRate);
+        const float saddleCutoff = 2200.0f - woundFactor * 800.0f; // 1400 Hz (bass) -> 2200 Hz (treble)
+        saddleBeta = std::exp(-2.0f * kPi * saddleCutoff / sampleRate);
 
-        // Increased high-frequency absorption in loop filter
-        sCoeffV_computed = std::min(0.48f, baseSCoeffV * 1.4f);
-        sCoeffH_computed = std::min(0.48f, baseSCoeffH * 1.4f);
+        sCoeffV_computed = std::min(0.48f, baseSCoeffV * (1.2f + 0.3f * woundFactor));
+        sCoeffH_computed = std::min(0.48f, baseSCoeffH * (1.2f + 0.3f * woundFactor));
     }
     else
     {
         // Normal open string decay:
-        // Vertical polarization (soundboard saddle attack thump): 0.25s .. 0.85s
         const float tauV = 0.25f + currentDecay * 0.60f;
-        // Horizontal polarization (singing sustain floor): 1.20s .. 4.50s
         const float tauH = 1.20f + currentDecay * 3.30f;
 
-        // loopGain = exp(-1 / (f0 * tau))
-        // Calibrates decay time in seconds across all pitches from low E to high E
         loopGainV = std::min(0.992f, std::exp(-1.0f / (f0 * tauV)));
         loopGainH = std::min(0.9994f, std::exp(-1.0f / (f0 * tauH)));
 
-        // Standard bone saddle mechanical impedance cutoff ~4.5 kHz
         saddleBeta = std::exp(-2.0f * kPi * 4500.0f / sampleRate);
 
         sCoeffV_computed = baseSCoeffV;

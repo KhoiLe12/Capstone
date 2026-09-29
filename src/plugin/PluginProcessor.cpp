@@ -84,6 +84,12 @@ HybridSynthProcessor::createParameterLayout()
         "Palm Mute",
         false));
 
+    // Full Mute: fret-hand mute / dead notes / choke (also momentary triggered via D1 / FL: D2 keyswitch)
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "fullMute", 1 },
+        "Full Mute",
+        false));
+
     return { params.begin(), params.end() };
 }
 
@@ -121,6 +127,7 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramBodyType   = apvts.getRawParameterValue("bodyModel")->load();
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
     synth.paramPalmMute   = apvts.getRawParameterValue("palmMute")->load() > 0.5f;
+    synth.paramFullMute   = apvts.getRawParameterValue("fullMute")->load() > 0.5f;
 
     // Process MIDI events
     for (const auto meta : midiMessages)

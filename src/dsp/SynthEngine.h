@@ -6,11 +6,10 @@
  * SynthEngine — Multi-Port Digital Waveguide Orchestrator & Modal Body Coupler.
  *
  * Architecture:
- *   - 6 polyphonic voices with stiffness dispersion & dynamic tension
- *   - Energy-conserving Multi-Port Bridge Scattering Junction:
- *     Transfers downward string forces to the bridge and scatters mutual
- *     energy back into all strings (true physical sympathetic resonance).
- *   - IRCAM Modalys-style 32-mode parallel soundboard model.
+ *   - 12 polyphonic voices with physical string differentiation (wound vs plain)
+ *   - Energy-conserving Multi-Port Bridge Scattering Junction
+ *   - IRCAM Modalys-style 32-mode parallel soundboard model + IR engine
+ *   - Articulations: Palm Muting (C1 / FL: C2), Full Muting & Fret Slap Choke (D1 / FL: D2)
  */
 class SynthEngine
 {
@@ -30,7 +29,7 @@ public:
 
     /**
      * Fill outputL and outputR with numSamples of synthesised audio.
-     * Output is mono-summed to both channels.
+     * Output is mono-summed to both channels with stereo spatial spreading.
      */
     void process(float* outputL, float* outputR, int numSamples) noexcept;
 
@@ -42,7 +41,8 @@ public:
     // -------------------------------------------------------------------
     // Physical Parameters & Articulations — set by PluginProcessor
     // -------------------------------------------------------------------
-    static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24) Hold Keyswitch
+    static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24 / FL: C2) Hold Keyswitch
+    static constexpr int KEYSWITCH_FULL_MUTE = 26; ///< D1 (MIDI Note 26 / FL: D2) Hold/Choke Keyswitch
     static constexpr int GUITAR_MIN_NOTE     = 38; ///< D2 (Standard Drop-D lowest note; standard E2 is 40)
     static constexpr int GUITAR_MAX_NOTE     = 86; ///< D6 (22nd fret high E string)
 
@@ -55,16 +55,37 @@ public:
     float paramBodySize    = 1.00f;   ///< Soundboard size / scale (0.6..1.8)
     float paramBodyType    = 0.0f;    ///< Body Model (0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank)
     bool  paramPalmMute    = false;   ///< Palm Mute DAW parameter / UI toggle
+    bool  paramFullMute    = false;   ///< Full Mute DAW parameter / UI toggle
 
-    bool isPalmMuteActive() const noexcept { return paramPalmMute || keyswitchMuteActive; }
+    KarplusStrong::MuteMode getEffectiveMuteMode() const noexcept
+    {
+        if (paramFullMute || keyswitchFullMuteActive)
+            return KarplusStrong::MuteMode::Full;
+        if (paramPalmMute || keyswitchPalmMuteActive)
+            return KarplusStrong::MuteMode::Palm;
+        return KarplusStrong::MuteMode::Open;
+    }
+
+    bool isPalmMuteActive() const noexcept
+    {
+        return (paramPalmMute || keyswitchPalmMuteActive) && !isFullMuteActive();
+    }
+
+    bool isFullMuteActive() const noexcept
+    {
+        return paramFullMute || keyswitchFullMuteActive;
+    }
 
 private:
     Voice         voices[NUM_VOICES];
     BodyResonance body;
     float         sampleRate = 44100.f;
 
-    bool          keyswitchMuteActive = false;
-    bool          prevMuteState       = false;
+    bool          keyswitchPalmMuteActive = false;
+    bool          keyswitchFullMuteActive = false;
+    KarplusStrong::MuteMode prevMuteMode  = KarplusStrong::MuteMode::Open;
+
+    void syncVoiceMuteModes() noexcept;
 
     int findFreeVoice() const noexcept;
     int findVoiceForNote(int midiNote) const noexcept;

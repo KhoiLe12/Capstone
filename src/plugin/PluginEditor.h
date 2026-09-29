@@ -3,8 +3,8 @@
 #include "PluginProcessor.h"
 
 /**
- * HybridSynthEditor — UI with Body Model selector and rotary knobs:
- *   [Body Model Selector]
+ * HybridSynthEditor — UI with Body Model selector, articulations, and rotary knobs:
+ *   [Body Model Selector] [Palm Mute Toggle + LED] [Full Mute Toggle + LED]
  *   [Decay] [Brightness] [Pick Pos] [Stiffness] [Body Size] [Body Coupling] [Gain]
  */
 class HybridSynthEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -29,8 +29,14 @@ private:
     // Palm Mute Articulation Toggle & Visual Status
     juce::ToggleButton palmMuteToggle;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> palmMuteAttach;
-    bool isMuteVisuallyActive = false;
-    juce::Rectangle<int> muteBadgeArea;
+    bool isPalmVisuallyActive = false;
+    juce::Rectangle<int> palmBadgeArea;
+
+    // Full Mute Articulation Toggle & Visual Status
+    juce::ToggleButton fullMuteToggle;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fullMuteAttach;
+    bool isFullVisuallyActive = false;
+    juce::Rectangle<int> fullBadgeArea;
 
     // 7 Physical modeling knobs
     juce::Slider decayKnob, brightnessKnob, pickPosKnob,

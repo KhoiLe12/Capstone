@@ -28,20 +28,47 @@ void SynthEngine::noteOn(int midiNote, float velocity)
         return;
     }
 
-    // 1. Intercept Palm Mute Keyswitch C1 (MIDI 24)
+    // 1. Intercept Palm Mute Keyswitch C1 (MIDI 24 / FL: C2)
     if (midiNote == KEYSWITCH_PALM_MUTE)
     {
-        keyswitchMuteActive = true;
-        // Physically clamp all currently ringing strings into palm mute
+        keyswitchPalmMuteActive = true;
+        prevMuteMode = getEffectiveMuteMode();
+        // Physically clamp all currently ringing strings into palm mute if not already full-muted
+        if (!isFullMuteActive())
+        {
+            for (auto& v : voices)
+                if (v.isActive())
+                    v.setMuteMode(KarplusStrong::MuteMode::Palm);
+        }
+        return; // Keyswitch produces 0 audio itself
+    }
+
+    // 2. Intercept Full Mute Keyswitch D1 (MIDI 26 / FL: D2)
+    if (midiNote == KEYSWITCH_FULL_MUTE)
+    {
+        keyswitchFullMuteActive = true;
+        prevMuteMode = getEffectiveMuteMode();
+
+        // If any strings are vibrating, physically choke them with authentic hand slap
+        int activeCount = 0;
         for (auto& v : voices)
         {
             if (v.isActive())
-                v.setPalmMute(true);
+                activeCount++;
         }
-        return; // Keyswitch does not trigger a pitched string voice
+
+        if (activeCount > 0)
+        {
+            for (auto& v : voices)
+            {
+                if (v.isActive())
+                    v.choke(velocity);
+            }
+        }
+        return; // Keyswitch alone is silent if no notes were ringing
     }
 
-    // 2. Strict Physical Guitar Range Validation
+    // 3. Strict Physical Guitar Range Validation
     // Standard acoustic guitar range: D2 (38, Drop D) / E2 (40) up to D6 (86, 22nd fret high E)
     // Any notes outside this range are rejected so keyswitches never produce unwanted audio
     if (midiNote < GUITAR_MIN_NOTE || midiNote > GUITAR_MAX_NOTE)
@@ -53,10 +80,10 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     if (idx < 0)
         idx = findFreeVoice();
 
-    const bool muteState = isPalmMuteActive();
+    const auto muteMode = getEffectiveMuteMode();
     voices[idx].noteOn(midiNote, velocity,
                        paramBrightness, paramPickPos, paramDecay,
-                       paramStiffness, muteState);
+                       paramStiffness, muteMode);
 }
 
 void SynthEngine::noteOff(int midiNote)
@@ -64,15 +91,16 @@ void SynthEngine::noteOff(int midiNote)
     // Intercept Palm Mute Keyswitch C1 release
     if (midiNote == KEYSWITCH_PALM_MUTE)
     {
-        keyswitchMuteActive = false;
-        if (!paramPalmMute)
-        {
-            for (auto& v : voices)
-            {
-                if (v.isActive())
-                    v.setPalmMute(false);
-            }
-        }
+        keyswitchPalmMuteActive = false;
+        syncVoiceMuteModes();
+        return;
+    }
+
+    // Intercept Full Mute Keyswitch D1 release
+    if (midiNote == KEYSWITCH_FULL_MUTE)
+    {
+        keyswitchFullMuteActive = false;
+        syncVoiceMuteModes();
         return;
     }
 
@@ -89,6 +117,17 @@ void SynthEngine::noteOff(int midiNote)
     }
 }
 
+void SynthEngine::syncVoiceMuteModes() noexcept
+{
+    const auto mode = getEffectiveMuteMode();
+    prevMuteMode = mode;
+    for (auto& v : voices)
+    {
+        if (v.isActive())
+            v.setMuteMode(mode);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pure Acoustic String & Modalys Soundboard Processing
 // ---------------------------------------------------------------------------
@@ -99,16 +138,23 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     const int bodyType = static_cast<int>(std::round(paramBodyType));
     body.setParameters(paramBodySize, 1.0f, paramBodyMix, bodyType);
 
-    // Sync mute state if toggled via DAW automation parameter or UI button
-    const bool currentMute = isPalmMuteActive();
-    if (currentMute != prevMuteState)
+    // Sync mute state if changed via DAW automation parameter or UI toggle
+    const auto currentMuteMode = getEffectiveMuteMode();
+    if (currentMuteMode != prevMuteMode)
     {
-        prevMuteState = currentMute;
-        for (auto& v : voices)
+        if (currentMuteMode == KarplusStrong::MuteMode::Full)
         {
-            if (v.isActive())
-                v.setPalmMute(currentMute);
+            for (auto& v : voices)
+                if (v.isActive())
+                    v.choke(0.8f);
         }
+        else
+        {
+            for (auto& v : voices)
+                if (v.isActive())
+                    v.setMuteMode(currentMuteMode);
+        }
+        prevMuteMode = currentMuteMode;
     }
 
     // 1. Advance all active string voices and sum bridge force into output buffers
@@ -209,8 +255,9 @@ void SynthEngine::reset()
     body.reset();
     dcX_L = 0.f; dcY_L = 0.f;
     dcX_R = 0.f; dcY_R = 0.f;
-    keyswitchMuteActive = false;
-    prevMuteState       = false;
+    keyswitchPalmMuteActive = false;
+    keyswitchFullMuteActive = false;
+    prevMuteMode            = KarplusStrong::MuteMode::Open;
 }
 
 // ---------------------------------------------------------------------------
