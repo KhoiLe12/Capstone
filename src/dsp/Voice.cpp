@@ -81,9 +81,10 @@ void Voice::choke(float chokeVelocity) noexcept
     choking = true;
     chokeGain = 1.0f;
 
-    // Hand flesh rapidly absorbs string kinetic energy over ~8ms
-    chokeCoeff = std::exp(-1.0f / (0.008f * sampleRate));
-    chokeSamplesLeft = static_cast<int>(0.012f * sampleRate); // ~530 samples at 44.1k
+    // Physical contact with palm/fret hand instantly absorbs string kinetic energy:
+    // Damping time constant 1.8ms (chokeCoeff): string ringing drops to <6% in ~5ms
+    chokeCoeff = std::exp(-1.0f / (0.0018f * sampleRate));
+    chokeSamplesLeft = static_cast<int>(0.020f * sampleRate); // up to 20ms for hand-slap transient to naturally decay
 
     const float freq = midiToFreq(midiNote);
     const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);
@@ -118,6 +119,14 @@ float Voice::tick() noexcept
         out *= chokeGain;
         chokeGain *= chokeCoeff;
 
+        // Once the string vibration has decayed into silence (< 0.01 = -40dB), reset the delay line
+        // so no residual harmonic pitch can circulate or leak through.
+        if (chokeGain < 0.01f && chokeGain > 0.0f)
+        {
+            string.reset();
+            chokeGain = 0.0f;
+        }
+
         if (slapAmp > 1e-5f)
         {
             const float slapSignal = slapAmp * std::sin(slapPhase);
@@ -128,7 +137,7 @@ float Voice::tick() noexcept
         }
 
         --chokeSamplesLeft;
-        if (chokeSamplesLeft <= 0 || chokeGain < 0.0005f)
+        if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && slapAmp <= 1e-5f))
         {
             active = false;
             choking = false;

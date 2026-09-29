@@ -88,12 +88,22 @@ public:
     /** Leaky RMS energy estimate — used by voice-stealer and active checks. */
     float getEnergy() const noexcept { return energyEstimate; }
 
-    float sampleRate   = 44100.f;
-    float currentFreq  = 196.0f;
-    float currentDecay = 0.80f;
-    float woundFactor  = 0.0f;  ///< 1.0 = heavy wound bass string (E2), 0.0 = plain nylon treble (G3+)
-    MuteMode muteMode  = MuteMode::Open;
-    bool  isPalmMuted  = false;
+    float sampleRate      = 44100.f;
+    float currentFreq     = 196.0f;
+    float currentDecay    = 0.80f;
+    float currentVelocity = 0.80f;
+    float woundFactor     = 0.0f;  ///< 1.0 = heavy wound bass string (E2), 0.0 = plain nylon treble (G3+)
+    MuteMode muteMode     = MuteMode::Open;
+    bool  isPalmMuted     = false;
+
+    uint32_t humanRngState = 987654321u;
+    float humanRand() noexcept
+    {
+        humanRngState ^= humanRngState << 13u;
+        humanRngState ^= humanRngState >> 17u;
+        humanRngState ^= humanRngState << 5u;
+        return static_cast<float>(static_cast<int32_t>(humanRngState)) / static_cast<float>(0x7FFFFFFFu);
+    }
 
     void updateLoopGains() noexcept;
 

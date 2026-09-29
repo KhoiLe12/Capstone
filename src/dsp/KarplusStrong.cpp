@@ -146,44 +146,53 @@ void KarplusStrong::updateLoopGains() noexcept
     if (muteMode == MuteMode::Full)
     {
         // Physical Full Mute / Dead Notes ("X" notes):
-        // Fretting hand rests across strings.
-        // Wound strings (E2..D3): Heavy mass inertia gives a resonant, woody "thump" (~10ms to 18ms decay, loopGain ~0.42).
-        // Plain strings (G3..E4+): Light nylon gives a dry, snappy papery "chick" (~3ms to 6ms decay, loopGain ~0.22).
-        const float tauV = (0.003f + 0.006f * woundFactor) + currentDecay * (0.003f + 0.006f * woundFactor);
-        const float tauH = (0.004f + 0.007f * woundFactor) + currentDecay * (0.004f + 0.007f * woundFactor);
+        // Fretting hand rests completely across the strings, preventing any standing waves
+        // from circulating. Loop gains are set to near zero (0.02f) so the initial pluck impulse
+        // strikes the bridge and excites the acoustic body IR once, with zero lingering pitch or note tone.
+        loopGainV = 0.02f;
+        loopGainH = 0.02f;
 
-        const float maxGainV = 0.22f + 0.20f * woundFactor; // 0.22 (plain treble) -> 0.42 (wound bass)
-        const float maxGainH = 0.26f + 0.20f * woundFactor; // 0.26 (plain treble) -> 0.46 (wound bass)
-
-        loopGainV = std::min(maxGainV, std::exp(-1.0f / (f0 * tauV)));
-        loopGainH = std::min(maxGainH, std::exp(-1.0f / (f0 * tauH)));
+        // Dynamic humanization micro-variation across successive dead notes:
+        const float humanJitter = 1.0f + 0.05f * humanRand();
 
         // Saddle mechanical impedance cutoff:
-        // Low wound strings: saddle cutoff drops to 550 Hz (deep, warm, woody thump)
-        // Plain treble strings: saddle cutoff 2400 Hz (crisp, snappy transient click)
-        const float saddleCutoff = 2400.0f - woundFactor * 1850.0f; // 550 Hz to 2400 Hz
+        // Wound strings: deep, woody acoustic body thump (~500 Hz)
+        // Plain treble strings: crisp, papery fret click (~2400 Hz)
+        const float baseCutoff = 2400.0f - woundFactor * 1900.0f; // 500 Hz to 2400 Hz
+        const float saddleCutoff = std::clamp(baseCutoff * humanJitter, 350.0f, 4000.0f);
         saddleBeta = std::exp(-2.0f * kPi * saddleCutoff / sampleRate);
 
-        sCoeffV_computed = 0.35f + woundFactor * 0.12f;
-        sCoeffH_computed = 0.35f + woundFactor * 0.12f;
+        sCoeffV_computed = std::clamp((0.38f + woundFactor * 0.10f) * humanJitter, 0.20f, 0.49f);
+        sCoeffH_computed = std::clamp((0.38f + woundFactor * 0.10f) * humanJitter, 0.20f, 0.49f);
     }
     else if (muteMode == MuteMode::Palm)
     {
         // Palm Muting:
         // Fleshy edge of hand rests on bridge saddles.
+        // 1. Dynamic velocity scaling:
+        //    Hard plucks break away slightly from palm flesh -> longer sustain & brighter bite.
+        //    Soft plucks are smothered by palm flesh -> shorter sustain & rounder thump.
+        const float vel = std::clamp(currentVelocity, 0.1f, 1.0f);
+        const float velDampScale = 0.75f + 0.45f * vel; // 0.80 (soft) -> 1.20 (hard)
+
+        // 2. Anti-machine-gun organic human micro-variation (+/- 4% bridge position/flesh pressure):
+        const float humanJitter = 1.0f + 0.04f * humanRand();
+
+        // Base decay times:
         // Wound bass strings have deep, chunky low-end "chug" (~55-90ms)
         // Plain treble strings have light, crisp acoustic "plink" (~25-45ms)
-        const float tauV = (0.025f + 0.020f * woundFactor) + currentDecay * (0.035f + 0.035f * woundFactor);
-        const float tauH = (0.035f + 0.025f * woundFactor) + currentDecay * (0.045f + 0.045f * woundFactor);
+        const float tauV = ((0.025f + 0.020f * woundFactor) + currentDecay * (0.035f + 0.035f * woundFactor)) * velDampScale * humanJitter;
+        const float tauH = ((0.035f + 0.025f * woundFactor) + currentDecay * (0.045f + 0.045f * woundFactor)) * velDampScale * humanJitter;
 
-        loopGainV = std::min(0.92f, std::exp(-1.0f / (f0 * tauV)));
-        loopGainH = std::min(0.95f, std::exp(-1.0f / (f0 * tauH)));
+        loopGainV = std::min(0.93f, std::exp(-1.0f / (f0 * tauV)));
+        loopGainH = std::min(0.96f, std::exp(-1.0f / (f0 * tauH)));
 
-        const float saddleCutoff = 2200.0f - woundFactor * 800.0f; // 1400 Hz (bass) -> 2200 Hz (treble)
+        const float baseCutoff = 2200.0f - woundFactor * 800.0f; // 1400 Hz (bass) -> 2200 Hz (treble)
+        const float saddleCutoff = std::clamp(baseCutoff * (0.85f + 0.30f * vel) * humanJitter, 800.0f, 3800.0f);
         saddleBeta = std::exp(-2.0f * kPi * saddleCutoff / sampleRate);
 
-        sCoeffV_computed = std::min(0.48f, baseSCoeffV * (1.2f + 0.3f * woundFactor));
-        sCoeffH_computed = std::min(0.48f, baseSCoeffH * (1.2f + 0.3f * woundFactor));
+        sCoeffV_computed = std::clamp(baseSCoeffV * (1.2f + 0.3f * woundFactor) * (1.15f - 0.25f * vel) * humanJitter, 0.10f, 0.48f);
+        sCoeffH_computed = std::clamp(baseSCoeffH * (1.2f + 0.3f * woundFactor) * (1.15f - 0.25f * vel) * humanJitter, 0.10f, 0.48f);
     }
     else
     {
@@ -207,7 +216,7 @@ void KarplusStrong::updateLoopGains() noexcept
 
 void KarplusStrong::trigger(const float* exciterBuf, int length, float velocity)
 {
-    (void)velocity;
+    currentVelocity = velocity;
     reset();
     updateLoopGains();
 
