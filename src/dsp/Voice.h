@@ -1,6 +1,7 @@
 #pragma once
 #include "Exciter.h"
 #include "KarplusStrong.h"
+#include "FdtdString.h"
 
 /**
  * Voice — one self-contained plucked-string voice with:
@@ -10,14 +11,29 @@
  *   - Dynamic tension modulation
  *   - Multi-port bridge velocity coupling
  *   - Physical acoustic choke with hand slap & fret contact transient
+ *   - Stefan Bilbao FDTD (DAFx24) physical wave equation string model
  */
 class Voice
 {
 public:
+    enum class EngineType
+    {
+        DigitalWaveguide = 0,
+        BilbaoFdtd       = 1
+    };
+
     Voice() = default;
 
-    /** Allocate KS delay line for this sample rate. Call once at startup. */
+    /** Allocate KS delay line and FDTD buffers for this sample rate. Call once at startup. */
     void init(float sampleRate);
+
+    /** Select string engine mode. */
+    void setEngineType(EngineType type) noexcept { engineType = type; }
+    EngineType getEngineType() const noexcept    { return engineType; }
+
+    /** Physical guitar string index (0 = E2, 1 = A2, 2 = D3, 3 = G3, 4 = B3, 5 = E4). */
+    void setPhysicalStringIndex(int idx) noexcept { physicalStringIndex = idx; }
+    int getPhysicalStringIndex() const noexcept   { return physicalStringIndex; }
 
     /**
      * Trigger a new note.
@@ -56,7 +72,11 @@ public:
 
     bool  isActive()    const noexcept { return active; }
     int   getMidiNote() const noexcept { return midiNote; }
-    float getEnergy()   const noexcept { return string.getEnergy() * (releasing ? releaseGain : (choking ? chokeGain : 1.0f)); }
+    float getEnergy()   const noexcept
+    {
+        const float eng = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
+        return eng * (releasing ? releaseGain : (choking ? chokeGain : 1.0f));
+    }
 
     /** Hard-stop and reset. */
     void reset() noexcept;
@@ -64,6 +84,10 @@ public:
 private:
     Exciter       exciter;
     KarplusStrong string;
+    FdtdString    fdtdString;
+
+    EngineType    engineType = EngineType::DigitalWaveguide;
+    int           physicalStringIndex = -1;
 
     int   midiNote   = -1;
     float velocity   = 1.f;

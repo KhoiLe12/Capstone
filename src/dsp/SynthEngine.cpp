@@ -91,9 +91,52 @@ void SynthEngine::noteOn(int midiNote, float velocity)
 
     heldNotes[midiNote] = velocity;
 
-    int idx = findVoiceForNote(midiNote);
-    if (idx < 0)
-        idx = findFreeVoice();
+    const bool isFdtd = (paramEngineType >= 0.5f);
+    int idx = -1;
+
+    if (isFdtd)
+    {
+        // Authentic 6-string physical guitar assignment:
+        // String 0: E2 (notes 38..44)
+        // String 1: A2 (notes 45..49)
+        // String 2: D3 (notes 50..54)
+        // String 3: G3 (notes 55..58)
+        // String 4: B3 (notes 59..63)
+        // String 5: E4 (notes 64..86)
+        int s = 0;
+        if (midiNote < 45)      s = 0;
+        else if (midiNote < 50) s = 1;
+        else if (midiNote < 55) s = 2;
+        else if (midiNote < 59) s = 3;
+        else if (midiNote < 64) s = 4;
+        else                    s = 5;
+
+        idx = s;
+        // If the primary string voice is already ringing with a different note,
+        // allocate any available idle string voice (0..5) so chords ring naturally
+        if (voices[idx].isActive() && voices[idx].getMidiNote() != midiNote)
+        {
+            for (int v = 0; v < 6; ++v)
+            {
+                if (!voices[v].isActive())
+                {
+                    idx = v;
+                    break;
+                }
+            }
+        }
+
+        voices[idx].setEngineType(Voice::EngineType::BilbaoFdtd);
+        voices[idx].setPhysicalStringIndex(idx);
+    }
+    else
+    {
+        idx = findVoiceForNote(midiNote);
+        if (idx < 0)
+            idx = findFreeVoice();
+
+        voices[idx].setEngineType(Voice::EngineType::DigitalWaveguide);
+    }
 
     const auto muteMode = getEffectiveMuteMode();
     voices[idx].noteOn(midiNote, velocity,

@@ -26,6 +26,7 @@ class FdtdString
 public:
     struct StringParams
     {
+        int fretNumber = 0;           ///< 0 = open string, 1..22 = fretted note
         float L       = 0.65f;        ///< String vibrating length (m)
         float f0      = 146.83f;      ///< Nominal fundamental frequency (Hz) (D string default)
         float r       = 0.00045f;     ///< String radius (m)
@@ -82,11 +83,52 @@ public:
         if (N < 10) N = 10;
         h = p.L / static_cast<float>(N);
 
+        // Ensure vector capacity is pre-reserved to eliminate audio thread heap allocations
+        constexpr size_t kMaxGridSize = 256;
+        if (u_next.capacity() < kMaxGridSize)
+        {
+            u_next.reserve(kMaxGridSize);
+            u_curr.reserve(kMaxGridSize);
+            u_prev.reserve(kMaxGridSize);
+            Du.reserve(kMaxGridSize);
+            D2u.reserve(kMaxGridSize);
+            Du_prev.reserve(kMaxGridSize);
+            kn.reserve(kMaxGridSize);
+            v_lin.reserve(kMaxGridSize);
+            Bu_plus_Cu.reserve(kMaxGridSize);
+            gradVB.reserve(kMaxGridSize);
+            gB.reserve(kMaxGridSize);
+            gradVF.reserve(kMaxGridSize);
+            gF.reserve(kMaxGridSize);
+            gFG.reserve(kMaxGridSize);
+            b_string.reserve(kMaxGridSize);
+            fretIndices.reserve(32);
+            fretAlpha.reserve(32);
+        }
+
         // States
         N_pts = N - 1; // interior points
         u_next.assign(static_cast<size_t>(N_pts), 0.0f);
         u_curr.assign(static_cast<size_t>(N_pts), 0.0f);
         u_prev.assign(static_cast<size_t>(N_pts), 0.0f);
+
+        // Pre-allocate scratch vectors for zero heap allocations in tick()
+        Du.assign(static_cast<size_t>(N_pts), 0.0f);
+        D2u.assign(static_cast<size_t>(N_pts), 0.0f);
+        Du_prev.assign(static_cast<size_t>(N_pts), 0.0f);
+        kn.assign(static_cast<size_t>(N_pts), 0.0f);
+        v_lin.assign(static_cast<size_t>(N_pts), 0.0f);
+        Bu_plus_Cu.assign(static_cast<size_t>(N_pts), 0.0f);
+        gradVB.assign(static_cast<size_t>(N_pts), 0.0f);
+        gB.assign(static_cast<size_t>(N_pts), 0.0f);
+        gradVF.assign(static_cast<size_t>(N_pts), 0.0f);
+        gF.assign(static_cast<size_t>(N_pts), 0.0f);
+        gFG.assign(static_cast<size_t>(N_pts), 0.0f);
+        b_string.assign(static_cast<size_t>(N_pts), 0.0f);
+
+        // Saddle terminating mechanical impedance filter (4.5 kHz lowpass)
+        saddleBeta = std::exp(-2.0f * 3.14159265358979323846f * 4500.0f / fs);
+        saddleFilterState = 0.0f;
 
         // Finger states
         w_next = 0.0f;
@@ -97,8 +139,10 @@ public:
         psi = { 0.0f, 0.0f, 0.0f };
         psi_prev = { 0.0f, 0.0f, 0.0f };
 
-        // Fret coordinates (20 frets)
-        fretsM = 20;
+        // Fret coordinates: only frets ahead of the fretting position towards the bridge
+        const int maxFrets = 20;
+        const int activeFrets = std::max(0, maxFrets - p.fretNumber);
+        fretsM = activeFrets;
         fretIndices.resize(static_cast<size_t>(fretsM));
         fretAlpha.resize(static_cast<size_t>(fretsM));
         for (int q = 1; q <= fretsM; ++q)
@@ -137,6 +181,8 @@ public:
         accumulatedLoss = 0.0f;
         pluckDurSamples = 0;
         pluckSampleCount = 0;
+        saddleFilterState = 0.0f;
+        rampSamplesLeft = 0;
     }
 
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
@@ -172,6 +218,9 @@ public:
         prevXiF = 0.0f;
         prevRawForce = u_curr[static_cast<size_t>(N_pts - 1)] / h;
         dcBlockerState = 0.0f;
+        saddleFilterState = 0.0f;
+        rampSamplesLeft = 32;
+        rampTotalSamples = 32;
         pluckDurSamples = 0;
         pluckSampleCount = 0;
     }
@@ -206,7 +255,6 @@ public:
 
         // 2. Compute spatial differences on u_curr: D*u and D^2*u
         // D is tridiagonal: Du[i] = (u[i+1] - 2*u[i] + u[i-1]) / h^2
-        std::vector<float> Du(static_cast<size_t>(N_pts), 0.0f);
         const float invHSq = 1.0f / (h * h);
 
         for (int i = 0; i < N_pts; ++i)
@@ -217,7 +265,6 @@ public:
         }
 
         // Biharmonic D^2*u
-        std::vector<float> D2u(static_cast<size_t>(N_pts), 0.0f);
         for (int i = 0; i < N_pts; ++i)
         {
             const float left  = (i > 0) ? Du[static_cast<size_t>(i - 1)] : 0.0f;
@@ -226,7 +273,6 @@ public:
         }
 
         // Spatial difference on u_prev for damping term D*u_prev
-        std::vector<float> Du_prev(static_cast<size_t>(N_pts), 0.0f);
         for (int i = 0; i < N_pts; ++i)
         {
             const float left  = (i > 0) ? u_prev[static_cast<size_t>(i - 1)] : 0.0f;
@@ -237,7 +283,6 @@ public:
         // 3. Kirchhoff-Carrier dynamic tension vector k^n (Eq. 52):
         // k^n = (k / 2) * sqrt(E*h / (rho*L*(1 + sigma0*k))) * [Du^T, 0]^T
         const float kcFactor = (k * 0.5f) * std::sqrt((p.E * h) / (p.rho * p.L * (1.0f + p.sigma0 * k)));
-        std::vector<float> kn(static_cast<size_t>(N_pts), 0.0f);
         float knDotZprev = 0.0f;
         for (int i = 0; i < N_pts; ++i)
         {
@@ -253,8 +298,6 @@ public:
         const float c3 = 2.0f * p.sigma1 * k;
         const float c4 = (p.sigma0 * k - 1.0f);
 
-        std::vector<float> v_lin(static_cast<size_t>(N_pts), 0.0f);
-        std::vector<float> Bu_plus_Cu(static_cast<size_t>(N_pts), 0.0f);
         for (int i = 0; i < N_pts; ++i)
         {
             const float Bu_i = c0 * (2.0f * u_curr[static_cast<size_t>(i)] + c1 * Du[static_cast<size_t>(i)] - c2 * D2u[static_cast<size_t>(i)] + c3 * Du[static_cast<size_t>(i)]);
@@ -265,7 +308,7 @@ public:
 
         // a) Fretboard: V_B
         float VB = 0.0f;
-        std::vector<float> gradVB(static_cast<size_t>(N_pts), 0.0f);
+        std::fill(gradVB.begin(), gradVB.end(), 0.0f);
         for (int i = 0; i < N_pts; ++i)
         {
             const float dist = p.b0 - u_curr[static_cast<size_t>(i)];
@@ -276,7 +319,7 @@ public:
                 VB += (p.KB * h / (p.alphaB + 1.0f)) * pB * dist;
             }
         }
-        std::vector<float> gB(static_cast<size_t>(N_pts), 0.0f);
+        std::fill(gB.begin(), gB.end(), 0.0f);
         if (VB > 1e-12f)
         {
             const float denomB = std::sqrt(2.0f * VB + 1e-12f);
@@ -310,7 +353,7 @@ public:
 
         // b) 20 Frets: V_F
         float VF = 0.0f;
-        std::vector<float> gradVF(static_cast<size_t>(N_pts), 0.0f);
+        std::fill(gradVF.begin(), gradVF.end(), 0.0f);
         for (int q = 0; q < fretsM; ++q)
         {
             const int idx = fretIndices[static_cast<size_t>(q)];
@@ -326,7 +369,7 @@ public:
                 VF += (p.KF / (p.alphaF + 1.0f)) * pF * dist;
             }
         }
-        std::vector<float> gF(static_cast<size_t>(N_pts), 0.0f);
+        std::fill(gF.begin(), gF.end(), 0.0f);
         if (VF > 1e-12f)
         {
             const float denomF = std::sqrt(2.0f * VF + 1e-12f);
@@ -360,7 +403,7 @@ public:
 
         // c) Finger: V_FG (only active when finger is engaged)
         float VFG = 0.0f;
-        std::vector<float> gFG(static_cast<size_t>(N_pts), 0.0f);
+        std::fill(gFG.begin(), gFG.end(), 0.0f);
         float gPrimeFG = 0.0f;
 
         if (fingerEngaged)
@@ -390,7 +433,6 @@ public:
         }
         gFGDotZprev += gPrimeFG * w_prev;
 
-        std::vector<float> b_string(static_cast<size_t>(N_pts), 0.0f);
         for (int i = 0; i < N_pts; ++i)
         {
             // Smooth spatial pluck distribution j(xe) over 5 points (Bilbao Eq. 15):
@@ -525,7 +567,19 @@ public:
 
         // 9. Audio output drawn at the bridge boundary x = L (penultimate interior point)
         // Force on the bridge saddle is proportional to spatial slope: u[N-1] / h
-        const float bridgeForce = (u_next[static_cast<size_t>(N_pts - 1)]) / h;
+        float bridgeForce = (u_next[static_cast<size_t>(N_pts - 1)]) / h;
+
+        // Smooth initial attack ramp (32 samples = 0.7 ms) to eliminate static step click
+        if (rampSamplesLeft > 0)
+        {
+            const int idx = rampTotalSamples - rampSamplesLeft;
+            const float ramp = 0.5f * (1.0f - std::cos(3.14159265358979323846f * static_cast<float>(idx) / static_cast<float>(rampTotalSamples)));
+            bridgeForce *= ramp;
+            rampSamplesLeft--;
+        }
+
+        // Bone saddle 4.5 kHz terminating mechanical impedance lowpass filter
+        saddleFilterState = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
 
         // 10. Pointer / State rotation
         u_prev = u_curr;
@@ -533,7 +587,16 @@ public:
         w_prev = w_curr;
         w_curr = w_next;
 
-        return bridgeForce;
+        return saddleFilterState;
+    }
+
+    /** Fast string displacement energy estimate for voice stealing. */
+    float getEnergy() const noexcept
+    {
+        float sumSq = 0.0f;
+        for (int i = 0; i < N_pts; ++i)
+            sumSq += u_curr[static_cast<size_t>(i)] * u_curr[static_cast<size_t>(i)];
+        return sumSq * 1e6f; // Scale to ~1.0 range
     }
 
     /** Compute total discrete energy E^(d),n+1/2 for validation (Eq. 43-46, 62). */
@@ -637,6 +700,25 @@ private:
     float prevXiF = 0.0f;
     float prevRawForce = 0.0f;
     float dcBlockerState = 0.0f;
+
+    // Pre-allocated scratch buffers (zero heap allocations in tick)
+    std::vector<float> Du;
+    std::vector<float> D2u;
+    std::vector<float> Du_prev;
+    std::vector<float> kn;
+    std::vector<float> v_lin;
+    std::vector<float> Bu_plus_Cu;
+    std::vector<float> gradVB;
+    std::vector<float> gB;
+    std::vector<float> gradVF;
+    std::vector<float> gF;
+    std::vector<float> gFG;
+    std::vector<float> b_string;
+
+    float saddleBeta = 0.0f;
+    float saddleFilterState = 0.0f;
+    int rampSamplesLeft = 0;
+    int rampTotalSamples = 32;
 
     float lambdaString = 0.0f;
     float lambdaFinger = 0.0f;

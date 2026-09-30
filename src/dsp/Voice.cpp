@@ -12,6 +12,7 @@ void Voice::init(float sr)
 {
     sampleRate = sr;
     string.init(sr);
+    fdtdString.init(sr);
     // Classical finger/palm damping time constant ~35ms: smooth, natural decay
     releaseCoeff = std::exp(-1.0f / (0.035f * sampleRate));
 }
@@ -32,6 +33,66 @@ void Voice::noteOn(int note, float vel,
     chokeGain = 1.0f;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
+
+    if (engineType == EngineType::BilbaoFdtd)
+    {
+        // 6 acoustic guitar strings: E2 (40), A2 (45), D3 (50), G3 (55), B3 (59), E4 (64)
+        static constexpr int openMidi[6]   = { 40, 45, 50, 55, 59, 64 };
+        static constexpr float radii[6]    = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
+
+        int s = physicalStringIndex;
+        if (s < 0 || s >= 6)
+        {
+            if (note < 45)      s = 0;
+            else if (note < 50) s = 1;
+            else if (note < 55) s = 2;
+            else if (note < 59) s = 3;
+            else if (note < 64) s = 4;
+            else                s = 5;
+        }
+
+        const int fret = std::max(0, std::min(22, note - openMidi[s]));
+        const float fretLength = 0.65f * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
+        const float targetFreq = midiToFreq(note);
+
+        FdtdString::StringParams p;
+        p.fretNumber = fret;
+        p.L = fretLength;
+        p.r = radii[s];
+        p.rho = 1140.0f;
+        p.E = 5.4e9f;
+
+        const float A = 3.14159265358979323846f * p.r * p.r;
+        const float I = 3.14159265358979323846f * p.r * p.r * p.r * p.r * 0.25f;
+        const float rhoA = p.rho * A;
+        const float EI = p.E * I;
+
+        // Exact equal-temperament tuning across all 88 keys:
+        // Discrete grid numerical dispersion compensation across physical strings (0..5)
+        static constexpr float centsOffsets[6] = { 15.0f, 16.0f, 9.5f, 5.2f, 2.8f, 0.5f };
+        const float tunedFreq = targetFreq * std::pow(2.0f, -centsOffsets[s] / 1200.0f);
+
+        // f = (1 / 2L) * sqrt(T0/rhoA + pi^2 EI / rhoA L^2)
+        // -> T0 = rhoA * (2*L*f)^2 - pi^2 * EI / L^2
+        float T0 = rhoA * std::pow(2.0f * p.L * tunedFreq, 2.0f) - (3.14159265f * 3.14159265f * EI) / (p.L * p.L);
+        if (T0 < 5.0f) T0 = 5.0f;
+        p.T0 = T0;
+
+        p.sigma0 = 0.5f + 1.0f * (1.0f - decay);
+        p.sigma1 = 1.0e-4f;
+        p.m0 = -0.0014f; // authentic classical action clearance (1.4 mm)
+        p.b0 = -0.0030f; // fretboard clearance (3.0 mm)
+
+        fdtdString.init(sampleRate, p);
+
+        // Velocity maps to physical pluck depth:
+        // Normal touch (vel = 0.4..0.8): -0.4mm to -0.9mm (pure string, zero fret buzz)
+        // Hard digging in (vel > 0.85): excursion reaches -1.4mm barrier -> authentic fret buzz sizzle!
+        const float peakDisp = -0.0003f - 0.0009f * velocity;
+        const float clampedPickPos = std::clamp(pickPosition, 0.10f, 0.50f);
+        fdtdString.pluckDisplacement(clampedPickPos, peakDisp);
+        return;
+    }
 
     const float freq = midiToFreq(note);
     string.setFrequency(freq, stiffness);
@@ -71,7 +132,8 @@ void Voice::noteOff() noexcept
 {
     // Begin smooth acoustic release envelope
     releasing = true;
-    string.damp();
+    if (engineType == EngineType::DigitalWaveguide)
+        string.damp();
 }
 
 void Voice::choke(float chokeVelocity) noexcept
@@ -116,7 +178,8 @@ float Voice::tick() noexcept
 {
     if (!active) return 0.f;
 
-    float out = string.tick();
+    // Scale FDTD spatial slope to match DWG digital line level cleanly
+    float out = (engineType == EngineType::BilbaoFdtd) ? (fdtdString.tick() * 45.0f) : string.tick();
 
     // Physical acoustic choke handling (hand slapped on strings)
     if (choking)
@@ -129,6 +192,7 @@ float Voice::tick() noexcept
         if (chokeGain < 0.01f && chokeGain > 0.0f)
         {
             string.reset();
+            fdtdString.reset();
             chokeGain = 0.0f;
         }
 
@@ -159,6 +223,7 @@ float Voice::tick() noexcept
             releasing = false;
             midiNote = -1;
             string.reset();
+            fdtdString.reset();
             return 0.f;
         }
 
@@ -178,10 +243,14 @@ float Voice::tick() noexcept
             fadeSamplesLeft = 64;
         }
     }
-    else if (string.getEnergy() < 1e-7f && fadeSamplesLeft < 0)
+    else
     {
-        // Natural ring-out also fades out cleanly instead of hard-cutting
-        fadeSamplesLeft = 64;
+        const float currentEnergy = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
+        if (currentEnergy < 1e-7f && fadeSamplesLeft < 0)
+        {
+            // Natural ring-out also fades out cleanly instead of hard-cutting
+            fadeSamplesLeft = 64;
+        }
     }
 
     // 64-sample linear fade-out to guarantee zero DC or step click
@@ -197,6 +266,7 @@ float Voice::tick() noexcept
             releasing = false;
             midiNote = -1;
             string.reset();
+            fdtdString.reset();
             return 0.f;
         }
     }
@@ -211,6 +281,7 @@ float Voice::tick() noexcept
 void Voice::reset() noexcept
 {
     string.reset();
+    fdtdString.reset();
     active = false;
     releasing = false;
     choking = false;

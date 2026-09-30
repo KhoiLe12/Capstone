@@ -21,6 +21,11 @@ private:
 
     HybridSynthProcessor& processorRef;
 
+    // Engine Model Selection ComboBox
+    juce::ComboBox engineModelBox;
+    juce::Label    engineModelLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> engineModelAttach;
+
     // Body Model Selection ComboBox
     juce::ComboBox bodyModelBox;
     juce::Label    bodyModelLabel;

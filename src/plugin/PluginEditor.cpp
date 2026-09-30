@@ -17,6 +17,20 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
       widthAttach     (p.apvts, "stereoWidth",  widthKnob),
       gainAttach      (p.apvts, "masterGain",   gainKnob)
 {
+    // Engine Model Selection ComboBox
+    engineModelBox.addItem("Digital Waveguide (DWG)", 1);
+    engineModelBox.addItem("Bilbao FDTD (DAFx24)", 2);
+    addAndMakeVisible(engineModelBox);
+
+    engineModelAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        p.apvts, "engineModel", engineModelBox);
+
+    engineModelLabel.setText("Engine:", juce::dontSendNotification);
+    engineModelLabel.setFont(juce::FontOptions(12.f, juce::Font::bold));
+    engineModelLabel.setColour(juce::Label::textColourId, juce::Colour(0xffa0c0e0));
+    engineModelLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(engineModelLabel);
+
     // Body Model Selection ComboBox
     bodyModelBox.addItem("Classical Nylon (IR)", 1);
     bodyModelBox.addItem("Gibson Acoustic (IR)", 2);
@@ -83,7 +97,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
 
     startTimerHz(30);
 
-    setSize(860, 250);
+    setSize(980, 250);
     setResizable(false, false);
 }
 
@@ -220,25 +234,31 @@ void HybridSynthEditor::resized()
     auto area = getLocalBounds();
     area.removeFromTop(38); // title bar
 
-    // Body Model & Articulation Strip
+    // Engine Model, Body Model & Articulation Strip
     auto strip = area.removeFromTop(34).reduced(8, 3);
 
-    const int labelW = 72;
+    const int engLabelW = 54;
+    engineModelLabel.setBounds(strip.removeFromLeft(engLabelW));
+    strip.removeFromLeft(4);
+    engineModelBox.setBounds(strip.removeFromLeft(155));
+
+    strip.removeFromLeft(8);
+    const int labelW = 68;
     bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
     strip.removeFromLeft(4);
-    bodyModelBox.setBounds(strip.removeFromLeft(145));
+    bodyModelBox.setBounds(strip.removeFromLeft(140));
 
     strip.removeFromLeft(8);
-    palmMuteToggle.setBounds(strip.removeFromLeft(136));
-    palmBadgeArea = strip.removeFromLeft(54).reduced(0, 2);
+    palmMuteToggle.setBounds(strip.removeFromLeft(125));
+    palmBadgeArea = strip.removeFromLeft(48).reduced(0, 2);
 
-    strip.removeFromLeft(8);
-    fullMuteToggle.setBounds(strip.removeFromLeft(136));
-    fullBadgeArea = strip.removeFromLeft(56).reduced(0, 2);
+    strip.removeFromLeft(6);
+    fullMuteToggle.setBounds(strip.removeFromLeft(125));
+    fullBadgeArea = strip.removeFromLeft(50).reduced(0, 2);
 
-    strip.removeFromLeft(8);
-    strumToggle.setBounds(strip.removeFromLeft(142));
-    strumBadgeArea = strip.removeFromLeft(66).reduced(0, 2);
+    strip.removeFromLeft(6);
+    strumToggle.setBounds(strip.removeFromLeft(130));
+    strumBadgeArea = strip.removeFromLeft(60).reduced(0, 2);
 
     // Rotary Knobs Section
     const int numKnobs  = 8;

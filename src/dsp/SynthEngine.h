@@ -55,6 +55,7 @@ public:
     float paramStiffness   = 0.05f;   ///< Inharmonicity / acoustic string dispersion (0..1)
     float paramBodySize    = 1.00f;   ///< Soundboard size / scale (0.6..1.8)
     float paramBodyType    = 0.0f;    ///< Body Model (0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank)
+    float paramEngineType  = 0.0f;    ///< String Engine Model (0 = Digital Waveguide, 1 = Bilbao FDTD DAFx24)
     float paramStereoWidth = 0.70f;   ///< Stereo soundboard / microphone imaging (0 = mono, 0.7 = natural, 1.0 = wide studio)
     bool  paramPalmMute    = false;   ///< Palm Mute DAW parameter / UI toggle
     bool  paramFullMute    = false;   ///< Full Mute DAW parameter / UI toggle
