@@ -23,7 +23,8 @@ void Voice::init(float sr)
 
 void Voice::noteOn(int note, float vel,
                    float brightness, float pickPosition, float decay,
-                   float stiffness, KarplusStrong::MuteMode muteMode)
+                   float stiffness, KarplusStrong::MuteMode muteMode,
+                   int stringIdx)
 {
     midiNote = note;
     velocity = vel;
@@ -34,23 +35,28 @@ void Voice::noteOn(int note, float vel,
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
 
+    currentMuteMode = muteMode;
+    currentDecay = decay;
+
+    // 6 acoustic guitar strings: E2 (40), A2 (45), D3 (50), G3 (55), B3 (59), E4 (64)
+    static constexpr int openMidi[6]   = { 40, 45, 50, 55, 59, 64 };
+    static constexpr float radii[6]    = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
+
+    int s = stringIdx;
+    if (s < 0 || s > 5)
+    {
+        if (note < 45)      s = 0;
+        else if (note < 50) s = 1;
+        else if (note < 55) s = 2;
+        else if (note < 59) s = 3;
+        else if (note < 64) s = 4;
+        else                s = 5;
+    }
+
+    physicalStringIndex = s;
+
     if (engineType == EngineType::BilbaoFdtd)
     {
-        // 6 acoustic guitar strings: E2 (40), A2 (45), D3 (50), G3 (55), B3 (59), E4 (64)
-        static constexpr int openMidi[6]   = { 40, 45, 50, 55, 59, 64 };
-        static constexpr float radii[6]    = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
-
-        int s = physicalStringIndex;
-        if (s < 0 || s >= 6)
-        {
-            if (note < 45)      s = 0;
-            else if (note < 50) s = 1;
-            else if (note < 55) s = 2;
-            else if (note < 59) s = 3;
-            else if (note < 64) s = 4;
-            else                s = 5;
-        }
-
         const int fret = std::max(0, std::min(22, note - openMidi[s]));
         const float fretLength = 0.65f * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
         const float targetFreq = midiToFreq(note);
@@ -78,19 +84,42 @@ void Voice::noteOn(int note, float vel,
         if (T0 < 5.0f) T0 = 5.0f;
         p.T0 = T0;
 
-        p.sigma0 = 0.5f + 1.0f * (1.0f - decay);
-        p.sigma1 = 1.0e-4f;
+        float effSigma0 = 0.5f + 1.0f * (1.0f - decay);
+        float effSigma1 = 1.0e-4f;
+        float effDispScale = 1.0f;
+
+        if (muteMode == KarplusStrong::MuteMode::Palm)
+        {
+            // Palm muting: fleshy palm heel on bridge absorbs high partials and drops sustain to ~100ms
+            effSigma0 = 24.0f;
+            effSigma1 = 8.0e-4f;
+            effDispScale = 0.65f;
+        }
+        else if (muteMode == KarplusStrong::MuteMode::Full)
+        {
+            // Full mute / dead notes ("X" notes): fretting hand rests flat across strings
+            effSigma0 = 65.0f;
+            effSigma1 = 2.0e-3f;
+            effDispScale = 0.45f;
+        }
+
+        p.sigma0 = effSigma0;
+        p.sigma1 = effSigma1;
         p.m0 = -0.0014f; // authentic classical action clearance (1.4 mm)
         p.b0 = -0.0030f; // fretboard clearance (3.0 mm)
 
         fdtdString.init(sampleRate, p);
 
         // Velocity maps to physical pluck depth:
-        // Normal touch (vel = 0.4..0.8): -0.4mm to -0.9mm (pure string, zero fret buzz)
-        // Hard digging in (vel > 0.85): excursion reaches -1.4mm barrier -> authentic fret buzz sizzle!
-        const float peakDisp = -0.0003f - 0.0009f * velocity;
+        const float peakDisp = (-0.0003f - 0.0009f * velocity) * effDispScale;
         const float clampedPickPos = std::clamp(pickPosition, 0.10f, 0.50f);
         fdtdString.pluckDisplacement(clampedPickPos, peakDisp);
+
+        if (muteMode == KarplusStrong::MuteMode::Full)
+        {
+            // Trigger physical mechanical hand slap / fret impact transient
+            choke(velocity);
+        }
         return;
     }
 
@@ -136,6 +165,25 @@ void Voice::noteOff() noexcept
         string.damp();
 }
 
+void Voice::setMuteMode(KarplusStrong::MuteMode mode) noexcept
+{
+    currentMuteMode = mode;
+    string.setMuteMode(mode);
+
+    if (mode == KarplusStrong::MuteMode::Palm)
+    {
+        fdtdString.setDamping(24.0f, 8.0e-4f);
+    }
+    else if (mode == KarplusStrong::MuteMode::Full)
+    {
+        fdtdString.setDamping(65.0f, 2.0e-3f);
+    }
+    else
+    {
+        fdtdString.setDamping(0.5f + 1.0f * (1.0f - currentDecay), 1.0e-4f);
+    }
+}
+
 void Voice::choke(float chokeVelocity) noexcept
 {
     if (!active) return;
@@ -148,6 +196,9 @@ void Voice::choke(float chokeVelocity) noexcept
     chokeCoeff = std::exp(-1.0f / (0.0018f * sampleRate));
     // Transient impulse of ~45ms excites the acoustic body IR without synthetic bass boom
     chokeSamplesLeft = static_cast<int>(0.045f * sampleRate);
+
+    // Instant damping for FDTD physical string
+    fdtdString.setDamping(75.0f, 3.0e-3f);
 
     const float freq = midiToFreq(midiNote);
     const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);

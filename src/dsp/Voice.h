@@ -41,14 +41,15 @@ public:
      * @param velocity     Normalised velocity 0..1
      * @param brightness   Exciter brightness 0..1
      * @param pickPosition Plectrum contact point, fraction of string length
-     * @param decay        KS loop-gain decay 0..1
      * @param stiffness    String stiffness / inharmonicity 0..1
      * @param muteMode     Articulation mode (Open, Palm, or Full mute dead notes)
+     * @param stringIdx    Physical guitar string index (0..5)
      */
     void noteOn(int midiNote, float velocity,
                 float brightness, float pickPosition, float decay,
                 float stiffness = 0.25f,
-                KarplusStrong::MuteMode muteMode = KarplusStrong::MuteMode::Open);
+                KarplusStrong::MuteMode muteMode = KarplusStrong::MuteMode::Open,
+                int stringIdx = -1);
 
     /** Signal note release (string continues natural decay). */
     void noteOff() noexcept;
@@ -60,12 +61,12 @@ public:
     void choke(float chokeVelocity = 0.8f) noexcept;
 
     /** Articulation mode setters and getters. */
-    void setMuteMode(KarplusStrong::MuteMode mode) noexcept { string.setMuteMode(mode); }
-    void setPalmMute(bool muted) noexcept                   { string.setPalmMute(muted); }
-    void setFullMute(bool muted) noexcept                   { string.setFullMute(muted); }
-    KarplusStrong::MuteMode getMuteMode() const noexcept    { return string.getMuteMode(); }
-    bool isPalmMuted() const noexcept                       { return string.getMuteMode() == KarplusStrong::MuteMode::Palm; }
-    bool isFullMuted() const noexcept                       { return string.getMuteMode() == KarplusStrong::MuteMode::Full; }
+    void setMuteMode(KarplusStrong::MuteMode mode) noexcept;
+    void setPalmMute(bool muted) noexcept { setMuteMode(muted ? KarplusStrong::MuteMode::Palm : KarplusStrong::MuteMode::Open); }
+    void setFullMute(bool muted) noexcept { setMuteMode(muted ? KarplusStrong::MuteMode::Full : KarplusStrong::MuteMode::Open); }
+    KarplusStrong::MuteMode getMuteMode() const noexcept { return currentMuteMode; }
+    bool isPalmMuted() const noexcept { return currentMuteMode == KarplusStrong::MuteMode::Palm; }
+    bool isFullMuted() const noexcept { return currentMuteMode == KarplusStrong::MuteMode::Full; }
 
     /** Advance one sample and return voice output at bridge. */
     float tick() noexcept;
@@ -93,6 +94,8 @@ private:
     float velocity   = 1.f;
     bool  active     = false;
     float sampleRate = 44100.f;
+    KarplusStrong::MuteMode currentMuteMode = KarplusStrong::MuteMode::Open;
+    float currentDecay = 0.80f;
 
     // Smooth acoustic release envelope
     bool  releasing       = false;

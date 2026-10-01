@@ -1,9 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 24.0.0)
+project(HybridSynth VERSION 25.0.0)
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
-endif()
+set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -63,11 +61,4 @@ target_link_libraries(HybridSynth
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
-
-# ---------------------------------------------------------------------------
-# Test Target (optional scratch test)
-# ---------------------------------------------------------------------------
-# if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scratch/test_palmmute.cpp")
-#     add_executable(test_palmmute scratch/test_palmmute.cpp ...)
-# endif()
 

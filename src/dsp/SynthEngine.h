@@ -14,7 +14,7 @@
 class SynthEngine
 {
 public:
-    static constexpr int NUM_VOICES = 12;
+    static constexpr int NUM_VOICES = 6; ///< 6 physical guitar strings: 0=E2, 1=A2, 2=D3, 3=G3, 4=B3, 5=E4
 
     SynthEngine() = default;
 
@@ -131,6 +131,7 @@ private:
 
     void syncVoiceMuteModes() noexcept;
 
+    int assignStringForNote(int midiNote) const noexcept;
     int findFreeVoice() const noexcept;
     int findVoiceForNote(int midiNote) const noexcept;
 

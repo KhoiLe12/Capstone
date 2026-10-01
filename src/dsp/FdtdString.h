@@ -188,6 +188,14 @@ public:
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
     bool isFingerEngaged() const noexcept { return fingerEngaged; }
 
+    /** Dynamically update loss parameters for palm muting or choking mid-note. */
+    void setDamping(float sigma0, float sigma1) noexcept
+    {
+        p.sigma0 = sigma0;
+        p.sigma1 = sigma1;
+        lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
+    }
+
     /** Excite string by releasing from static triangular pluck displacement (authentic acoustic pluck). */
     void pluck(float xLocFraction, float forceNewtons)
     {

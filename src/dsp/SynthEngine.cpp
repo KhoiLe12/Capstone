@@ -11,8 +11,11 @@
 void SynthEngine::init(float sr, int blockSize)
 {
     sampleRate = sr;
-    for (auto& v : voices)
-        v.init(sr);
+    for (int i = 0; i < NUM_VOICES; ++i)
+    {
+        voices[i].init(sr);
+        voices[i].setPhysicalStringIndex(i);
+    }
     body.init(sr, blockSize, paramBodySize, 1.0f);
     reset();
 }
@@ -92,56 +95,15 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     heldNotes[midiNote] = velocity;
 
     const bool isFdtd = (paramEngineType >= 0.5f);
-    int idx = -1;
+    const int s = assignStringForNote(midiNote);
 
-    if (isFdtd)
-    {
-        // Authentic 6-string physical guitar assignment:
-        // String 0: E2 (notes 38..44)
-        // String 1: A2 (notes 45..49)
-        // String 2: D3 (notes 50..54)
-        // String 3: G3 (notes 55..58)
-        // String 4: B3 (notes 59..63)
-        // String 5: E4 (notes 64..86)
-        int s = 0;
-        if (midiNote < 45)      s = 0;
-        else if (midiNote < 50) s = 1;
-        else if (midiNote < 55) s = 2;
-        else if (midiNote < 59) s = 3;
-        else if (midiNote < 64) s = 4;
-        else                    s = 5;
-
-        idx = s;
-        // If the primary string voice is already ringing with a different note,
-        // allocate any available idle string voice (0..5) so chords ring naturally
-        if (voices[idx].isActive() && voices[idx].getMidiNote() != midiNote)
-        {
-            for (int v = 0; v < 6; ++v)
-            {
-                if (!voices[v].isActive())
-                {
-                    idx = v;
-                    break;
-                }
-            }
-        }
-
-        voices[idx].setEngineType(Voice::EngineType::BilbaoFdtd);
-        voices[idx].setPhysicalStringIndex(idx);
-    }
-    else
-    {
-        idx = findVoiceForNote(midiNote);
-        if (idx < 0)
-            idx = findFreeVoice();
-
-        voices[idx].setEngineType(Voice::EngineType::DigitalWaveguide);
-    }
+    voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+    voices[s].setPhysicalStringIndex(s);
 
     const auto muteMode = getEffectiveMuteMode();
-    voices[idx].noteOn(midiNote, velocity,
-                       paramBrightness, paramPickPos, paramDecay,
-                       paramStiffness, muteMode);
+    voices[s].noteOn(midiNote, velocity,
+                     paramBrightness, paramPickPos, paramDecay,
+                     paramStiffness, muteMode, s);
 }
 
 void SynthEngine::noteOff(int midiNote)
@@ -276,14 +238,16 @@ void SynthEngine::schedulePluck(int midiNote, float velocity, float brightness, 
 {
     if (delaySamples <= 0)
     {
-        int idx = findVoiceForNote(midiNote);
-        if (idx < 0)
-            idx = findFreeVoice();
+        const bool isFdtd = (paramEngineType >= 0.5f);
+        const int s = assignStringForNote(midiNote);
+
+        voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+        voices[s].setPhysicalStringIndex(s);
 
         const auto muteMode = getEffectiveMuteMode();
-        voices[idx].noteOn(midiNote, velocity,
-                           brightness, paramPickPos, paramDecay,
-                           paramStiffness, muteMode);
+        voices[s].noteOn(midiNote, velocity,
+                         brightness, paramPickPos, paramDecay,
+                         paramStiffness, muteMode, s);
         return;
     }
 
@@ -321,12 +285,10 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                 if (v.isActive())
                     v.choke(0.8f);
         }
-        else
-        {
-            for (auto& v : voices)
-                if (v.isActive())
-                    v.setMuteMode(currentMuteMode);
-        }
+
+        for (auto& v : voices)
+            v.setMuteMode(currentMuteMode);
+
         prevMuteMode = currentMuteMode;
     }
 
@@ -359,15 +321,18 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                 --pendingPlucks[p].delaySamples;
                 if (pendingPlucks[p].delaySamples <= 0)
                 {
-                    int idx = findVoiceForNote(pendingPlucks[p].midiNote);
-                    if (idx < 0)
-                        idx = findFreeVoice();
+                    const bool isFdtd = (paramEngineType >= 0.5f);
+                    const int s = assignStringForNote(pendingPlucks[p].midiNote);
+
+                    voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+                    voices[s].setPhysicalStringIndex(s);
+
                     const auto muteMode = getEffectiveMuteMode();
-                    voices[idx].noteOn(pendingPlucks[p].midiNote,
-                                       pendingPlucks[p].velocity,
-                                       pendingPlucks[p].brightness,
-                                       paramPickPos, paramDecay,
-                                       paramStiffness, muteMode);
+                    voices[s].noteOn(pendingPlucks[p].midiNote,
+                                     pendingPlucks[p].velocity,
+                                     pendingPlucks[p].brightness,
+                                     paramPickPos, paramDecay,
+                                     paramStiffness, muteMode, s);
                     pendingPlucks[p].active = false;
                 }
             }
@@ -478,8 +443,69 @@ void SynthEngine::reset()
 }
 
 // ---------------------------------------------------------------------------
-// Voice Allocation
+// Physical 6-String Guitar Allocation & Monophonic String Choking
 // ---------------------------------------------------------------------------
+
+int SynthEngine::assignStringForNote(int note) const noexcept
+{
+    // Acoustic guitar open string pitches (standard tuning: E2, A2, D3, G3, B3, E4)
+    static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
+
+    // 1. Natural first-position string:
+    // String 0: E2..G#2 (MIDI 38..44)
+    // String 1: A2..C#3 (MIDI 45..49)
+    // String 2: D3..F#3 (MIDI 50..54)
+    // String 3: G3..A#3 (MIDI 55..58)
+    // String 4: B3..D#4 (MIDI 59..63)
+    // String 5: E4..D6  (MIDI 64..86)
+    int s = 0;
+    if (note < 45)      s = 0;
+    else if (note < 50) s = 1;
+    else if (note < 55) s = 2;
+    else if (note < 59) s = 3;
+    else if (note < 64) s = 4;
+    else                s = 5;
+
+    // 2. If natural string is idle, or is already playing this exact note (repeated pluck), use it
+    if (!voices[s].isActive() || voices[s].getMidiNote() == note)
+        return s;
+
+    // 3. String s is currently active.
+    // Check if the note sounding on string s is physically held on the keyboard (i.e. part of a held chord):
+    const int activeNoteOnS = voices[s].getMidiNote();
+    const bool isChordHeld = (activeNoteOnS >= 0 && activeNoteOnS < 128 && heldNotes[activeNoteOnS] > 0.001f);
+
+    if (isChordHeld)
+    {
+        // User is holding down multiple keys in a chord.
+        // Search for an idle physical string that can comfortably voice this note (fret <= 14).
+        int bestAlt = -1;
+        int bestFret = 999;
+        for (int alt = 0; alt < 6; ++alt)
+        {
+            if (!voices[alt].isActive())
+            {
+                const int minOpen = (alt == 0) ? 38 : openMidi[alt];
+                if (note >= minOpen)
+                {
+                    const int fret = note - minOpen;
+                    if (fret <= 14 && fret < bestFret)
+                    {
+                        bestFret = fret;
+                        bestAlt = alt;
+                    }
+                }
+            }
+        }
+        if (bestAlt >= 0)
+            return bestAlt;
+    }
+
+    // 4. Strict physical guitar choking:
+    // If the old note was already released (e.g. arpeggio or melodic line), or no free string is available,
+    // the new note is fretted on string s, physically damping/choking the old vibration.
+    return s;
+}
 
 int SynthEngine::findFreeVoice() const noexcept
 {
