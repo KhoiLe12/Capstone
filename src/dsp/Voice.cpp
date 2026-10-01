@@ -95,26 +95,32 @@ void Voice::noteOn(int note, float vel,
         const float clampedVel = std::clamp(velocity, 0.01f, 1.0f);
         const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel), 0.05f, 1.0f);
 
-        float effSigma0 = 0.5f + 1.0f * (1.0f - decay);
-        // Register-dependent nylon viscoelastic damping:
-        // Plain nylon treble strings (especially notes C5 and above) have higher internal molecular friction,
-        // which naturally rolls off high-frequency synthetic sizzle, letting the singing wooden fundamental bloom.
-        const float trebleFactor = std::clamp((targetFreq - 146.0f) / (523.0f - 146.0f), 0.0f, 1.0f);
-        float effSigma1 = 1.5e-4f + 1.2e-3f * trebleFactor;
+        // Register-dependent acoustic decay and compliance:
+        // On a real guitar, higher pitched / shorter fretted strings complete more vibration
+        // cycles per second, draining energy into the bridge soundboard proportionally faster.
+        // Bass strings (E2..D3) sustain for 7-9 seconds; high frets (C6..D6) decay in 0.35-0.5 seconds.
+        const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
+        const float registerDecayScale = std::pow(fRatio, 1.15f);
+        float effSigma0 = (0.5f + 1.0f * (1.0f - decay)) * registerDecayScale;
+
+        // Plain nylon treble damping across the entire register up to 1200 Hz:
+        // High fretted notes have rapid loss on high partials, completely taming harsh synthetic screeching.
+        const float trebleFactor = std::clamp((targetFreq - 146.0f) / (1175.0f - 146.0f), 0.0f, 1.0f);
+        float effSigma1 = 1.5e-4f + 2.5e-3f * trebleFactor;
         float effDispScale = 1.0f;
 
         if (muteMode == KarplusStrong::MuteMode::Palm)
         {
-            // Palm muting: fleshy palm heel on bridge absorbs high partials and drops sustain to ~100ms
-            effSigma0 = 24.0f;
-            effSigma1 = 8.0e-4f;
+            // Palm muting: fleshy palm heel on bridge absorbs high partials and drops sustain to ~80-100ms
+            effSigma0 = std::max(28.0f, effSigma0 * 2.2f);
+            effSigma1 = std::max(1.5e-3f, effSigma1 * 2.0f);
             effDispScale = 0.65f;
         }
         else if (muteMode == KarplusStrong::MuteMode::Full)
         {
             // Full mute / dead notes ("X" notes): fretting hand rests flat across strings
-            effSigma0 = 65.0f;
-            effSigma1 = 2.0e-3f;
+            effSigma0 = std::max(70.0f, effSigma0 * 4.0f);
+            effSigma1 = std::max(3.5e-3f, effSigma1 * 2.5f);
             effDispScale = 0.45f;
         }
 
@@ -126,8 +132,11 @@ void Voice::noteOn(int note, float vel,
 
         fdtdString.init(sampleRate, p);
 
-        // Velocity maps to physical pluck depth:
-        const float peakDisp = (-0.0003f - 0.0009f * velocity) * effDispScale;
+        // String physical compliance scales with vibrating length:
+        // C_string = L / (4 * T0). Short fretted strings displace less under equal fingertip force.
+        // This also balances bridge force (d_u/d_x ~ u_peak / L) perfectly across all 22 frets.
+        const float lengthScale = std::clamp(p.L / 0.65f, 0.35f, 1.0f);
+        const float peakDisp = (-0.0003f - 0.0009f * velocity) * effDispScale * lengthScale;
         const float clampedPickPos = std::clamp(pickPosition, 0.10f, 0.50f);
         fdtdString.pluckDisplacement(clampedPickPos, peakDisp, effBrightness);
 

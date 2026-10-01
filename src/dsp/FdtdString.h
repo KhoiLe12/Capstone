@@ -250,8 +250,9 @@ public:
                                                + 0.25f * u_curr[static_cast<size_t>(i + 1)];
         }
 
-        // Fingernail release slip: gives the string a subtle dynamic tactile initial velocity
-        const float nailSlipAmp = peakDisplacementMeters * 0.12f * b;
+        // Fingernail release slip: gives the string authentic dynamic tactile initial velocity and bite
+        // As the nail or pick releases the string, it imparts a crisp slip transient.
+        const float nailSlipAmp = peakDisplacementMeters * (0.25f + 0.35f * b);
         for (int i = 0; i < N_pts; ++i)
         {
             const float dist = std::abs(static_cast<float>(i + 1) * h - xLoc);
@@ -269,8 +270,8 @@ public:
         dcBlockerState = 0.0f;
         saddleFilterState = 0.0f;
         saddleFilterState2 = 0.0f;
-        rampSamplesLeft = 32;
-        rampTotalSamples = 32;
+        rampSamplesLeft = 0;
+        rampTotalSamples = 0;
         pluckDurSamples = 0;
         pluckSampleCount = 0;
     }
