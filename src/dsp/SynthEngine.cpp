@@ -95,15 +95,26 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     heldNotes[midiNote] = velocity;
 
     const bool isFdtd = (paramEngineType >= 0.5f);
-    const int s = assignStringForNote(midiNote);
 
-    voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-    voices[s].setPhysicalStringIndex(s);
+    int s = 0;
+    if (midiNote < 45)      s = 0;
+    else if (midiNote < 50) s = 1;
+    else if (midiNote < 55) s = 2;
+    else if (midiNote < 59) s = 3;
+    else if (midiNote < 64) s = 4;
+    else                    s = 5;
+
+    int idx = findVoiceForNote(midiNote);
+    if (idx < 0)
+        idx = findFreeVoice();
+
+    voices[idx].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+    voices[idx].setPhysicalStringIndex(s);
 
     const auto muteMode = getEffectiveMuteMode();
-    voices[s].noteOn(midiNote, velocity,
-                     paramBrightness, paramPickPos, paramDecay,
-                     paramStiffness, muteMode, s);
+    voices[idx].noteOn(midiNote, velocity,
+                       paramBrightness, paramPickPos, paramDecay,
+                       paramStiffness, muteMode, s);
 }
 
 void SynthEngine::noteOff(int midiNote)
@@ -241,13 +252,17 @@ void SynthEngine::schedulePluck(int midiNote, float velocity, float brightness, 
         const bool isFdtd = (paramEngineType >= 0.5f);
         const int s = assignStringForNote(midiNote);
 
-        voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-        voices[s].setPhysicalStringIndex(s);
+        int idx = findVoiceForNote(midiNote);
+        if (idx < 0)
+            idx = findFreeVoice();
+
+        voices[idx].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+        voices[idx].setPhysicalStringIndex(s);
 
         const auto muteMode = getEffectiveMuteMode();
-        voices[s].noteOn(midiNote, velocity,
-                         brightness, paramPickPos, paramDecay,
-                         paramStiffness, muteMode, s);
+        voices[idx].noteOn(midiNote, velocity,
+                           brightness, paramPickPos, paramDecay,
+                           paramStiffness, muteMode, s);
         return;
     }
 
@@ -324,15 +339,19 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                     const bool isFdtd = (paramEngineType >= 0.5f);
                     const int s = assignStringForNote(pendingPlucks[p].midiNote);
 
-                    voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-                    voices[s].setPhysicalStringIndex(s);
+                    int idx = findVoiceForNote(pendingPlucks[p].midiNote);
+                    if (idx < 0)
+                        idx = findFreeVoice();
+
+                    voices[idx].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+                    voices[idx].setPhysicalStringIndex(s);
 
                     const auto muteMode = getEffectiveMuteMode();
-                    voices[s].noteOn(pendingPlucks[p].midiNote,
-                                     pendingPlucks[p].velocity,
-                                     pendingPlucks[p].brightness,
-                                     paramPickPos, paramDecay,
-                                     paramStiffness, muteMode, s);
+                    voices[idx].noteOn(pendingPlucks[p].midiNote,
+                                       pendingPlucks[p].velocity,
+                                       pendingPlucks[p].brightness,
+                                       paramPickPos, paramDecay,
+                                       paramStiffness, muteMode, s);
                     pendingPlucks[p].active = false;
                 }
             }
@@ -478,7 +497,7 @@ int SynthEngine::assignStringForNote(int note) const noexcept
     if (isChordHeld)
     {
         // User is holding down multiple keys in a chord.
-        // Search for an idle physical string that can comfortably voice this note (fret <= 14).
+        // Search for an idle physical string that can comfortably voice this note in reachable hand reach (fret <= 5).
         int bestAlt = -1;
         int bestFret = 999;
         for (int alt = 0; alt < 6; ++alt)
@@ -489,7 +508,7 @@ int SynthEngine::assignStringForNote(int note) const noexcept
                 if (note >= minOpen)
                 {
                     const int fret = note - minOpen;
-                    if (fret <= 14 && fret < bestFret)
+                    if (fret <= 5 && fret < bestFret)
                     {
                         bestFret = fret;
                         bestAlt = alt;

@@ -42,6 +42,13 @@ void Voice::noteOn(int note, float vel,
     static constexpr int openMidi[6]   = { 40, 45, 50, 55, 59, 64 };
     static constexpr float radii[6]    = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
 
+    // Effective bending core radius for stiffness EI:
+    // On acoustic/classical guitars, wound bass strings (strings 0, 1, 2) have an outer wire wrap
+    // that flexes freely with negligible beam bending stiffness; bending rigidity comes solely
+    // from the inner multifilament nylon core (r_core ~ 0.18-0.20 mm).
+    // Plain treble strings (strings 3, 4, 5) are flexible monofilament nylon.
+    static constexpr float bendingRadii[6] = { 0.00018f, 0.00019f, 0.00020f, 0.00026f, 0.00024f, 0.00020f };
+
     int s = stringIdx;
     if (s < 0 || s > 5)
     {
@@ -65,17 +72,17 @@ void Voice::noteOn(int note, float vel,
         p.fretNumber = fret;
         p.L = fretLength;
         p.r = radii[s];
+        p.r_stiffness = bendingRadii[s];
         p.rho = 1140.0f;
-        p.E = 5.4e9f;
+        p.E = 1.2e9f * (0.15f + 1.2f * stiffness);
 
         const float A = 3.14159265358979323846f * p.r * p.r;
-        const float I = 3.14159265358979323846f * p.r * p.r * p.r * p.r * 0.25f;
+        const float I = 3.14159265358979323846f * p.r_stiffness * p.r_stiffness * p.r_stiffness * p.r_stiffness * 0.25f;
         const float rhoA = p.rho * A;
         const float EI = p.E * I;
 
-        // Exact equal-temperament tuning across all 88 keys:
         // Discrete grid numerical dispersion compensation across physical strings (0..5)
-        static constexpr float centsOffsets[6] = { 15.0f, 16.0f, 9.5f, 5.2f, 2.8f, 0.5f };
+        static constexpr float centsOffsets[6] = { 1.5f, 1.5f, 1.0f, 0.8f, 0.5f, 0.0f };
         const float tunedFreq = targetFreq * std::pow(2.0f, -centsOffsets[s] / 1200.0f);
 
         // f = (1 / 2L) * sqrt(T0/rhoA + pi^2 EI / rhoA L^2)
@@ -84,8 +91,16 @@ void Voice::noteOn(int note, float vel,
         if (T0 < 5.0f) T0 = 5.0f;
         p.T0 = T0;
 
+        // Dynamic velocity-dependent brightness (harder plucks produce crisper fingernail release bite):
+        const float clampedVel = std::clamp(velocity, 0.01f, 1.0f);
+        const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel), 0.05f, 1.0f);
+
         float effSigma0 = 0.5f + 1.0f * (1.0f - decay);
-        float effSigma1 = 1.0e-4f;
+        // Register-dependent nylon viscoelastic damping:
+        // Plain nylon treble strings (especially notes C5 and above) have higher internal molecular friction,
+        // which naturally rolls off high-frequency synthetic sizzle, letting the singing wooden fundamental bloom.
+        const float trebleFactor = std::clamp((targetFreq - 146.0f) / (523.0f - 146.0f), 0.0f, 1.0f);
+        float effSigma1 = 1.5e-4f + 1.2e-3f * trebleFactor;
         float effDispScale = 1.0f;
 
         if (muteMode == KarplusStrong::MuteMode::Palm)
@@ -105,6 +120,7 @@ void Voice::noteOn(int note, float vel,
 
         p.sigma0 = effSigma0;
         p.sigma1 = effSigma1;
+        p.brightness = effBrightness;
         p.m0 = -0.0014f; // authentic classical action clearance (1.4 mm)
         p.b0 = -0.0030f; // fretboard clearance (3.0 mm)
 
@@ -113,7 +129,7 @@ void Voice::noteOn(int note, float vel,
         // Velocity maps to physical pluck depth:
         const float peakDisp = (-0.0003f - 0.0009f * velocity) * effDispScale;
         const float clampedPickPos = std::clamp(pickPosition, 0.10f, 0.50f);
-        fdtdString.pluckDisplacement(clampedPickPos, peakDisp);
+        fdtdString.pluckDisplacement(clampedPickPos, peakDisp, effBrightness);
 
         if (muteMode == KarplusStrong::MuteMode::Full)
         {
@@ -230,7 +246,7 @@ float Voice::tick() noexcept
     if (!active) return 0.f;
 
     // Scale FDTD spatial slope to match DWG digital line level cleanly
-    float out = (engineType == EngineType::BilbaoFdtd) ? (fdtdString.tick() * 45.0f) : string.tick();
+    float out = (engineType == EngineType::BilbaoFdtd) ? (fdtdString.tick() * 95.0f) : string.tick();
 
     // Physical acoustic choke handling (hand slapped on strings)
     if (choking)

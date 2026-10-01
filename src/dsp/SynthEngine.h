@@ -14,7 +14,7 @@
 class SynthEngine
 {
 public:
-    static constexpr int NUM_VOICES = 6; ///< 6 physical guitar strings: 0=E2, 1=A2, 2=D3, 3=G3, 4=B3, 5=E4
+    static constexpr int NUM_VOICES = 12; ///< 12-voice polyphonic pool with physical string differentiation
 
     SynthEngine() = default;
 

@@ -30,11 +30,13 @@ public:
         float L       = 0.65f;        ///< String vibrating length (m)
         float f0      = 146.83f;      ///< Nominal fundamental frequency (Hz) (D string default)
         float r       = 0.00045f;     ///< String radius (m)
+        float r_stiffness = 0.0f;     ///< Effective bending radius for stiffness EI (core of wound strings). If <= 0, uses r.
         float rho     = 1140.0f;      ///< Density (kg/m^3) (nylon core with silver-plated wrap)
         float E       = 5.4e9f;       ///< Young's modulus (Pa)
         float T0      = 60.0f;        ///< Tension (N)
         float sigma0  = 1.38f;        ///< Frequency-independent damping (1/s)
         float sigma1  = 1.3e-4f;      ///< Frequency-dependent air/viscoelastic loss (m^2/s)
+        float brightness = 0.60f;     ///< Exciter brightness / nail polish (0..1)
 
         // Collisions
         float m0      = -0.0012f;     ///< Fret wire protrusion height below string (m)
@@ -67,7 +69,8 @@ public:
 
         // Derived physical constants
         const float A = 3.14159265358979323846f * p.r * p.r;
-        const float I = 3.14159265358979323846f * p.r * p.r * p.r * p.r * 0.25f;
+        const float rBending = (p.r_stiffness > 0.0f) ? p.r_stiffness : p.r;
+        const float I = 3.14159265358979323846f * rBending * rBending * rBending * rBending * 0.25f;
         rhoA = p.rho * A;
         EI   = p.E * I;
         EA   = p.E * A;
@@ -126,9 +129,11 @@ public:
         gFG.assign(static_cast<size_t>(N_pts), 0.0f);
         b_string.assign(static_cast<size_t>(N_pts), 0.0f);
 
-        // Saddle terminating mechanical impedance filter (4.5 kHz lowpass)
-        saddleBeta = std::exp(-2.0f * 3.14159265358979323846f * 4500.0f / fs);
+        // Bone saddle terminating mechanical impedance filter (brightness-dependent cutoff)
+        const float saddleCutoff = 3000.0f + 2500.0f * std::clamp(p.brightness, 0.05f, 1.0f);
+        saddleBeta = std::exp(-2.0f * 3.14159265358979323846f * saddleCutoff / fs);
         saddleFilterState = 0.0f;
+        saddleFilterState2 = 0.0f;
 
         // Finger states
         w_next = 0.0f;
@@ -182,6 +187,7 @@ public:
         pluckDurSamples = 0;
         pluckSampleCount = 0;
         saddleFilterState = 0.0f;
+        saddleFilterState2 = 0.0f;
         rampSamplesLeft = 0;
     }
 
@@ -205,19 +211,54 @@ public:
         pluckDisplacement(xLocFraction, uPeak);
     }
 
-    /** Excite string with specified peak displacement in meters. */
-    void pluckDisplacement(float xLocFraction, float peakDisplacementMeters)
+    /** Excite string with physical acoustic fingertip flesh contour and brightness. */
+    void pluckDisplacement(float xLocFraction, float peakDisplacementMeters, float brightness = 0.5f)
     {
         const float xLoc = std::clamp(xLocFraction, 0.05f, 0.95f) * p.L;
+        const float b = std::clamp(brightness, 0.05f, 1.0f);
+
+        // Physical fingertip contact width:
+        // Soft fleshy thumb ~ 12 mm (wider contact = warmer acoustic tone); crisp fingernail ~ 4 mm
+        const float fingerWidth = 0.004f + 0.008f * (1.0f - b);
+        const float s1 = peakDisplacementMeters / xLoc;
+        const float s2 = -peakDisplacementMeters / (p.L - xLoc);
+        const float w = fingerWidth;
+        const float xLeft  = xLoc - 0.5f * w;
+        const float xRight = xLoc + 0.5f * w;
+
         for (int i = 0; i < N_pts; ++i)
         {
             const float x = static_cast<float>(i + 1) * h;
-            if (x <= xLoc)
-                u_curr[static_cast<size_t>(i)] = peakDisplacementMeters * (x / xLoc);
+            if (x < xLeft)
+                u_curr[static_cast<size_t>(i)] = x * s1;
+            else if (x > xRight)
+                u_curr[static_cast<size_t>(i)] = (p.L - x) * (-s2);
             else
-                u_curr[static_cast<size_t>(i)] = peakDisplacementMeters * ((p.L - x) / (p.L - xLoc));
+            {
+                const float dx = x - xLoc;
+                u_curr[static_cast<size_t>(i)] = peakDisplacementMeters + 0.5f * (s1 + s2) * dx - (s1 - s2) * (dx * dx) / (2.0f * w);
+            }
         }
-        u_prev = u_curr;
+
+        // Zero-phase spatial binomial smoothing passes (flesh absorption of ultra-high partials)
+        const int smoothPasses = (b < 0.35f) ? 3 : ((b < 0.70f) ? 2 : 1);
+        for (int pass = 0; pass < smoothPasses; ++pass)
+        {
+            for (int i = 1; i < N_pts - 1; ++i)
+                u_curr[static_cast<size_t>(i)] = 0.25f * u_curr[static_cast<size_t>(i - 1)]
+                                               + 0.50f * u_curr[static_cast<size_t>(i)]
+                                               + 0.25f * u_curr[static_cast<size_t>(i + 1)];
+        }
+
+        // Fingernail release slip: gives the string a subtle dynamic tactile initial velocity
+        const float nailSlipAmp = peakDisplacementMeters * 0.12f * b;
+        for (int i = 0; i < N_pts; ++i)
+        {
+            const float dist = std::abs(static_cast<float>(i + 1) * h - xLoc);
+            const float nailPulse = (dist < w) ? (nailSlipAmp * 0.5f * (1.0f + std::cos(3.14159265f * dist / w))) : 0.0f;
+            u_prev[static_cast<size_t>(i)] = u_curr[static_cast<size_t>(i)] - nailPulse;
+        }
+
         w_curr = 0.0f;
         w_prev = 0.0f;
         psi = { 0.0f, 0.0f, 0.0f };
@@ -227,6 +268,7 @@ public:
         prevRawForce = u_curr[static_cast<size_t>(N_pts - 1)] / h;
         dcBlockerState = 0.0f;
         saddleFilterState = 0.0f;
+        saddleFilterState2 = 0.0f;
         rampSamplesLeft = 32;
         rampTotalSamples = 32;
         pluckDurSamples = 0;
@@ -577,6 +619,13 @@ public:
         // Force on the bridge saddle is proportional to spatial slope: u[N-1] / h
         float bridgeForce = (u_next[static_cast<size_t>(N_pts - 1)]) / h;
 
+        // 25 Hz DC Blocker removes static displacement offset from initial triangular pluck
+        constexpr float dcR = 0.9965f;
+        const float dcOut = bridgeForce - dcBlockerState + dcR * prevRawForce;
+        dcBlockerState = bridgeForce;
+        prevRawForce = dcOut;
+        bridgeForce = dcOut;
+
         // Smooth initial attack ramp (32 samples = 0.7 ms) to eliminate static step click
         if (rampSamplesLeft > 0)
         {
@@ -586,8 +635,9 @@ public:
             rampSamplesLeft--;
         }
 
-        // Bone saddle 4.5 kHz terminating mechanical impedance lowpass filter
-        saddleFilterState = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
+        // Bone saddle dual-pole terminating mechanical impedance lowpass filter (12 dB/octave)
+        saddleFilterState  = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
+        saddleFilterState2 = (1.0f - saddleBeta) * saddleFilterState + saddleBeta * saddleFilterState2;
 
         // 10. Pointer / State rotation
         u_prev = u_curr;
@@ -595,7 +645,7 @@ public:
         w_prev = w_curr;
         w_curr = w_next;
 
-        return saddleFilterState;
+        return saddleFilterState2;
     }
 
     /** Fast string displacement energy estimate for voice stealing. */
@@ -725,6 +775,7 @@ private:
 
     float saddleBeta = 0.0f;
     float saddleFilterState = 0.0f;
+    float saddleFilterState2 = 0.0f;
     int rampSamplesLeft = 0;
     int rampTotalSamples = 32;
 
