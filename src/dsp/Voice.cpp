@@ -211,7 +211,12 @@ void Voice::setMuteMode(KarplusStrong::MuteMode mode) noexcept
 
 void Voice::choke(float chokeVelocity) noexcept
 {
-    if (!active) return;
+    if (!active)
+    {
+        active = true;
+        releasing = false;
+        midiNote = 40; // Default to low E string for acoustic soundboard thud
+    }
 
     choking = true;
     chokeGain = 1.0f;
@@ -223,9 +228,9 @@ void Voice::choke(float chokeVelocity) noexcept
     chokeSamplesLeft = static_cast<int>(0.045f * sampleRate);
 
     // Instant damping for FDTD physical string
-    fdtdString.setDamping(75.0f, 3.0e-3f);
+    fdtdString.setDamping(95.0f, 4.0e-3f);
 
-    const float freq = midiToFreq(midiNote);
+    const float freq = midiToFreq(midiNote > 0 ? midiNote : 40);
     const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);
 
     // 1. Soundboard cavity air thud (A0 Helmholtz / lower bout mode):
@@ -233,16 +238,16 @@ void Voice::choke(float chokeVelocity) noexcept
     const float thudFreq = 105.0f + 40.0f * (1.0f - woundFactor);
     slapThudPhase = 0.f;
     slapThudPhaseInc = 2.0f * kPi * thudFreq / sampleRate;
-    slapThudAmp = chokeVelocity * (0.07f + 0.07f * woundFactor);
-    const float thudTime = 0.010f + 0.010f * woundFactor; // 10ms (plain) to 20ms (wound)
+    slapThudAmp = chokeVelocity * (0.38f + 0.35f * woundFactor);
+    const float thudTime = 0.012f + 0.012f * woundFactor; // 12ms (plain) to 24ms (wound)
     slapThudDecay = std::exp(-1.0f / (thudTime * sampleRate));
 
     // 2. Fret-wire contact snap (sharp high-frequency mechanical transient):
     const float clickFreq = 1800.0f + 800.0f * (1.0f - woundFactor);
     slapClickPhase = 0.f;
     slapClickPhaseInc = 2.0f * kPi * clickFreq / sampleRate;
-    slapClickAmp = chokeVelocity * (0.04f + 0.04f * (1.0f - woundFactor));
-    const float clickTime = 0.003f + 0.003f * woundFactor; // 3ms to 6ms
+    slapClickAmp = chokeVelocity * (0.24f + 0.20f * (1.0f - woundFactor));
+    const float clickTime = 0.004f + 0.004f * woundFactor; // 4ms to 8ms
     slapClickDecay = std::exp(-1.0f / (clickTime * sampleRate));
 }
 

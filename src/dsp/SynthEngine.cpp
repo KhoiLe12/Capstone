@@ -58,18 +58,18 @@ void SynthEngine::noteOn(int midiNote, float velocity)
         for (auto& v : voices)
         {
             if (v.isActive())
-                activeCount++;
-        }
-
-        if (activeCount > 0)
-        {
-            for (auto& v : voices)
             {
-                if (v.isActive())
-                    v.choke(velocity);
+                v.choke(velocity);
+                activeCount++;
             }
         }
-        return; // Keyswitch alone is silent if no notes were ringing
+
+        // If no strings are actively vibrating, still produce an authentic fret slap!
+        if (activeCount == 0)
+        {
+            voices[0].choke(velocity);
+        }
+        return;
     }
 
     // 3. Intercept 8th-Note Strum Keyswitch E1 (MIDI 28 / FL: E2)
@@ -186,29 +186,39 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
             chord.push_back({ n, heldNotes[n] });
     }
 
-    // 2. If no keys are physically held, fallback to any actively ringing voices
+    // Only strum when notes are actively held down on the keyboard.
+    // Never fallback to dying voices from previous chords to prevent horrific chord dissonance!
     if (chord.empty())
+        return;
+
+    // 2. Clear any stale pending plucks from previous strums to prevent inter-chord collision
+    for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
+        pendingPlucks[p].active = false;
+
+    // 3. Immediately damp any currently ringing voices that are NOT part of this chord.
+    // When switching chords, the fretting hand leaves old notes.
+    for (auto& v : voices)
     {
-        for (const auto& v : voices)
+        if (v.isActive())
         {
-            if (v.isActive() && v.getMidiNote() >= GUITAR_MIN_NOTE && v.getMidiNote() <= GUITAR_MAX_NOTE)
+            const int activeNote = v.getMidiNote();
+            bool isStillInChord = false;
+            for (const auto& p : chord)
             {
-                int note = v.getMidiNote();
-                bool found = false;
-                for (const auto& p : chord)
+                if (p.first == activeNote)
                 {
-                    if (p.first == note) { found = true; break; }
+                    isStillInChord = true;
+                    break;
                 }
-                if (!found)
-                    chord.push_back({ note, 0.75f });
+            }
+            if (!isStillInChord)
+            {
+                v.noteOff();
             }
         }
     }
 
-    if (chord.empty())
-        return; // Nothing to strum
-
-    // 3. Sort notes by stroke direction
+    // 4. Sort notes by stroke direction
     if (isDownstroke)
     {
         // Downstroke: sweep from lowest pitch to highest pitch
@@ -224,7 +234,7 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
         });
     }
 
-    // 4. Directional acoustic physics:
+    // 5. Directional acoustic physics:
     // Downstroke: standard velocity and brightness
     // Upstroke: slightly lighter velocity (~82%), brighter glancing edge (~115%)
     const float strokeVelScale    = isDownstroke ? 1.0f : 0.82f;
@@ -247,10 +257,17 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
 
 void SynthEngine::schedulePluck(int midiNote, float velocity, float brightness, int delaySamples) noexcept
 {
+    const bool isFdtd = (paramEngineType >= 0.5f);
+    const int s = assignStringForNote(midiNote);
+
     if (delaySamples <= 0)
     {
-        const bool isFdtd = (paramEngineType >= 0.5f);
-        const int s = assignStringForNote(midiNote);
+        // Choke any existing voice on physical string s playing a different note
+        for (auto& v : voices)
+        {
+            if (v.isActive() && v.getPhysicalStringIndex() == s && v.getMidiNote() != midiNote)
+                v.noteOff();
+        }
 
         int idx = findVoiceForNote(midiNote);
         if (idx < 0)
@@ -338,6 +355,13 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                 {
                     const bool isFdtd = (paramEngineType >= 0.5f);
                     const int s = assignStringForNote(pendingPlucks[p].midiNote);
+
+                    // Choke any existing voice on physical string s playing a different note
+                    for (auto& v : voices)
+                    {
+                        if (v.isActive() && v.getPhysicalStringIndex() == s && v.getMidiNote() != pendingPlucks[p].midiNote)
+                            v.noteOff();
+                    }
 
                     int idx = findVoiceForNote(pendingPlucks[p].midiNote);
                     if (idx < 0)
