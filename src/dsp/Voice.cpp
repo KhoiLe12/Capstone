@@ -262,6 +262,15 @@ float Voice::tick() noexcept
     // Scale FDTD spatial slope to match DWG digital line level cleanly
     float out = (engineType == EngineType::BilbaoFdtd) ? (fdtdString.tick() * 95.0f) : string.tick();
 
+    // Safety guard against NaN/Inf or runaway numerical explosion
+    if (std::isnan(out) || std::isinf(out) || std::abs(out) > 50.0f)
+    {
+        fdtdString.reset();
+        string.reset();
+        active = false;
+        return 0.0f;
+    }
+
     // Physical acoustic choke handling (hand slapped on strings)
     if (choking)
     {

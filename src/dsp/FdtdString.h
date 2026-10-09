@@ -38,6 +38,14 @@ public:
         float sigma1  = 1.3e-4f;      ///< Frequency-dependent air/viscoelastic loss (m^2/s)
         float brightness = 0.60f;     ///< Exciter brightness / nail polish (0..1)
 
+        // Dual-polarization shimmer
+        // H-polarization (horizontal, parallel to soundboard) vibrates at a slightly different
+        // frequency from V-polarization (vertical). This difference creates a slow beat (shimmer)
+        // that is the characteristic "living" quality of a sustained acoustic guitar note.
+        // Typical real-guitar beat rate: ~0.1 Hz (bass) to ~1.0 Hz (treble).
+        // polarizationSplit is the fractional frequency offset: f_H = f_V * (1 + polarizationSplit).
+        float polarizationSplit = 0.0012f; ///< H vs V frequency ratio offset (0.001-0.003)
+
         // Collisions
         float m0      = -0.0012f;     ///< Fret wire protrusion height below string (m)
         float b0      = -0.0028f;     ///< Fretboard surface height below string (m)
@@ -75,9 +83,17 @@ public:
         EI   = p.E * I;
         EA   = p.E * A;
 
+        // H-polarization tension:
+        // H vibrates at a slightly higher tension so its frequency is offset from V,
+        // producing the natural shimmer/beating (0.1..1.0 Hz) heard on real acoustic guitar.
+        // T0_H = T0_V * (1 + delta)^2 => f_H = f_V * (1 + delta)
+        const float delta = std::clamp(p.polarizationSplit, 0.0f, 0.010f);
+        T0_H = p.T0 * (1.0f + delta) * (1.0f + delta);
+
         // Stability condition (Bilbao DAFx24 Eq. 47):
-        // h^2 >= (k/2) * ( T0*k / rhoA + 4*sigma1 + sqrt( (T0*k / rhoA + 4*sigma1)^2 + 16*EI / rhoA ) )
-        const float term1 = (p.T0 * k) / rhoA + 4.0f * p.sigma1;
+        // Must hold for BOTH polarizations, so use max(T0, T0_H):
+        const float maxT0 = std::max(p.T0, T0_H);
+        const float term1 = (maxT0 * k) / rhoA + 4.0f * p.sigma1;
         const float hMinSq = (k * 0.5f) * (term1 + std::sqrt(term1 * term1 + (16.0f * EI) / rhoA));
         const float hMin   = std::sqrt(hMinSq);
 
@@ -107,6 +123,13 @@ public:
             b_string.reserve(kMaxGridSize);
             fretIndices.reserve(32);
             fretAlpha.reserve(32);
+            // H-polarization scratch
+            u_next_H.reserve(kMaxGridSize);
+            u_curr_H.reserve(kMaxGridSize);
+            u_prev_H.reserve(kMaxGridSize);
+            Du_H.reserve(kMaxGridSize);
+            D2u_H.reserve(kMaxGridSize);
+            Du_prev_H.reserve(kMaxGridSize);
         }
 
         // States
@@ -128,6 +151,18 @@ public:
         gF.assign(static_cast<size_t>(N_pts), 0.0f);
         gFG.assign(static_cast<size_t>(N_pts), 0.0f);
         b_string.assign(static_cast<size_t>(N_pts), 0.0f);
+
+        // H-polarization state buffers
+        u_next_H.assign(static_cast<size_t>(N_pts), 0.0f);
+        u_curr_H.assign(static_cast<size_t>(N_pts), 0.0f);
+        u_prev_H.assign(static_cast<size_t>(N_pts), 0.0f);
+        Du_H.assign(static_cast<size_t>(N_pts), 0.0f);
+        D2u_H.assign(static_cast<size_t>(N_pts), 0.0f);
+        Du_prev_H.assign(static_cast<size_t>(N_pts), 0.0f);
+        dcBlockerStateH = 0.0f;
+        prevRawForceH = 0.0f;
+        saddleFilterStateH = 0.0f;
+        saddleFilterState2H = 0.0f;
 
         // Bone saddle terminating mechanical impedance filter (brightness-dependent cutoff)
         const float saddleCutoff = 3000.0f + 2500.0f * std::clamp(p.brightness, 0.05f, 1.0f);
@@ -189,6 +224,18 @@ public:
         saddleFilterState = 0.0f;
         saddleFilterState2 = 0.0f;
         rampSamplesLeft = 0;
+
+        // H-polarization reset
+        std::fill(u_next_H.begin(), u_next_H.end(), 0.0f);
+        std::fill(u_curr_H.begin(), u_curr_H.end(), 0.0f);
+        std::fill(u_prev_H.begin(), u_prev_H.end(), 0.0f);
+        std::fill(Du_H.begin(),     Du_H.end(),     0.0f);
+        std::fill(D2u_H.begin(),    D2u_H.end(),    0.0f);
+        std::fill(Du_prev_H.begin(),Du_prev_H.end(),0.0f);
+        dcBlockerStateH    = 0.0f;
+        prevRawForceH      = 0.0f;
+        saddleFilterStateH  = 0.0f;
+        saddleFilterState2H = 0.0f;
     }
 
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
@@ -274,6 +321,23 @@ public:
         rampTotalSamples = 0;
         pluckDurSamples = 0;
         pluckSampleCount = 0;
+
+        // H-polarization initial conditions:
+        // The nail sweeps primarily perpendicular (V direction). Lateral deflection (H)
+        // is ~45% of the peak displacement. H has no extra nail-slip initial velocity
+        // (the lateral release is smoother), so u_prev_H == u_curr_H.
+        const float hAmp = 0.45f;
+        for (int i = 0; i < N_pts; ++i)
+            u_curr_H[static_cast<size_t>(i)] = hAmp * u_curr[static_cast<size_t>(i)];
+        u_prev_H = u_curr_H; // no nail-slip initial velocity on H
+        std::fill(u_next_H.begin(), u_next_H.end(), 0.0f);
+        std::fill(Du_H.begin(),     Du_H.end(),     0.0f);
+        std::fill(D2u_H.begin(),    D2u_H.end(),    0.0f);
+        std::fill(Du_prev_H.begin(),Du_prev_H.end(),0.0f);
+        dcBlockerStateH    = 0.0f;
+        prevRawForceH      = u_curr_H[static_cast<size_t>(N_pts - 1)] / h;
+        saddleFilterStateH  = 0.0f;
+        saddleFilterState2H = 0.0f;
     }
 
     /** Excite string at fractional location with raised-cosine pulse (Eq. 5). */
@@ -646,7 +710,75 @@ public:
         w_prev = w_curr;
         w_curr = w_next;
 
-        return saddleFilterState2;
+        // ── H-Polarization Tick ────────────────────────────────────────────────
+        // Horizontal (lateral) string polarization, parallel to the soundboard.
+        // Runs free stiff string + Kirchhoff-Carrier nonlinearity only — no fretboard
+        // or fret collision physics, because horizontal motion cannot push the string
+        // into obstacles located vertically below. This is physically correct and
+        // halves the Woodbury solver cost vs. running the full system twice.
+        //
+        // T0_H = T0_V * (1 + delta)^2, so f_H = f_V * (1 + delta), giving a beat
+        // of f_V * delta Hz (~ 0.1..1.0 Hz depending on pitch and polarizationSplit).
+
+        const float invHSq_H = 1.0f / (h * h);
+
+        // H spatial Laplacian: Du_H = D* u_curr_H
+        for (int i = 0; i < N_pts; ++i)
+        {
+            const float left_H  = (i > 0)        ? u_curr_H[static_cast<size_t>(i - 1)] : 0.0f;
+            const float right_H = (i < N_pts - 1) ? u_curr_H[static_cast<size_t>(i + 1)] : 0.0f;
+            Du_H[static_cast<size_t>(i)] = (left_H - 2.0f * u_curr_H[static_cast<size_t>(i)] + right_H) * invHSq_H;
+        }
+
+        // H biharmonic: D2u_H = D* Du_H
+        for (int i = 0; i < N_pts; ++i)
+        {
+            const float left_H  = (i > 0)        ? Du_H[static_cast<size_t>(i - 1)] : 0.0f;
+            const float right_H = (i < N_pts - 1) ? Du_H[static_cast<size_t>(i + 1)] : 0.0f;
+            D2u_H[static_cast<size_t>(i)] = (left_H - 2.0f * Du_H[static_cast<size_t>(i)] + right_H) * invHSq_H;
+        }
+
+        // H Laplacian on u_prev_H for frequency-dependent damping
+        for (int i = 0; i < N_pts; ++i)
+        {
+            const float left_H  = (i > 0)        ? u_prev_H[static_cast<size_t>(i - 1)] : 0.0f;
+            const float right_H = (i < N_pts - 1) ? u_prev_H[static_cast<size_t>(i + 1)] : 0.0f;
+            Du_prev_H[static_cast<size_t>(i)] = (left_H - 2.0f * u_prev_H[static_cast<size_t>(i)] + right_H) * invHSq_H;
+        }
+
+        // H update coefficients (same as V except c1_H uses T0_H)
+        const float c1_H = (T0_H * k * k) / rhoA;
+
+        for (int i = 0; i < N_pts; ++i)
+        {
+            const float Bu_H = c0 * (2.0f * u_curr_H[static_cast<size_t>(i)]
+                                     + (c1_H + c3) * Du_H[static_cast<size_t>(i)]
+                                     - c2          * D2u_H[static_cast<size_t>(i)]);
+            const float Cu_H = c0 * (c4 * u_prev_H[static_cast<size_t>(i)]
+                                     - c3 * Du_prev_H[static_cast<size_t>(i)]);
+
+            u_next_H[static_cast<size_t>(i)] = Bu_H + Cu_H;
+        }
+
+        // H bridge force + DC blocker
+        constexpr float dcR_H = 0.9965f;
+        float bridgeForce_H = u_next_H[static_cast<size_t>(N_pts - 1)] / h;
+        const float dcOut_H = bridgeForce_H - dcBlockerStateH + dcR_H * prevRawForceH;
+        dcBlockerStateH  = bridgeForce_H;
+        prevRawForceH    = dcOut_H;
+        bridgeForce_H    = dcOut_H;
+
+        // H saddle filter (same saddleBeta as V)
+        saddleFilterStateH  = (1.0f - saddleBeta) * bridgeForce_H + saddleBeta * saddleFilterStateH;
+        saddleFilterState2H = (1.0f - saddleBeta) * saddleFilterStateH + saddleBeta * saddleFilterState2H;
+
+        // H state rotation
+        u_prev_H = u_curr_H;
+        u_curr_H = u_next_H;
+
+        // Mix: V drives the saddle directly (100%); H couples laterally at ~35%.
+        // The lateral rocking force on the saddle is less efficient than vertical drive.
+        return saddleFilterState2 + 0.35f * saddleFilterState2H;
     }
 
     /** Fast string displacement energy estimate for voice stealing. */
@@ -800,4 +932,19 @@ private:
     bool fingerEngaged = false;
 
     float accumulatedLoss = 0.0f;
+
+    // H-polarization state (horizontal, parallel to soundboard)
+    // Runs a simplified free stiff string + KC (no obstacle collisions) at a slightly
+    // offset tension T0_H, producing natural shimmer/beating against the V polarization.
+    float T0_H = 0.0f;
+    std::vector<float> u_next_H;
+    std::vector<float> u_curr_H;
+    std::vector<float> u_prev_H;
+    std::vector<float> Du_H;
+    std::vector<float> D2u_H;
+    std::vector<float> Du_prev_H;
+    float dcBlockerStateH   = 0.0f;
+    float prevRawForceH     = 0.0f;
+    float saddleFilterStateH  = 0.0f;
+    float saddleFilterState2H = 0.0f;
 };

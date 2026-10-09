@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 29.0.0)
+project(HybridSynth VERSION 30.0.0)
 
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
 
