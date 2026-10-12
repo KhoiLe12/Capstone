@@ -71,6 +71,9 @@ public:
     /** Advance one sample and return voice output at bridge. */
     float tick() noexcept;
 
+    /** Advance one sample and return dual-axis bridge forces (vertical pumping V, lateral rocking H). */
+    void tickPolar(float& outV, float& outH) noexcept;
+
     bool  isActive()    const noexcept { return active; }
     int   getMidiNote() const noexcept { return midiNote; }
     float getEnergy()   const noexcept

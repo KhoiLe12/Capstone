@@ -379,6 +379,105 @@ float Voice::tick() noexcept
     return out;
 }
 
+void Voice::tickPolar(float& outV, float& outH) noexcept
+{
+    if (!active)
+    {
+        outV = 0.0f;
+        outH = 0.0f;
+        return;
+    }
+
+    if (engineType == EngineType::BilbaoFdtd)
+    {
+        float fV = 0.0f, fH = 0.0f;
+        fdtdString.tickPolar(fV, fH);
+        fV *= 95.0f;
+        fH *= 95.0f;
+
+        // Apply choking, envelope and fade
+        float gainScale = 1.0f;
+        if (choking)
+        {
+            gainScale = chokeGain;
+            chokeGain *= chokeCoeff;
+            if (chokeGain < 0.01f && chokeGain > 0.0f)
+            {
+                string.reset();
+                fdtdString.reset();
+                chokeGain = 0.0f;
+            }
+        }
+        else if (releasing)
+        {
+            gainScale = releaseGain;
+            releaseGain *= releaseCoeff;
+            if (releaseGain < 0.005f && fadeSamplesLeft < 0)
+                fadeSamplesLeft = 64;
+        }
+        else
+        {
+            if (fdtdString.getEnergy() < 1e-7f && fadeSamplesLeft < 0)
+                fadeSamplesLeft = 64;
+        }
+
+        if (fadeSamplesLeft > 0)
+        {
+            gainScale *= (static_cast<float>(fadeSamplesLeft) / 64.0f);
+            --fadeSamplesLeft;
+            if (fadeSamplesLeft == 0)
+            {
+                active = false;
+                releasing = false;
+                midiNote = -1;
+                string.reset();
+                fdtdString.reset();
+            }
+        }
+
+        outV = fV * gainScale;
+        outH = fH * gainScale;
+
+        // Choke mechanical hand slap is added to vertical plate pumping
+        if (choking)
+        {
+            float slapOut = 0.f;
+            if (slapThudAmp > 1e-5f)
+            {
+                slapOut += slapThudAmp * std::sin(slapThudPhase);
+                slapThudPhase += slapThudPhaseInc;
+                if (slapThudPhase >= 2.0f * kPi) slapThudPhase -= 2.0f * kPi;
+                slapThudAmp *= slapThudDecay;
+            }
+            if (slapClickAmp > 1e-5f)
+            {
+                slapOut += slapClickAmp * std::sin(slapClickPhase);
+                slapClickPhase += slapClickPhaseInc;
+                if (slapClickPhase >= 2.0f * kPi) slapClickPhase -= 2.0f * kPi;
+                slapClickAmp *= slapClickDecay;
+            }
+            outV += slapOut;
+            --chokeSamplesLeft;
+            if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && slapThudAmp <= 1e-5f && slapClickAmp <= 1e-5f))
+            {
+                active = false;
+                choking = false;
+                releasing = false;
+                midiNote = -1;
+                string.reset();
+                fdtdString.reset();
+            }
+        }
+    }
+    else
+    {
+        // Digital Waveguide fallback: single axis vertical drive
+        const float sOut = tick();
+        outV = sOut;
+        outH = 0.0f;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Utility
 // ---------------------------------------------------------------------------

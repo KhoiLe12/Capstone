@@ -399,7 +399,8 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
 
         sympathetic.setMuted(isPalmMuteActive(), isFullMuteActive());
 
-        float totalBridgeForce = 0.f;
+        float totalForceV = 0.f;
+        float totalForceH = 0.f;
         int activeVoices = 0;
 
         for (int v = 0; v < NUM_VOICES; ++v)
@@ -408,13 +409,16 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                 continue;
 
             activeVoices++;
-            totalBridgeForce += voices[v].tick();
+            float fV = 0.0f, fH = 0.0f;
+            voices[v].tickPolar(fV, fH);
+            totalForceV += fV;
+            totalForceH += fH;
         }
 
         // Cross-bridge sympathetic resonance:
-        // Driving bridge force excites unplayed open strings, scaled subtly by acoustic body coupling
-        const float sympatheticForce = sympathetic.process(totalBridgeForce);
-        const float coupledBridgeForce = totalBridgeForce + sympatheticForce * (0.05f * paramBodyMix);
+        // Driving vertical bridge force excites unplayed open strings, scaled subtly by acoustic body coupling
+        const float sympatheticForce = sympathetic.process(totalForceV);
+        const float coupledForceV = totalForceV + sympatheticForce * (0.05f * paramBodyMix);
 
         // Polyphonic bridge impedance headroom:
         // Acoustic soundboard mechanical impedance distributes multi-string chord displacement (1 / sqrt(N))
@@ -422,8 +426,28 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             ? (1.0f / std::sqrt(static_cast<float>(activeVoices)))
             : 1.0f;
 
-        outputL[i] = coupledBridgeForce * polyScale;
-        outputR[i] = coupledBridgeForce * polyScale;
+        // Dual-Axis Saddle Polar Radiation:
+        // Vertical force (V) pumps soundboard directly (100% into both channels in-phase).
+        // Lateral force (H) rocks the saddle across the bridge plate, exciting asymmetrical
+        // dipole modes (creating subtle anti-phase rocking moment in stereo soundboard field).
+        float driveL = (coupledForceV + 0.35f * totalForceH) * polyScale;
+        float driveR = (coupledForceV - 0.35f * totalForceH) * polyScale;
+
+        // Soundboard Compliance Bloom / Soft Wood Saturation:
+        // Under heavy strumming and multi-string plucks, physical spruce soundboard compliance
+        // gently saturates, bloom-compressing raw bridge force transients before cavity resonance.
+        auto soundboardBloom = [](float x) noexcept -> float
+        {
+            constexpr float knee = 1.10f;
+            const float ax = std::abs(x);
+            if (ax <= knee) return x;
+            const float excess = ax - knee;
+            const float sat = knee + 0.45f * std::tanh(excess / 0.45f);
+            return (x > 0.0f ? 1.0f : -1.0f) * sat;
+        };
+
+        outputL[i] = soundboardBloom(driveL);
+        outputR[i] = soundboardBloom(driveR);
     }
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)

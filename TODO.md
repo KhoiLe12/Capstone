@@ -14,7 +14,7 @@ This document tracks all planned, ongoing, and completed features across physica
 - [x] **Axial P-Wave Attack Snap** ($c_L = \sqrt{E/\rho}$ longitudinal transient).
 - [x] **Dynamic Phantom Harmonics Bloom** ($2f_0$ dynamic tension modulation).
 - [x] **Cross-Bridge Sympathetic String Resonance** (6-string open harmonic resonator bank with fretting damping).
-- [ ] **Dual-Axis Saddle Polar Radiation**: Route $V$ (pumping) and $H$ (rocking) into distinct soundboard coupling channels.
+- [x] **Dual-Axis Saddle Polar Radiation**: Route $V$ (pumping) and $H$ (rocking) into distinct soundboard coupling channels.
 - [x] **Dynamic Phantom Harmonics Quadratic Scaler**: Scale tension bloom strictly with $E_{\text{pot}} \propto \text{disp}^2$.
 - [x] **Positional Damping Profile**: Fretted fingertip compliance vs. open bone nut ring-out.
 
@@ -28,7 +28,7 @@ This document tracks all planned, ongoing, and completed features across physica
 - [x] **32-Mode IRCAM Modalys Physical Resonator Bank** (Spruce/rosewood eigenmodes).
 - [x] **Stereo Mid/Side Spatializer & Microphone Field** (Continuously variable Width knob).
 - [x] **High-Frequency Wood Viscosity & Air Dispersion Roll-Off** (Gentle top-end acoustic dissipation above 10.5 kHz).
-- [ ] **Soundboard Compliance Bloom / Soft Nonlinearity** (Wood cavity acoustic headroom compression under heavy strumming).
+- [x] **Soundboard Compliance Bloom / Soft Nonlinearity** (Wood cavity acoustic headroom compression under heavy strumming).
 
 ---
 

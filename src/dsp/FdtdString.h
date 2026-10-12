@@ -911,6 +911,16 @@ public:
         return transverseMix + phantomAcoustic + longAcoustic;
     }
 
+    /** Dual-axis saddle output: returns distinct vertical (pumping) and horizontal (rocking) forces. */
+    void tickPolar(float& outV, float& outH) noexcept
+    {
+        const float total = tick();
+        // outV is vertical plate pumping: V transverse + axial tension phantom + longitudinal snap
+        outV = saddleFilterState2 + saddleFilterPhantom * 0.35f + (longitudinalS1 * 0.06f);
+        // outH is lateral rocking along saddle line
+        outH = saddleFilterState2H;
+    }
+
     /** Fast string displacement energy estimate for voice stealing. */
     float getEnergy() const noexcept
     {
