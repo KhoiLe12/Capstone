@@ -46,6 +46,14 @@ public:
         // polarizationSplit is the fractional frequency offset: f_H = f_V * (1 + polarizationSplit).
         float polarizationSplit = 0.0012f; ///< H vs V frequency ratio offset (0.001-0.003)
 
+        // Longitudinal string physics (Phantom Harmonics & P-wave attack snap)
+        // 1. Phantom Harmonics: Transverse vibration modulates string tension dynamically at 2*f0, 4*f0.
+        //    The bone saddle break angle converts this axial tension modulation into vertical soundboard force.
+        // 2. P-wave attack snap: Longitudinal standing waves travel at c_L = sqrt(E/rho) (~700-1500 m/s),
+        //    creating a metallic bell-like "ping" transient that decays within 20-35 ms.
+        float phantomCoupling    = 0.20f; ///< Saddle break angle coupling for 2f0 dynamic tension modulation
+        float longitudinalAttack = 0.15f; ///< P-wave axial release resonance strength during initial attack
+
         // Collisions
         float m0      = -0.0012f;     ///< Fret wire protrusion height below string (m)
         float b0      = -0.0028f;     ///< Fretboard surface height below string (m)
@@ -165,10 +173,26 @@ public:
         saddleFilterState2H = 0.0f;
 
         // Bone saddle terminating mechanical impedance filter (brightness-dependent cutoff)
-        const float saddleCutoff = 3000.0f + 2500.0f * std::clamp(p.brightness, 0.05f, 1.0f);
+        const float saddleCutoff = 3500.0f + 3500.0f * std::clamp(p.brightness, 0.05f, 1.0f);
         saddleBeta = std::exp(-2.0f * 3.14159265358979323846f * saddleCutoff / fs);
         saddleFilterState = 0.0f;
         saddleFilterState2 = 0.0f;
+        saddleFilterPhantom = 0.0f;
+
+        // Longitudinal string wave parameters (P-wave compressional vibration)
+        const float cL = std::sqrt(p.E / p.rho);
+        const float fL = std::clamp(cL / (2.0f * p.L), 300.0f, 4000.0f);
+        const float omegaL = 2.0f * 3.14159265358979323846f * fL;
+        // Longitudinal waves decay rapidly (~20-30 ms) through nut and bridge
+        const float decayTauL = 0.024f;
+        longitudinalR  = std::exp(-1.0f / (decayTauL * fs));
+        longitudinalB1 = -2.0f * longitudinalR * std::cos(omegaL / fs);
+        longitudinalB2 = longitudinalR * longitudinalR;
+        longitudinalS1 = 0.0f;
+        longitudinalS2 = 0.0f;
+        longitudinalImpulse = 0.0f;
+        dcBlockerStatePhantom = 0.0f;
+        prevRawForcePhantom = 0.0f;
 
         // Finger states
         w_next = 0.0f;
@@ -236,6 +260,20 @@ public:
         prevRawForceH      = 0.0f;
         saddleFilterStateH  = 0.0f;
         saddleFilterState2H = 0.0f;
+
+        // Longitudinal and phantom harmonics reset
+        longitudinalS1 = 0.0f;
+        longitudinalS2 = 0.0f;
+        longitudinalImpulse = 0.0f;
+        dcBlockerStatePhantom = 0.0f;
+        prevRawForcePhantom = 0.0f;
+        saddleFilterPhantom = 0.0f;
+
+        // Tactile scrape reset
+        scrapeSamplesLeft = 0;
+        scrapeTotalSamples = 0;
+        scrapeAmp = 0.0f;
+        scrapeFilterState = 0.0f;
     }
 
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
@@ -288,7 +326,8 @@ public:
         }
 
         // Zero-phase spatial binomial smoothing passes (flesh absorption of ultra-high partials)
-        const int smoothPasses = (b < 0.35f) ? 3 : ((b < 0.70f) ? 2 : 1);
+        // Only applied on very dark/warm plucks (fleshy thumb pad); authentic nail/plectrum plucks preserve sharp triangular apex
+        const int smoothPasses = (b < 0.30f) ? 1 : 0;
         for (int pass = 0; pass < smoothPasses; ++pass)
         {
             for (int i = 1; i < N_pts - 1; ++i)
@@ -297,9 +336,9 @@ public:
                                                + 0.25f * u_curr[static_cast<size_t>(i + 1)];
         }
 
-        // Fingernail release slip: gives the string authentic dynamic tactile initial velocity and bite
-        // As the nail or pick releases the string, it imparts a crisp slip transient.
-        const float nailSlipAmp = peakDisplacementMeters * (0.25f + 0.35f * b);
+        // Fingernail release slip: subtle acoustic release snap gives authentic attack definition
+        // without the violent hammer velocity kick that creates piano-like transients.
+        const float nailSlipAmp = peakDisplacementMeters * (0.08f + 0.12f * b);
         for (int i = 0; i < N_pts; ++i)
         {
             const float dist = std::abs(static_cast<float>(i + 1) * h - xLoc);
@@ -313,8 +352,14 @@ public:
         psi_prev = { 0.0f, 0.0f, 0.0f };
         prevXiB = 0.0f;
         prevXiF = 0.0f;
-        prevRawForce = u_curr[static_cast<size_t>(N_pts - 1)] / h;
-        dcBlockerState = 0.0f;
+
+        // Correct DC blocker initialization:
+        // Prior to pluck release, string was held in static equilibrium (DC).
+        // Steady-state DC blocker output y[-1] is 0; prior static input x[-1] is u_curr[N-1] / h.
+        // This ensures the dynamic bridge force is 0 until the transverse traveling wave
+        // actually arrives from the soundhole ~2-4 ms later, eliminating the t=0 piano hammer blow.
+        dcBlockerState = u_curr[static_cast<size_t>(N_pts - 1)] / h;
+        prevRawForce   = 0.0f;
         saddleFilterState = 0.0f;
         saddleFilterState2 = 0.0f;
         rampSamplesLeft = 0;
@@ -324,20 +369,34 @@ public:
 
         // H-polarization initial conditions:
         // The nail sweeps primarily perpendicular (V direction). Lateral deflection (H)
-        // is ~45% of the peak displacement. H has no extra nail-slip initial velocity
-        // (the lateral release is smoother), so u_prev_H == u_curr_H.
+        // is ~45% of the peak displacement. Released from rest (u_prev_H == u_curr_H).
         const float hAmp = 0.45f;
         for (int i = 0; i < N_pts; ++i)
             u_curr_H[static_cast<size_t>(i)] = hAmp * u_curr[static_cast<size_t>(i)];
-        u_prev_H = u_curr_H; // no nail-slip initial velocity on H
+        u_prev_H = u_curr_H;
         std::fill(u_next_H.begin(), u_next_H.end(), 0.0f);
         std::fill(Du_H.begin(),     Du_H.end(),     0.0f);
         std::fill(D2u_H.begin(),    D2u_H.end(),    0.0f);
         std::fill(Du_prev_H.begin(),Du_prev_H.end(),0.0f);
-        dcBlockerStateH    = 0.0f;
-        prevRawForceH      = u_curr_H[static_cast<size_t>(N_pts - 1)] / h;
+        dcBlockerStateH    = u_curr_H[static_cast<size_t>(N_pts - 1)] / h;
+        prevRawForceH      = 0.0f;
         saddleFilterStateH  = 0.0f;
         saddleFilterState2H = 0.0f;
+
+        // Excite longitudinal P-wave resonator with axial release impulse
+        // Proportional to pluck displacement and brightness (sharper release imparts crisper P-wave)
+        longitudinalImpulse = peakDisplacementMeters * p.longitudinalAttack * (0.8f + 1.2f * b);
+        longitudinalS1 = 0.0f;
+        longitudinalS2 = 0.0f;
+        dcBlockerStatePhantom = 0.0f;
+        prevRawForcePhantom = 0.0f;
+        saddleFilterPhantom = 0.0f;
+
+        // Tactile scrape generator initialization
+        scrapeTotalSamples = static_cast<int>(0.014f * fs); // ~14ms
+        scrapeSamplesLeft = scrapeTotalSamples;
+        scrapeAmp = std::abs(peakDisplacementMeters) * (0.15f + 0.35f * b);
+        scrapeFilterState = 0.0f;
     }
 
     /** Excite string at fractional location with raised-cosine pulse (Eq. 5). */
@@ -700,6 +759,23 @@ public:
             rampSamplesLeft--;
         }
 
+        // Tactile nail/plectrum scrape friction transient
+        float scrapeForce = 0.0f;
+        if (scrapeSamplesLeft > 0)
+        {
+            scrapeRng ^= scrapeRng << 13u;
+            scrapeRng ^= scrapeRng >> 17u;
+            scrapeRng ^= scrapeRng << 5u;
+            const float noise = static_cast<float>(static_cast<int32_t>(scrapeRng)) / static_cast<float>(0x7FFFFFFFu);
+            const float hfScrape = noise - 0.72f * scrapeFilterState;
+            scrapeFilterState = noise;
+            const float progress = 1.0f - static_cast<float>(scrapeSamplesLeft) / static_cast<float>(scrapeTotalSamples);
+            const float env = (progress < 0.12f) ? (progress / 0.12f) : std::exp(-4.2f * (progress - 0.12f));
+            scrapeForce = scrapeAmp * hfScrape * env * 0.35f;
+            scrapeSamplesLeft--;
+        }
+        bridgeForce += scrapeForce;
+
         // Bone saddle dual-pole terminating mechanical impedance lowpass filter (12 dB/octave)
         saddleFilterState  = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
         saddleFilterState2 = (1.0f - saddleBeta) * saddleFilterState + saddleBeta * saddleFilterState2;
@@ -778,7 +854,44 @@ public:
 
         // Mix: V drives the saddle directly (100%); H couples laterally at ~35%.
         // The lateral rocking force on the saddle is less efficient than vertical drive.
-        return saddleFilterState2 + 0.35f * saddleFilterState2H;
+        const float transverseMix = saddleFilterState2 + 0.35f * saddleFilterState2H;
+
+        // ── Longitudinal String Physics: Phantom Harmonics (2f0, 4f0) & P-wave Snap ──
+        // 1. Dynamic string elongation:
+        // Delta L = -0.5 * h * sum(u_curr[i] * Du[i])
+        // Delta T = (EA / L) * Delta L
+        float uDotDu = 0.0f;
+        for (int i = 0; i < N_pts; ++i)
+            uDotDu += u_curr[static_cast<size_t>(i)] * Du[static_cast<size_t>(i)];
+
+        const float elongation = -0.5f * h * uDotDu;
+        const float deltaT = (EA / p.L) * elongation;
+
+        // Bone saddle break angle (~18 deg) couples dynamic tension fluctuations
+        // into downward vertical force on soundboard, oscillating at 2*f0, 4*f0.
+        // Dimensionless slope scale: (deltaT / T0) * breakAngleCoupling
+        const float phantomRaw = (deltaT / p.T0) * (p.phantomCoupling * 0.40f);
+        const float dcOutPhantom = phantomRaw - dcBlockerStatePhantom + dcR * prevRawForcePhantom;
+        dcBlockerStatePhantom = phantomRaw;
+        prevRawForcePhantom   = dcOutPhantom;
+
+        // Saddle filter for phantom harmonics
+        saddleFilterPhantom = (1.0f - saddleBeta) * dcOutPhantom + saddleBeta * saddleFilterPhantom;
+
+        // 2. Longitudinal P-wave attack resonator (eigenfrequency f_L = c_L / 2L):
+        // Solves: xi^n = impulse - b1 * xi^{n-1} - b2 * xi^{n-2}
+        const float longSample = longitudinalImpulse - longitudinalB1 * longitudinalS1 - longitudinalB2 * longitudinalS2;
+        longitudinalImpulse = 0.0f; // one-shot release impulse
+        longitudinalS2 = longitudinalS1;
+        longitudinalS1 = longSample;
+
+        // Combined bridge output:
+        // - Transverse V (100%) & H (35%)
+        // - Dynamic Phantom Harmonics 2*f0 (octave bloom)
+        // - Axial P-wave attack snap (scaled so as not to sound like a metallic piano wire ping)
+        const float longAcoustic = longSample * 0.06f;
+        const float phantomAcoustic = saddleFilterPhantom * 0.40f;
+        return transverseMix + phantomAcoustic + longAcoustic;
     }
 
     /** Fast string displacement energy estimate for voice stealing. */
@@ -947,4 +1060,22 @@ private:
     float prevRawForceH     = 0.0f;
     float saddleFilterStateH  = 0.0f;
     float saddleFilterState2H = 0.0f;
+
+    // Longitudinal string physics state (Phantom Harmonics & P-wave attack snap)
+    float longitudinalB1 = 0.0f;
+    float longitudinalB2 = 0.0f;
+    float longitudinalR  = 0.0f;
+    float longitudinalS1 = 0.0f;
+    float longitudinalS2 = 0.0f;
+    float longitudinalImpulse = 0.0f;
+    float dcBlockerStatePhantom = 0.0f;
+    float prevRawForcePhantom = 0.0f;
+    float saddleFilterPhantom = 0.0f;
+
+    // Tactile fingernail contact scrape & flesh thump transient
+    int scrapeSamplesLeft = 0;
+    int scrapeTotalSamples = 0;
+    float scrapeAmp = 0.0f;
+    float scrapeFilterState = 0.0f;
+    uint32_t scrapeRng = 0x12345678u;
 };

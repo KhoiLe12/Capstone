@@ -47,9 +47,9 @@ public:
     static constexpr int GUITAR_MIN_NOTE     = 38; ///< D2 (Standard Drop-D lowest note; standard E2 is 40)
     static constexpr int GUITAR_MAX_NOTE     = 86; ///< D6 (22nd fret high E string)
 
-    float paramDecay       = 0.80f;   ///< String sustain (0..1)
+    float paramDecay       = 0.70f;   ///< String sustain (0..1)
     float paramBrightness  = 0.60f;   ///< Exciter brightness / nail polish (0..1)
-    float paramPickPos     = 0.13f;   ///< Pick/finger strike position (0.05..0.5)
+    float paramPickPos     = 0.23f;   ///< Pick/finger strike position (0.05..0.5) (0.23 = classical soundhole)
     float paramBodyMix     = 0.70f;   ///< Body coupling (0 = solid electric, 1 = acoustic)
     float paramMasterGain  = 0.80f;   ///< Output master level (0..1)
     float paramStiffness   = 0.05f;   ///< Inharmonicity / acoustic string dispersion (0..1)

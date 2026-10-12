@@ -27,7 +27,7 @@ HybridSynthProcessor::createParameterLayout()
         juce::ParameterID{ "decay", 1 },
         "Decay",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.80f));
+        0.70f));
 
     // Brightness: spectral content of exciter burst / fingernail polish
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -36,12 +36,12 @@ HybridSynthProcessor::createParameterLayout()
         juce::NormalisableRange<float>(0.f, 1.f),
         0.60f));
 
-    // Pick Position: fractional position of plectrum/finger along string
+    // Pick Position: fractional position of plectrum/finger along string (0.23 = acoustic soundhole)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "pickPosition", 1 },
         "Pick Position",
         juce::NormalisableRange<float>(0.05f, 0.50f),
-        0.13f));
+        0.23f));
 
     // Stiffness: string inharmonicity / dispersion (0 = pure harmonic, 1 = metallic steel)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

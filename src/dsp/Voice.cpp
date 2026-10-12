@@ -96,17 +96,17 @@ void Voice::noteOn(int note, float vel,
         const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel), 0.05f, 1.0f);
 
         // Register-dependent acoustic decay and compliance:
-        // On a real guitar, higher pitched / shorter fretted strings complete more vibration
-        // cycles per second, draining energy into the bridge soundboard proportionally faster.
-        // Bass strings (E2..D3) sustain for 7-9 seconds; high frets (C6..D6) decay in 0.35-0.5 seconds.
+        // Higher pitched / fretted notes complete more vibration cycles per second, draining energy faster.
+        // Tuned to give high frets singing sustain through 8th notes (matching authentic nylon reference)
+        // without harsh synthetic screeching.
         const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
-        const float registerDecayScale = std::pow(fRatio, 1.15f);
-        float effSigma0 = (0.5f + 1.0f * (1.0f - decay)) * registerDecayScale;
+        const float registerDecayScale = std::pow(fRatio, 0.80f);
+        float effSigma0 = (0.75f + 1.25f * (1.0f - decay)) * registerDecayScale;
 
         // Plain nylon treble damping across the entire register up to 1200 Hz:
-        // High fretted notes have rapid loss on high partials, completely taming harsh synthetic screeching.
+        // Keeps high harmonics smooth and warm like real nylon while allowing full sustain.
         const float trebleFactor = std::clamp((targetFreq - 146.0f) / (1175.0f - 146.0f), 0.0f, 1.0f);
-        float effSigma1 = 1.5e-4f + 2.5e-3f * trebleFactor;
+        float effSigma1 = 1.5e-4f + 1.8e-3f * trebleFactor;
         float effDispScale = 1.0f;
 
         if (muteMode == KarplusStrong::MuteMode::Palm)
@@ -133,9 +133,8 @@ void Voice::noteOn(int note, float vel,
         fdtdString.init(sampleRate, p);
 
         // String physical compliance scales with vibrating length:
-        // C_string = L / (4 * T0). Short fretted strings displace less under equal fingertip force.
-        // This also balances bridge force (d_u/d_x ~ u_peak / L) perfectly across all 22 frets.
-        const float lengthScale = std::clamp(p.L / 0.65f, 0.35f, 1.0f);
+        // Gentle square-root scaling maintains solid acoustic volume and punch on high fretted notes.
+        const float lengthScale = std::clamp(std::sqrt(p.L / 0.65f), 0.60f, 1.0f);
         const float peakDisp = (-0.0003f - 0.0009f * velocity) * effDispScale * lengthScale;
         const float clampedPickPos = std::clamp(pickPosition, 0.10f, 0.50f);
         fdtdString.pluckDisplacement(clampedPickPos, peakDisp, effBrightness);
