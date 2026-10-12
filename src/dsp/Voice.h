@@ -127,4 +127,13 @@ private:
 
     static constexpr int kMaxExciterLength = 2216;
     float exciterScratch[kMaxExciterLength] = {};
+
+    uint32_t humanRngState = 0x5a17e105u;
+    float humanRand() noexcept
+    {
+        humanRngState ^= humanRngState << 13u;
+        humanRngState ^= humanRngState >> 17u;
+        humanRngState ^= humanRngState << 5u;
+        return static_cast<float>(static_cast<int32_t>(humanRngState)) / static_cast<float>(0x7FFFFFFFu);
+    }
 };

@@ -53,6 +53,7 @@ public:
         //    creating a metallic bell-like "ping" transient that decays within 20-35 ms.
         float phantomCoupling    = 0.20f; ///< Saddle break angle coupling for 2f0 dynamic tension modulation
         float longitudinalAttack = 0.15f; ///< P-wave axial release resonance strength during initial attack
+        float woundFactor        = 0.0f;  ///< 1.0 = heavy wound bass (E2), 0.0 = plain nylon treble (G3+)
 
         // Collisions
         float m0      = -0.0012f;     ///< Fret wire protrusion height below string (m)
@@ -297,7 +298,7 @@ public:
     }
 
     /** Excite string with physical acoustic fingertip flesh contour and brightness. */
-    void pluckDisplacement(float xLocFraction, float peakDisplacementMeters, float brightness = 0.5f)
+    void pluckDisplacement(float xLocFraction, float peakDisplacementMeters, float brightness = 0.5f, float humanAngle = 0.0f)
     {
         const float xLoc = std::clamp(xLocFraction, 0.05f, 0.95f) * p.L;
         const float b = std::clamp(brightness, 0.05f, 1.0f);
@@ -369,8 +370,8 @@ public:
 
         // H-polarization initial conditions:
         // The nail sweeps primarily perpendicular (V direction). Lateral deflection (H)
-        // is ~45% of the peak displacement. Released from rest (u_prev_H == u_curr_H).
-        const float hAmp = 0.45f;
+        // is ~45% of peak displacement, with organic human stroke variation (+/- 6%)
+        const float hAmp = std::clamp(0.45f + 0.06f * humanAngle, 0.35f, 0.55f);
         for (int i = 0; i < N_pts; ++i)
             u_curr_H[static_cast<size_t>(i)] = hAmp * u_curr[static_cast<size_t>(i)];
         u_prev_H = u_curr_H;
@@ -393,9 +394,12 @@ public:
         saddleFilterPhantom = 0.0f;
 
         // Tactile scrape generator initialization
-        scrapeTotalSamples = static_cast<int>(0.014f * fs); // ~14ms
+        // Wound strings have wider contact and longer pre-release rasp (~17ms)
+        // Plain treble nylon has crisp, glassy micro-slip (~7ms)
+        const float scrapeDurationSec = 0.007f + 0.010f * p.woundFactor;
+        scrapeTotalSamples = static_cast<int>(scrapeDurationSec * fs);
         scrapeSamplesLeft = scrapeTotalSamples;
-        scrapeAmp = std::abs(peakDisplacementMeters) * (0.15f + 0.35f * b);
+        scrapeAmp = std::abs(peakDisplacementMeters) * (0.10f + 0.25f * b) * (0.8f + 0.4f * p.woundFactor);
         scrapeFilterState = 0.0f;
     }
 
@@ -771,7 +775,18 @@ public:
             scrapeFilterState = noise;
             const float progress = 1.0f - static_cast<float>(scrapeSamplesLeft) / static_cast<float>(scrapeTotalSamples);
             const float env = (progress < 0.12f) ? (progress / 0.12f) : std::exp(-4.2f * (progress - 0.12f));
-            scrapeForce = scrapeAmp * hfScrape * env * 0.35f;
+
+            // Wound bass string winding rasp vs plain nylon glassy slip:
+            float texture = hfScrape;
+            if (p.woundFactor > 0.05f)
+            {
+                // Winding ridge corrugation texture (~2400 Hz)
+                const float ridgePhase = static_cast<float>(scrapeTotalSamples - scrapeSamplesLeft) * (2400.0f * 6.2831853f / fs);
+                const float ridgeRasp = std::sin(ridgePhase);
+                texture = (1.0f - 0.45f * p.woundFactor) * hfScrape + (0.45f * p.woundFactor) * ridgeRasp * (0.8f + 0.2f * noise);
+            }
+
+            scrapeForce = scrapeAmp * texture * env * 0.35f;
             scrapeSamplesLeft--;
         }
         bridgeForce += scrapeForce;

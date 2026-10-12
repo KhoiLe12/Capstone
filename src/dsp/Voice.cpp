@@ -91,9 +91,12 @@ void Voice::noteOn(int note, float vel,
         if (T0 < 5.0f) T0 = 5.0f;
         p.T0 = T0;
 
-        // Dynamic velocity-dependent brightness (harder plucks produce crisper fingernail release bite):
+        // Dynamic velocity-dependent brightness with humanization micro-variation:
         const float clampedVel = std::clamp(velocity, 0.01f, 1.0f);
-        const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel), 0.05f, 1.0f);
+        const float humanJitter = 1.0f + 0.03f * humanRand();
+        const float pickJitter  = 0.012f * humanRand();
+        const float humanAngle  = humanRand();
+        const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel) * humanJitter, 0.05f, 1.0f);
 
         // Register-dependent acoustic decay and compliance:
         // Higher pitched / fretted notes complete more vibration cycles per second, draining energy faster.
@@ -127,17 +130,25 @@ void Voice::noteOn(int note, float vel,
         p.sigma0 = effSigma0;
         p.sigma1 = effSigma1;
         p.brightness = effBrightness;
-        p.m0 = -0.0014f; // authentic classical action clearance (1.4 mm)
-        p.b0 = -0.0030f; // fretboard clearance (3.0 mm)
+
+        // Physical wound bass string vs plain nylon treble factor:
+        // Strings 0 (E2), 1 (A2), 2 (D3) are silver-plated wound nylon core (winding rasp);
+        // Strings 3 (G3), 4 (B3), 5 (E4) are smooth plain monofilament nylon (glassy slip).
+        p.woundFactor = (s <= 2) ? (1.0f - static_cast<float>(s) * 0.25f) : 0.0f;
+
+        // Calibrated classical guitar fret action clearance (1.3 mm bass down to 1.0 mm treble)
+        p.m0 = -0.0010f - 0.0003f * (1.0f - static_cast<float>(s) / 5.0f);
+        p.b0 = -0.0028f;
 
         fdtdString.init(sampleRate, p);
 
-        // String physical compliance scales with vibrating length:
-        // Gentle square-root scaling maintains solid acoustic volume and punch on high fretted notes.
+        // String physical compliance scales with vibrating length and velocity:
+        // Hard plucks (velocity > 0.8) drive string into fret obstacle barrier for authentic sizzle/growl;
+        // Soft and medium plucks (velocity < 0.7) stay cleanly above frets for pure, warm tone.
         const float lengthScale = std::clamp(std::sqrt(p.L / 0.65f), 0.60f, 1.0f);
-        const float peakDisp = (-0.0003f - 0.0009f * velocity) * effDispScale * lengthScale;
-        const float clampedPickPos = std::clamp(pickPosition, 0.10f, 0.50f);
-        fdtdString.pluckDisplacement(clampedPickPos, peakDisp, effBrightness);
+        const float peakDisp = (-0.0004f - 0.00125f * clampedVel) * effDispScale * lengthScale;
+        const float clampedPickPos = std::clamp(pickPosition + pickJitter, 0.08f, 0.48f);
+        fdtdString.pluckDisplacement(clampedPickPos, peakDisp, effBrightness, humanAngle);
 
         if (muteMode == KarplusStrong::MuteMode::Full)
         {
