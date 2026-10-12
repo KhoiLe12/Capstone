@@ -82,6 +82,11 @@ private:
     float crossDelayR[CROSS_DELAY_LEN] = {};
     int   crossDelayIdx = 0;
 
+    // Wood viscosity & high-frequency air dispersion filter (gentle 10 kHz acoustic roll-off)
+    float airFilterL = 0.0f;
+    float airFilterR = 0.0f;
+    float airFilterBeta = 0.0f;
+
     // Zero-latency partitioned stereo convolution engine
     juce::dsp::Convolution convolution { juce::dsp::Convolution::Latency { 0 } };
     int loadedIRType = -1;

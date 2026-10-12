@@ -80,6 +80,12 @@ void BodyResonance::init(float sr, int blockSize, float bodySize, float bodyDamp
     convBufferL.assign(static_cast<size_t>(maxBlockSize), 0.f);
     convBufferR.assign(static_cast<size_t>(maxBlockSize), 0.f);
 
+    // Wood viscosity & air dispersion filter (~10 kHz gentle cutoff)
+    const float cutoff = 10500.0f;
+    airFilterBeta = std::exp(-2.0f * 3.14159265358979323846f * cutoff / sampleRate);
+    airFilterL = 0.0f;
+    airFilterR = 0.0f;
+
     updateFilters();
     loadInternalIR(currentBodyType);
 }
@@ -232,6 +238,17 @@ void BodyResonance::processBlock(float* channelL, float* channelR, int numSample
             offset += currentChunk;
             remaining -= currentChunk;
         }
+
+        // Apply acoustic wood viscosity & air dispersion filter (~10 kHz smooth roll-off)
+        // Gentle single-pole lowpass eliminates artificial high-frequency digital harshness
+        const float alpha = 1.0f - airFilterBeta;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            airFilterL = alpha * channelL[i] + airFilterBeta * airFilterL;
+            channelL[i] = airFilterL;
+            airFilterR = alpha * channelR[i] + airFilterBeta * airFilterR;
+            channelR[i] = airFilterR;
+        }
     }
 }
 
@@ -290,5 +307,7 @@ void BodyResonance::reset() noexcept
     std::fill_n(crossDelayL, CROSS_DELAY_LEN, 0.f);
     std::fill_n(crossDelayR, CROSS_DELAY_LEN, 0.f);
     crossDelayIdx = 0;
+    airFilterL = 0.0f;
+    airFilterR = 0.0f;
     convolution.reset();
 }

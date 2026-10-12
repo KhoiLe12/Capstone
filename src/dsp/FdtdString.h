@@ -884,8 +884,10 @@ public:
 
         // Bone saddle break angle (~18 deg) couples dynamic tension fluctuations
         // into downward vertical force on soundboard, oscillating at 2*f0, 4*f0.
-        // Dimensionless slope scale: (deltaT / T0) * breakAngleCoupling
-        const float phantomRaw = (deltaT / p.T0) * (p.phantomCoupling * 0.40f);
+        // On real strings, tension modulation is strictly quadratic with vibration amplitude.
+        // Dynamic quadratic scaling: blooms on hard plucks, disappears on delicate touches.
+        const float potScale = std::clamp(std::abs(elongation) / (0.00015f + 1e-9f), 0.05f, 2.50f);
+        const float phantomRaw = (deltaT / p.T0) * (p.phantomCoupling * 0.35f * potScale);
         const float dcOutPhantom = phantomRaw - dcBlockerStatePhantom + dcR * prevRawForcePhantom;
         dcBlockerStatePhantom = phantomRaw;
         prevRawForcePhantom   = dcOutPhantom;
@@ -905,7 +907,7 @@ public:
         // - Dynamic Phantom Harmonics 2*f0 (octave bloom)
         // - Axial P-wave attack snap (scaled so as not to sound like a metallic piano wire ping)
         const float longAcoustic = longSample * 0.06f;
-        const float phantomAcoustic = saddleFilterPhantom * 0.40f;
+        const float phantomAcoustic = saddleFilterPhantom * 0.35f;
         return transverseMix + phantomAcoustic + longAcoustic;
     }
 

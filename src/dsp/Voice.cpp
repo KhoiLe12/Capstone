@@ -104,7 +104,12 @@ void Voice::noteOn(int note, float vel,
         // without harsh synthetic screeching.
         const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
         const float registerDecayScale = std::pow(fRatio, 0.80f);
-        float effSigma0 = (0.75f + 1.25f * (1.0f - decay)) * registerDecayScale;
+
+        // Fretboard Positional Damping Profile:
+        // Open strings (fret == 0) rest on a hard bone nut, producing longer sustain and clearer ring-out (~0.88x loss).
+        // Fretted strings (fret > 0) have flesh damping from the fingerpad behind the fret wire (~1.08x loss).
+        const float nutVsFretScale = (fret == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(fret));
+        float effSigma0 = (0.75f + 1.25f * (1.0f - decay)) * registerDecayScale * nutVsFretScale;
 
         // Plain nylon treble damping across the entire register up to 1200 Hz:
         // Keeps high harmonics smooth and warm like real nylon while allowing full sustain.
