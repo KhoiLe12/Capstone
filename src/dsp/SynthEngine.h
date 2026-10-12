@@ -1,6 +1,7 @@
 #pragma once
 #include "Voice.h"
 #include "BodyResonance.h"
+#include "SympatheticResonance.h"
 
 /**
  * SynthEngine — Multi-Port Digital Waveguide Orchestrator & Modal Body Coupler.
@@ -99,6 +100,7 @@ public:
 private:
     Voice         voices[NUM_VOICES];
     BodyResonance body;
+    SympatheticResonance sympathetic;
     float         sampleRate = 44100.f;
     float         currentBpm = 120.0f;
 

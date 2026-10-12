@@ -17,6 +17,7 @@ void SynthEngine::init(float sr, int blockSize)
         voices[i].setPhysicalStringIndex(i);
     }
     body.init(sr, blockSize, paramBodySize, 1.0f);
+    sympathetic.init(sr);
     reset();
 }
 
@@ -381,6 +382,23 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             }
         }
 
+        // Update open-string fretting damping:
+        // If an active voice is fretted on physical string s, its open length is damped
+        bool stringActive[6] = { false, false, false, false, false, false };
+        for (int v = 0; v < NUM_VOICES; ++v)
+        {
+            if (voices[v].isActive())
+            {
+                const int sIdx = voices[v].getPhysicalStringIndex();
+                if (sIdx >= 0 && sIdx < 6)
+                    stringActive[sIdx] = true;
+            }
+        }
+        for (int s = 0; s < 6; ++s)
+            sympathetic.setStringFretted(s, stringActive[s]);
+
+        sympathetic.setMuted(isPalmMuteActive(), isFullMuteActive());
+
         float totalBridgeForce = 0.f;
         int activeVoices = 0;
 
@@ -393,14 +411,19 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             totalBridgeForce += voices[v].tick();
         }
 
+        // Cross-bridge sympathetic resonance:
+        // Driving bridge force excites unplayed open strings, scaled subtly by acoustic body coupling
+        const float sympatheticForce = sympathetic.process(totalBridgeForce);
+        const float coupledBridgeForce = totalBridgeForce + sympatheticForce * (0.05f * paramBodyMix);
+
         // Polyphonic bridge impedance headroom:
         // Acoustic soundboard mechanical impedance distributes multi-string chord displacement (1 / sqrt(N))
         const float polyScale = (activeVoices > 1)
             ? (1.0f / std::sqrt(static_cast<float>(activeVoices)))
             : 1.0f;
 
-        outputL[i] = totalBridgeForce * polyScale;
-        outputR[i] = totalBridgeForce * polyScale;
+        outputL[i] = coupledBridgeForce * polyScale;
+        outputR[i] = coupledBridgeForce * polyScale;
     }
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
@@ -471,6 +494,7 @@ void SynthEngine::reset()
     for (auto& v : voices)
         v.reset();
     body.reset();
+    sympathetic.reset();
     dcX_L = 0.f; dcY_L = 0.f;
     dcX_R = 0.f; dcY_R = 0.f;
     keyswitchPalmMuteActive = false;
