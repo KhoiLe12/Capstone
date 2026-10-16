@@ -83,6 +83,7 @@ public:
         fs = sampleRateHz;
         k  = 1.0f / fs;
         p  = params;
+        initialSigma1 = p.sigma1;
 
         // Derived physical constants
         const float A = 3.14159265358979323846f * p.r * p.r;
@@ -280,11 +281,15 @@ public:
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
     bool isFingerEngaged() const noexcept { return fingerEngaged; }
 
-    /** Dynamically update loss parameters for palm muting or choking mid-note. */
-    void setDamping(float sigma0, float sigma1) noexcept
+    /** Dynamically update loss parameters for palm muting, choking or release mid-note. */
+    void setDamping(float sigma0, float sigma1 = -1.0f) noexcept
     {
         p.sigma0 = sigma0;
-        p.sigma1 = sigma1;
+        // Never allow sigma1 to exceed the CFL stability bound determined at init()
+        if (sigma1 > 0.0f)
+            p.sigma1 = std::min(sigma1, initialSigma1);
+        else
+            p.sigma1 = initialSigma1;
         lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
     }
 
@@ -1031,6 +1036,7 @@ private:
     float prevXiF = 0.0f;
     float prevRawForce = 0.0f;
     float dcBlockerState = 0.0f;
+    float initialSigma1 = 1.3e-4f;
 
     // Pre-allocated scratch buffers (zero heap allocations in tick)
     std::vector<float> Du;

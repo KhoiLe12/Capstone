@@ -15,7 +15,7 @@
 class SynthEngine
 {
 public:
-    static constexpr int NUM_VOICES = 12; ///< 12-voice polyphonic pool with physical string differentiation
+    static constexpr int NUM_VOICES = 6; ///< 6 physical guitar strings (0 = E2, 1 = A2, 2 = D3, 3 = G3, 4 = B3, 5 = E4)
 
     SynthEngine() = default;
 
@@ -120,6 +120,7 @@ private:
     static constexpr int MAX_PENDING_PLUCKS = 16;
     struct StrumPluck
     {
+        int   stringIdx    = -1;
         int   midiNote     = -1;
         float velocity     = 0.f;
         float brightness   = 0.f;
@@ -129,7 +130,7 @@ private:
     StrumPluck pendingPlucks[MAX_PENDING_PLUCKS];
 
     void triggerStrum(bool isDownstroke, float velOverride = -1.0f) noexcept;
-    void schedulePluck(int midiNote, float velocity, float brightness, int delaySamples) noexcept;
+    void schedulePluck(int stringIdx, int midiNote, float velocity, float brightness, int delaySamples) noexcept;
 
     void syncVoiceMuteModes() noexcept;
 

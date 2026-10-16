@@ -202,7 +202,14 @@ void Voice::noteOff() noexcept
     // Begin smooth acoustic release envelope
     releasing = true;
     if (engineType == EngineType::DigitalWaveguide)
+    {
         string.damp();
+    }
+    else
+    {
+        // Physical flesh damping when finger releases fret wire (sigma0 viscous loss, unconditionally stable)
+        fdtdString.setDamping(40.0f);
+    }
 }
 
 void Voice::setMuteMode(KarplusStrong::MuteMode mode) noexcept
@@ -212,15 +219,15 @@ void Voice::setMuteMode(KarplusStrong::MuteMode mode) noexcept
 
     if (mode == KarplusStrong::MuteMode::Palm)
     {
-        fdtdString.setDamping(24.0f, 8.0e-4f);
+        fdtdString.setDamping(28.0f);
     }
     else if (mode == KarplusStrong::MuteMode::Full)
     {
-        fdtdString.setDamping(65.0f, 2.0e-3f);
+        fdtdString.setDamping(70.0f);
     }
     else
     {
-        fdtdString.setDamping(0.5f + 1.0f * (1.0f - currentDecay), 1.0e-4f);
+        fdtdString.setDamping(0.75f + 1.25f * (1.0f - currentDecay));
     }
 }
 
@@ -242,8 +249,8 @@ void Voice::choke(float chokeVelocity) noexcept
     // Transient impulse of ~45ms excites the acoustic body IR without synthetic bass boom
     chokeSamplesLeft = static_cast<int>(0.045f * sampleRate);
 
-    // Instant damping for FDTD physical string
-    fdtdString.setDamping(95.0f, 4.0e-3f);
+    // Instant damping for FDTD physical string (pure sigma0, CFL safe)
+    fdtdString.setDamping(95.0f);
 
     const float freq = midiToFreq(midiNote > 0 ? midiNote : 40);
     const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);
@@ -351,7 +358,8 @@ float Voice::tick() noexcept
     else
     {
         const float currentEnergy = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
-        if (currentEnergy < 1e-7f && fadeSamplesLeft < 0)
+        const float silenceThresh = (engineType == EngineType::BilbaoFdtd) ? 2e-4f : 1e-7f;
+        if (currentEnergy < silenceThresh && fadeSamplesLeft < 0)
         {
             // Natural ring-out also fades out cleanly instead of hard-cutting
             fadeSamplesLeft = 64;
@@ -395,6 +403,18 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         fV *= 95.0f;
         fH *= 95.0f;
 
+        // Safety guard against NaN/Inf or runaway numerical explosion
+        if (std::isnan(fV) || std::isinf(fV) || std::abs(fV) > 50.0f ||
+            std::isnan(fH) || std::isinf(fH) || std::abs(fH) > 50.0f)
+        {
+            fdtdString.reset();
+            string.reset();
+            active = false;
+            outV = 0.0f;
+            outH = 0.0f;
+            return;
+        }
+
         // Apply choking, envelope and fade
         float gainScale = 1.0f;
         if (choking)
@@ -417,7 +437,7 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         }
         else
         {
-            if (fdtdString.getEnergy() < 1e-7f && fadeSamplesLeft < 0)
+            if (fdtdString.getEnergy() < 2e-4f && fadeSamplesLeft < 0)
                 fadeSamplesLeft = 64;
         }
 

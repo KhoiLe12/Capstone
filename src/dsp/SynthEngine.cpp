@@ -95,27 +95,36 @@ void SynthEngine::noteOn(int midiNote, float velocity)
 
     heldNotes[midiNote] = velocity;
 
+    // If strumming is active (via parameter toggle or keyswitch),
+    // held notes define the chord for the strumming engine.
+    if (isStrumActive())
+    {
+        int heldCount = 0;
+        for (int n = GUITAR_MIN_NOTE; n <= GUITAR_MAX_NOTE; ++n)
+            if (heldNotes[n] > 0.001f)
+                heldCount++;
+
+        // If this is the start of a new chord (first note pressed), immediately trigger downstroke strum
+        if (heldCount == 1)
+        {
+            const int samplesPer8th = std::max(100, static_cast<int>((30.0f / currentBpm) * sampleRate));
+            strumSampleCounter = samplesPer8th;
+            triggerStrum(true, velocity);
+            nextStrumIsDown = false;
+        }
+        return;
+    }
+
     const bool isFdtd = (paramEngineType >= 0.5f);
+    const int s = assignStringForNote(midiNote);
 
-    int s = 0;
-    if (midiNote < 45)      s = 0;
-    else if (midiNote < 50) s = 1;
-    else if (midiNote < 55) s = 2;
-    else if (midiNote < 59) s = 3;
-    else if (midiNote < 64) s = 4;
-    else                    s = 5;
-
-    int idx = findVoiceForNote(midiNote);
-    if (idx < 0)
-        idx = findFreeVoice();
-
-    voices[idx].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-    voices[idx].setPhysicalStringIndex(s);
+    voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+    voices[s].setPhysicalStringIndex(s);
 
     const auto muteMode = getEffectiveMuteMode();
-    voices[idx].noteOn(midiNote, velocity,
-                       paramBrightness, paramPickPos, paramDecay,
-                       paramStiffness, muteMode, s);
+    voices[s].noteOn(midiNote, velocity,
+                     paramBrightness, paramPickPos, paramDecay,
+                     paramStiffness, muteMode, s);
 }
 
 void SynthEngine::noteOff(int midiNote)
@@ -151,10 +160,10 @@ void SynthEngine::noteOff(int midiNote)
 
     heldNotes[midiNote] = 0.0f;
 
-    for (auto& v : voices)
+    for (int s = 0; s < NUM_VOICES; ++s)
     {
-        if (v.getMidiNote() == midiNote && v.isActive())
-            v.noteOff();
+        if (voices[s].getMidiNote() == midiNote && voices[s].isActive())
+            voices[s].noteOff();
     }
 }
 
@@ -177,67 +186,101 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
 {
     lastStrumWasDown = isDownstroke;
 
-    // 1. Collect currently held notes from the keyboard
-    std::vector<std::pair<int, float>> chord;
-    chord.reserve(12);
+    // 1. Collect currently held notes from the keyboard (at most 6 notes on guitar)
+    std::pair<int, float> chord[6];
+    int chordSize = 0;
 
     for (int n = GUITAR_MIN_NOTE; n <= GUITAR_MAX_NOTE; ++n)
     {
         if (heldNotes[n] > 0.001f)
-            chord.push_back({ n, heldNotes[n] });
+        {
+            if (chordSize < 6)
+            {
+                chord[chordSize++] = { n, heldNotes[n] };
+            }
+        }
     }
 
     // Only strum when notes are actively held down on the keyboard.
-    // Never fallback to dying voices from previous chords to prevent horrific chord dissonance!
-    if (chord.empty())
+    if (chordSize == 0)
         return;
 
     // 2. Clear any stale pending plucks from previous strums to prevent inter-chord collision
     for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
         pendingPlucks[p].active = false;
 
-    // 3. Immediately damp any currently ringing voices that are NOT part of this chord.
-    // When switching chords, the fretting hand leaves old notes.
-    for (auto& v : voices)
+    // 3. Assign each note in the chord to a unique physical string (0..5)
+    // Sort chord notes from lowest to highest pitch
+    std::sort(chord, chord + chordSize, [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+
+    static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
+    bool stringUsed[6] = { false, false, false, false, false, false };
+    int noteToString[6] = { -1, -1, -1, -1, -1, -1 };
+
+    for (int i = 0; i < chordSize; ++i)
     {
-        if (v.isActive())
+        const int note = chord[i].first;
+        int s = 0;
+        if (note < 45)      s = 0;
+        else if (note < 50) s = 1;
+        else if (note < 55) s = 2;
+        else if (note < 59) s = 3;
+        else if (note < 64) s = 4;
+        else                s = 5;
+
+        if (!stringUsed[s])
         {
-            const int activeNote = v.getMidiNote();
-            bool isStillInChord = false;
-            for (const auto& p : chord)
+            stringUsed[s] = true;
+            noteToString[i] = s;
+        }
+        else
+        {
+            // Search for an unused string within reachable fret span (fret <= 7)
+            int bestAlt = -1;
+            int bestFret = 999;
+            for (int alt = 0; alt < 6; ++alt)
             {
-                if (p.first == activeNote)
+                if (!stringUsed[alt])
                 {
-                    isStillInChord = true;
-                    break;
+                    const int minOpen = (alt == 0) ? 38 : openMidi[alt];
+                    if (note >= minOpen)
+                    {
+                        const int fret = note - minOpen;
+                        if (fret <= 7 && fret < bestFret)
+                        {
+                            bestFret = fret;
+                            bestAlt = alt;
+                        }
+                    }
                 }
             }
-            if (!isStillInChord)
+            if (bestAlt >= 0)
             {
-                v.noteOff();
+                stringUsed[bestAlt] = true;
+                noteToString[i] = bestAlt;
+            }
+            else
+            {
+                noteToString[i] = s;
             }
         }
     }
 
-    // 4. Sort notes by stroke direction
-    if (isDownstroke)
+    // 4. Immediately damp any currently ringing strings that are NOT part of this chord!
+    // When switching chords, strings left behind are naturally muted.
+    for (int s = 0; s < 6; ++s)
     {
-        // Downstroke: sweep from lowest pitch to highest pitch
-        std::sort(chord.begin(), chord.end(), [](const auto& a, const auto& b) {
-            return a.first < b.first;
-        });
-    }
-    else
-    {
-        // Upstroke: sweep from highest pitch to lowest pitch
-        std::sort(chord.begin(), chord.end(), [](const auto& a, const auto& b) {
-            return a.first > b.first;
-        });
+        if (!stringUsed[s] && voices[s].isActive())
+        {
+            voices[s].noteOff();
+        }
     }
 
-    // 5. Directional acoustic physics:
-    // Downstroke: standard velocity and brightness
-    // Upstroke: slightly lighter velocity (~82%), brighter glancing edge (~115%)
+    // 5. Directional acoustic physics & strum order:
+    // Downstroke: lowest pitch / string to highest pitch / string (step = 0 .. chordSize - 1)
+    // Upstroke: highest pitch / string to lowest pitch / string
     const float strokeVelScale    = isDownstroke ? 1.0f : 0.82f;
     const float strokeBrightScale = isDownstroke ? 1.0f : 1.15f;
 
@@ -245,42 +288,35 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
     const float rakeTimeSec = isDownstroke ? 0.0025f : 0.0020f;
     const int rakeSamples = std::max(1, static_cast<int>(rakeTimeSec * sampleRate));
 
-    for (size_t i = 0; i < chord.size(); ++i)
+    for (int step = 0; step < chordSize; ++step)
     {
+        const int i = isDownstroke ? step : (chordSize - 1 - step);
+        const int s = noteToString[i];
+        if (s < 0 || s >= 6) continue;
+
         float baseVel = (velOverride > 0.001f) ? velOverride : chord[i].second;
         float vel = std::clamp(baseVel * strokeVelScale, 0.05f, 1.0f);
         float brt = std::clamp(paramBrightness * strokeBrightScale, 0.05f, 1.0f);
-        int delay = static_cast<int>(i) * rakeSamples;
+        int delay = step * rakeSamples;
 
-        schedulePluck(chord[i].first, vel, brt, delay);
+        schedulePluck(s, chord[i].first, vel, brt, delay);
     }
 }
 
-void SynthEngine::schedulePluck(int midiNote, float velocity, float brightness, int delaySamples) noexcept
+void SynthEngine::schedulePluck(int stringIdx, int midiNote, float velocity, float brightness, int delaySamples) noexcept
 {
     const bool isFdtd = (paramEngineType >= 0.5f);
-    const int s = assignStringForNote(midiNote);
+    const int s = std::clamp(stringIdx, 0, 5);
 
     if (delaySamples <= 0)
     {
-        // Choke any existing voice on physical string s playing a different note
-        for (auto& v : voices)
-        {
-            if (v.isActive() && v.getPhysicalStringIndex() == s && v.getMidiNote() != midiNote)
-                v.noteOff();
-        }
-
-        int idx = findVoiceForNote(midiNote);
-        if (idx < 0)
-            idx = findFreeVoice();
-
-        voices[idx].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-        voices[idx].setPhysicalStringIndex(s);
+        voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+        voices[s].setPhysicalStringIndex(s);
 
         const auto muteMode = getEffectiveMuteMode();
-        voices[idx].noteOn(midiNote, velocity,
-                           brightness, paramPickPos, paramDecay,
-                           paramStiffness, muteMode, s);
+        voices[s].noteOn(midiNote, velocity,
+                         brightness, paramPickPos, paramDecay,
+                         paramStiffness, muteMode, s);
         return;
     }
 
@@ -288,6 +324,7 @@ void SynthEngine::schedulePluck(int midiNote, float velocity, float brightness, 
     {
         if (!pendingPlucks[p].active)
         {
+            pendingPlucks[p].stringIdx    = s;
             pendingPlucks[p].midiNote     = midiNote;
             pendingPlucks[p].velocity     = velocity;
             pendingPlucks[p].brightness   = brightness;
@@ -355,28 +392,17 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                 if (pendingPlucks[p].delaySamples <= 0)
                 {
                     const bool isFdtd = (paramEngineType >= 0.5f);
-                    const int s = assignStringForNote(pendingPlucks[p].midiNote);
+                    const int s = std::clamp(pendingPlucks[p].stringIdx, 0, 5);
 
-                    // Choke any existing voice on physical string s playing a different note
-                    for (auto& v : voices)
-                    {
-                        if (v.isActive() && v.getPhysicalStringIndex() == s && v.getMidiNote() != pendingPlucks[p].midiNote)
-                            v.noteOff();
-                    }
-
-                    int idx = findVoiceForNote(pendingPlucks[p].midiNote);
-                    if (idx < 0)
-                        idx = findFreeVoice();
-
-                    voices[idx].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-                    voices[idx].setPhysicalStringIndex(s);
+                    voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
+                    voices[s].setPhysicalStringIndex(s);
 
                     const auto muteMode = getEffectiveMuteMode();
-                    voices[idx].noteOn(pendingPlucks[p].midiNote,
-                                       pendingPlucks[p].velocity,
-                                       pendingPlucks[p].brightness,
-                                       paramPickPos, paramDecay,
-                                       paramStiffness, muteMode, s);
+                    voices[s].noteOn(pendingPlucks[p].midiNote,
+                                     pendingPlucks[p].velocity,
+                                     pendingPlucks[p].brightness,
+                                     paramPickPos, paramDecay,
+                                     paramStiffness, muteMode, s);
                     pendingPlucks[p].active = false;
                 }
             }
@@ -484,6 +510,10 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     {
         float outL = outputL[i];
         float outR = outputR[i];
+
+        // Robust NaN/Inf safety guards: prevent corrupted audio samples from locking DC blocker state
+        if (std::isnan(outL) || std::isinf(outL)) { outL = 0.f; dcX_L = 0.f; dcY_L = 0.f; }
+        if (std::isnan(outR) || std::isinf(outR)) { outR = 0.f; dcX_R = 0.f; dcY_R = 0.f; }
 
         // 18 Hz Acoustic DC Blocker (guarantees zero DC offset and true acoustic centering)
         const float dcOutL = outL - dcX_L + R * dcY_L;
