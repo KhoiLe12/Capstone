@@ -113,6 +113,10 @@ Before declaring any task complete or committing code:
   - Integrated `pluginval` automated testing target in CMake (`target validate`).
   - Implemented `bench_synth` native benchmark harness with `RTCheck` (0 heap allocations).
   - Optimized Bilbao FDTD string: adaptive Sherman-Morrison fast path, $O(1)$ buffer swapping, branch-free stencils, and AVX2 (50% CPU reduction for 6 voices).
+- [x] **v41.f**:
+  - Implemented physical 6-string bridge saddle panning (symmetric constant-power layout).
+  - Added acoustic soundboard cross-plate wave transit delay (~0.25 ms Haas delay).
+  - Enabled active Mid/Side spatializer scaling from mono (0.0) to natural stereo (0.7) to wide studio (1.0).
 
 ---
 

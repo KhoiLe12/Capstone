@@ -365,10 +365,23 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     // 8th-note interval in samples based on DAW host tempo
     const int samplesPer8th = std::max(100, static_cast<int>((30.0f / currentBpm) * sampleRate));
 
+    // Physical bridge saddle positions: String 0 (Low E) to String 5 (High E)
+    // Normalized coordinates across the guitar bridge: -1.0 (bass bout / left) to +1.0 (treble bout / right)
+    static constexpr float kSaddlePanPos[6] = { -1.0f, -0.60f, -0.20f, 0.20f, 0.60f, 1.0f };
+    const float widthParam = std::clamp(paramStereoWidth, 0.0f, 1.0f);
+
+    // Precompute constant-power pan coefficients across the 6 strings:
+    // Max spread at full Width (1.0) is +-28% pan offset across the saddle
+    float stringPanL[6], stringPanR[6];
+    for (int s = 0; s < 6; ++s)
+    {
+        const float panS = kSaddlePanPos[s] * 0.28f * widthParam;
+        const float angle = 0.785398163f * (1.0f + panS); // pi/4 * (1 + panS)
+        stringPanL[s] = std::cos(angle) * 1.41421356f;
+        stringPanR[s] = std::sin(angle) * 1.41421356f;
+    }
+
     // 1. Advance all active string voices and sum bridge force into output buffers.
-    // All voices are summed to centre (mono mix-bus before the body IR).
-    // Stereo width is applied downstream via the M/S spatializer and body IR cross-delay,
-    // which create natural, pitch-independent spatial spread controlled by the Width knob.
     for (int i = 0; i < numSamples; ++i)
     {
         // Advance 8th-note strum interval timer
@@ -425,8 +438,9 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
 
         sympathetic.setMuted(isPalmMuteActive(), isFullMuteActive());
 
+        float forceL = 0.f;
+        float forceR = 0.f;
         float totalForceV = 0.f;
-        float totalForceH = 0.f;
         int activeVoices = 0;
 
         for (int v = 0; v < NUM_VOICES; ++v)
@@ -438,13 +452,21 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             float fV = 0.0f, fH = 0.0f;
             voices[v].tickPolar(fV, fH);
             totalForceV += fV;
-            totalForceH += fH;
+
+            const int s = std::clamp(voices[v].getPhysicalStringIndex(), 0, 5);
+
+            // Vertical force drives saddle with physical string pan position;
+            // Lateral force (H) rocks saddle dipole (+H on left bout, -H on right bout)
+            forceL += fV * stringPanL[s] + 0.35f * fH;
+            forceR += fV * stringPanR[s] - 0.35f * fH;
         }
 
         // Cross-bridge sympathetic resonance:
-        // Driving vertical bridge force excites unplayed open strings, scaled subtly by acoustic body coupling
+        // Driving vertical bridge force excites unplayed open strings, coupling equally across soundboard
         const float sympatheticForce = sympathetic.process(totalForceV);
-        const float coupledForceV = totalForceV + sympatheticForce * (0.05f * paramBodyMix);
+        const float coupledSymp = sympatheticForce * (0.05f * paramBodyMix);
+        forceL += coupledSymp;
+        forceR += coupledSymp;
 
         // Polyphonic bridge impedance headroom:
         // Acoustic soundboard mechanical impedance distributes multi-string chord displacement (1 / sqrt(N))
@@ -452,12 +474,22 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             ? (1.0f / std::sqrt(static_cast<float>(activeVoices)))
             : 1.0f;
 
-        // Dual-Axis Saddle Polar Radiation:
-        // Vertical force (V) pumps soundboard directly (100% into both channels in-phase).
-        // Lateral force (H) rocks the saddle across the bridge plate, exciting asymmetrical
-        // dipole modes (creating subtle anti-phase rocking moment in stereo soundboard field).
-        float driveL = (coupledForceV + 0.35f * totalForceH) * polyScale;
-        float driveR = (coupledForceV - 0.35f * totalForceH) * polyScale;
+        // Soundboard cross-plate acoustic wave transit delay (~0.25ms Haas inter-aural time difference):
+        // Bending waves travel across the spruce top plate from bass saddle to treble bout
+        const int delaySamples = std::max(2, std::min(SADDLE_DELAY_LEN - 1, static_cast<int>(sampleRate * 0.00025f)));
+        const int readIdx = (saddleDelayIdx - delaySamples + SADDLE_DELAY_LEN) % SADDLE_DELAY_LEN;
+
+        const float delayedL = saddleDelayL[readIdx];
+        const float delayedR = saddleDelayR[readIdx];
+
+        saddleDelayL[saddleDelayIdx] = forceL;
+        saddleDelayR[saddleDelayIdx] = forceR;
+        saddleDelayIdx = (saddleDelayIdx + 1) % SADDLE_DELAY_LEN;
+
+        // Acoustic cross-bout diffusion scaled smoothly by Stereo Width
+        const float kCrossBleed = 0.20f * widthParam;
+        float driveL = ((forceL + kCrossBleed * delayedR) / (1.0f + kCrossBleed)) * polyScale;
+        float driveR = ((forceR + kCrossBleed * delayedL) / (1.0f + kCrossBleed)) * polyScale;
 
         // Soundboard Compliance Bloom / Soft Wood Saturation:
         // Under heavy strumming and multi-string plucks, physical spruce soundboard compliance
@@ -551,6 +583,9 @@ void SynthEngine::reset()
     sympathetic.reset();
     dcX_L = 0.f; dcY_L = 0.f;
     dcX_R = 0.f; dcY_R = 0.f;
+    std::fill_n(saddleDelayL, SADDLE_DELAY_LEN, 0.f);
+    std::fill_n(saddleDelayR, SADDLE_DELAY_LEN, 0.f);
+    saddleDelayIdx = 0;
     keyswitchPalmMuteActive = false;
     keyswitchFullMuteActive = false;
     keyswitchStrumActive    = false;
