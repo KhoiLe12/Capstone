@@ -48,7 +48,18 @@ Before declaring any task complete or committing code:
 
 ---
 
-### C. Build & Environment Guidelines
+### C. Git & Remote Push Invariant: Never Push Autonomously
+- **NEVER run `git push` without explicit user confirmation**:
+  Even if builds, `pluginval`, and benchmarks pass with 100% success, NEVER push changes to GitHub autonomously.
+- **Workflow**:
+  1. Build the target and deploy the binary locally for testing.
+  2. Run `pluginval` and `bench_synth` to verify technical safety.
+  3. Notify the user to test and listen in their DAW / host.
+  4. Only commit or push after the user explicitly tests and confirms with "push to github" or gives direct authorization.
+
+---
+
+### D. Build & Environment Guidelines
 - **Windows Toolchain**:
   - Always use **MSVC `cl.exe`** initialized through Developer Command Prompt (`vcvars64.bat`) with Ninja:
     ```cmd
@@ -63,7 +74,7 @@ Before declaring any task complete or committing code:
 
 ---
 
-### D. Audio Thread Safety Invariants
+### E. Audio Thread Safety Invariants
 - **Zero Allocations**: Never call `malloc()`, `free()`, `new`, `delete`, or resizing methods (`std::vector::push_back`, `resize`, `reserve`, `juce::String` concatenation) inside `processBlock()`, `tick()`, or any audio thread callback.
 - **Pre-allocation**: All buffers, tables, and state vectors must be pre-allocated in `prepareToPlay()` or constructors.
 - **Buffer Swapping**: Rotate audio buffers using `std::vector::swap()` or pointer rotation ($O(1)$) instead of copying elements.
