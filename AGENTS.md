@@ -98,7 +98,7 @@ Before declaring any task complete or committing code:
 - [x] **v38.f**: Dynamic phantom scaling, fret damping profile, and wood air loss.
 - [x] **v39.f**: Dual-axis saddle polar radiation and soundboard compliance bloom.
 - [x] **v39.h**: CFL stability violation fix on note-off and NaN/Inf safety guards.
-- [x] **v40.0**: 
+- [x] **v40.f**: 
   - Integrated `pluginval` automated testing target in CMake (`target validate`).
   - Implemented `bench_synth` native benchmark harness with `RTCheck` (0 heap allocations).
   - Optimized Bilbao FDTD string: adaptive Sherman-Morrison fast path, $O(1)$ buffer swapping, branch-free stencils, and AVX2 (50% CPU reduction for 6 voices).
@@ -122,3 +122,4 @@ Before declaring any task complete or committing code:
 ### Known Watch-Items & Edge Cases
 - When running `pluginval` on Windows, ensure the VST3 bundle path inside `build/HybridSynth_artefacts/Release/VST3/Hybrid Synth.vst3` is freshly linked.
 - When adding parameters to `PluginProcessor.cpp`, verify that `pluginval` parameter accessors, discrete step counts, and default values pass strictness levels 5–8 without warnings.
+
