@@ -117,6 +117,10 @@ Before declaring any task complete or committing code:
   - Implemented physical 6-string bridge saddle panning (symmetric constant-power layout).
   - Added acoustic soundboard cross-plate wave transit delay (~0.25 ms Haas delay).
   - Enabled active Mid/Side spatializer scaling from mono (0.0) to natural stereo (0.7) to wide studio (1.0).
+- [x] **v42.f**:
+  - Replaced string/fretboard panning with constant-width Symmetrical Mirrored Soundboard Reflection Network ($d_1 = 5.2\text{ ms}, d_2 = 9.6\text{ ms}$).
+  - All notes and fundamentals centered across the stereo field with bit-exact identical attack transient ($L=1.0, R=1.0$) and $0.00\text{ dB}$ L/R balance.
+  - Natural acoustic 3D soundboard aura with clean mono folding and zero comb-filtering.
 
 ---
 

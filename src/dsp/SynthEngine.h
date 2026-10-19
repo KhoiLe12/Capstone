@@ -144,9 +144,8 @@ private:
     float dcX_R = 0.f;
     float dcY_R = 0.f;
 
-    // Acoustic soundboard cross-plate wave transit delay (~0.25ms Haas inter-aural time difference)
-    static constexpr int SADDLE_DELAY_LEN = 32;
-    float saddleDelayL[SADDLE_DELAY_LEN] = { 0.f };
-    float saddleDelayR[SADDLE_DELAY_LEN] = { 0.f };
-    int   saddleDelayIdx = 0;
+    // Symmetrical acoustic soundboard reflection network (constant stereo width, 0.00 dB L/R balance)
+    static constexpr int REFLECTION_BUF_SIZE = 2048;
+    float reflectionBuf[REFLECTION_BUF_SIZE] = { 0.f };
+    int   reflectionIdx = 0;
 };

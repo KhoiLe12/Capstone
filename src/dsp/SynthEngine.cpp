@@ -365,21 +365,10 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     // 8th-note interval in samples based on DAW host tempo
     const int samplesPer8th = std::max(100, static_cast<int>((30.0f / currentBpm) * sampleRate));
 
-    // Physical bridge saddle positions: String 0 (Low E) to String 5 (High E)
-    // Normalized coordinates across the guitar bridge: -1.0 (bass bout / left) to +1.0 (treble bout / right)
-    static constexpr float kSaddlePanPos[6] = { -1.0f, -0.60f, -0.20f, 0.20f, 0.60f, 1.0f };
+    // Symmetrical acoustic soundboard reflection delays (d1 = 5.2ms, d2 = 9.6ms)
+    const int d1 = std::clamp(static_cast<int>(sampleRate * 0.0052f), 4, REFLECTION_BUF_SIZE - 1);
+    const int d2 = std::clamp(static_cast<int>(sampleRate * 0.0096f), 8, REFLECTION_BUF_SIZE - 1);
     const float widthParam = std::clamp(paramStereoWidth, 0.0f, 1.0f);
-
-    // Precompute constant-power pan coefficients across the 6 strings:
-    // Max spread at full Width (1.0) is +-28% pan offset across the saddle
-    float stringPanL[6], stringPanR[6];
-    for (int s = 0; s < 6; ++s)
-    {
-        const float panS = kSaddlePanPos[s] * 0.28f * widthParam;
-        const float angle = 0.785398163f * (1.0f + panS); // pi/4 * (1 + panS)
-        stringPanL[s] = std::cos(angle) * 1.41421356f;
-        stringPanR[s] = std::sin(angle) * 1.41421356f;
-    }
 
     // 1. Advance all active string voices and sum bridge force into output buffers.
     for (int i = 0; i < numSamples; ++i)
@@ -438,8 +427,6 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
 
         sympathetic.setMuted(isPalmMuteActive(), isFullMuteActive());
 
-        float forceL = 0.f;
-        float forceR = 0.f;
         float totalForceV = 0.f;
         int activeVoices = 0;
 
@@ -451,22 +438,15 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             activeVoices++;
             float fV = 0.0f, fH = 0.0f;
             voices[v].tickPolar(fV, fH);
+            // All string fundamentals are 100% centered (constant spatial location for every note)
             totalForceV += fV;
-
-            const int s = std::clamp(voices[v].getPhysicalStringIndex(), 0, 5);
-
-            // Vertical force drives saddle with physical string pan position;
-            // Lateral force (H) rocks saddle dipole (+H on left bout, -H on right bout)
-            forceL += fV * stringPanL[s] + 0.35f * fH;
-            forceR += fV * stringPanR[s] - 0.35f * fH;
         }
 
         // Cross-bridge sympathetic resonance:
         // Driving vertical bridge force excites unplayed open strings, coupling equally across soundboard
         const float sympatheticForce = sympathetic.process(totalForceV);
         const float coupledSymp = sympatheticForce * (0.05f * paramBodyMix);
-        forceL += coupledSymp;
-        forceR += coupledSymp;
+        const float bridgeForce = totalForceV + coupledSymp;
 
         // Polyphonic bridge impedance headroom:
         // Acoustic soundboard mechanical impedance distributes multi-string chord displacement (1 / sqrt(N))
@@ -474,22 +454,24 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             ? (1.0f / std::sqrt(static_cast<float>(activeVoices)))
             : 1.0f;
 
-        // Soundboard cross-plate acoustic wave transit delay (~0.25ms Haas inter-aural time difference):
-        // Bending waves travel across the spruce top plate from bass saddle to treble bout
-        const int delaySamples = std::max(2, std::min(SADDLE_DELAY_LEN - 1, static_cast<int>(sampleRate * 0.00025f)));
-        const int readIdx = (saddleDelayIdx - delaySamples + SADDLE_DELAY_LEN) % SADDLE_DELAY_LEN;
+        const float monoBridge = bridgeForce * polyScale;
 
-        const float delayedL = saddleDelayL[readIdx];
-        const float delayedR = saddleDelayR[readIdx];
+        // Symmetrical Acoustic Soundboard Reflection Network:
+        // Symmetrical reflection taps guarantee bit-exact attack centering (0.00 dB L/R difference across all registers).
+        reflectionBuf[reflectionIdx] = monoBridge;
+        const int read1 = (reflectionIdx - d1 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
+        const int read2 = (reflectionIdx - d2 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
+        reflectionIdx = (reflectionIdx + 1) % REFLECTION_BUF_SIZE;
 
-        saddleDelayL[saddleDelayIdx] = forceL;
-        saddleDelayR[saddleDelayIdx] = forceR;
-        saddleDelayIdx = (saddleDelayIdx + 1) % SADDLE_DELAY_LEN;
+        const float ref1 = reflectionBuf[read1];
+        const float ref2 = reflectionBuf[read2];
 
-        // Acoustic cross-bout diffusion scaled smoothly by Stereo Width
-        const float kCrossBleed = 0.20f * widthParam;
-        float driveL = ((forceL + kCrossBleed * delayedR) / (1.0f + kCrossBleed)) * polyScale;
-        float driveR = ((forceR + kCrossBleed * delayedL) / (1.0f + kCrossBleed)) * polyScale;
+        // Symmetrical mirrored diffuse aura:
+        const float rL =  0.22f * ref1 - 0.16f * ref2;
+        const float rR = -0.16f * ref1 + 0.22f * ref2;
+
+        float driveL = monoBridge + widthParam * rL;
+        float driveR = monoBridge + widthParam * rR;
 
         // Soundboard Compliance Bloom / Soft Wood Saturation:
         // Under heavy strumming and multi-string plucks, physical spruce soundboard compliance
@@ -510,17 +492,6 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
     body.processBlock(outputL, outputR, numSamples);
-
-    // 3. Virtual Stereo Microphone Field & Mid/Side Spatializer:
-    // Continuous adjustment from pure mono (0.0) to natural stereo (0.7) to wide studio space (1.0).
-    const float sideGain = std::clamp(paramStereoWidth * 1.42f, 0.0f, 1.60f);
-    for (int i = 0; i < numSamples; ++i)
-    {
-        const float mid  = 0.5f * (outputL[i] + outputR[i]);
-        const float side = 0.5f * (outputL[i] - outputR[i]);
-        outputL[i] = mid + side * sideGain;
-        outputR[i] = mid - side * sideGain;
-    }
 
     // 4. DC Blocker, Master Gain, and Transparent Soft Saturation
     constexpr float R = 0.9974f;
@@ -583,9 +554,8 @@ void SynthEngine::reset()
     sympathetic.reset();
     dcX_L = 0.f; dcY_L = 0.f;
     dcX_R = 0.f; dcY_R = 0.f;
-    std::fill_n(saddleDelayL, SADDLE_DELAY_LEN, 0.f);
-    std::fill_n(saddleDelayR, SADDLE_DELAY_LEN, 0.f);
-    saddleDelayIdx = 0;
+    std::fill_n(reflectionBuf, REFLECTION_BUF_SIZE, 0.f);
+    reflectionIdx = 0;
     keyswitchPalmMuteActive = false;
     keyswitchFullMuteActive = false;
     keyswitchStrumActive    = false;
