@@ -440,28 +440,27 @@ public:
         // D is tridiagonal: Du[i] = (u[i+1] - 2*u[i] + u[i-1]) / h^2
         const float invHSq = 1.0f / (h * h);
 
-        for (int i = 0; i < N_pts; ++i)
+        if (N_pts >= 2)
         {
-            const float left  = (i > 0) ? u_curr[static_cast<size_t>(i - 1)] : 0.0f;
-            const float right = (i < N_pts - 1) ? u_curr[static_cast<size_t>(i + 1)] : 0.0f;
-            Du[static_cast<size_t>(i)] = (left - 2.0f * u_curr[static_cast<size_t>(i)] + right) * invHSq;
+            // Boundary point 0
+            Du[0] = (-2.0f * u_curr[0] + u_curr[1]) * invHSq;
+            for (int i = 1; i < N_pts - 1; ++i)
+                Du[static_cast<size_t>(i)] = (u_curr[static_cast<size_t>(i - 1)] - 2.0f * u_curr[static_cast<size_t>(i)] + u_curr[static_cast<size_t>(i + 1)]) * invHSq;
+            Du[static_cast<size_t>(N_pts - 1)] = (u_curr[static_cast<size_t>(N_pts - 2)] - 2.0f * u_curr[static_cast<size_t>(N_pts - 1)]) * invHSq;
+
+            // Biharmonic D^2*u
+            D2u[0] = (-2.0f * Du[0] + Du[1]) * invHSq;
+            for (int i = 1; i < N_pts - 1; ++i)
+                D2u[static_cast<size_t>(i)] = (Du[static_cast<size_t>(i - 1)] - 2.0f * Du[static_cast<size_t>(i)] + Du[static_cast<size_t>(i + 1)]) * invHSq;
+            D2u[static_cast<size_t>(N_pts - 1)] = (Du[static_cast<size_t>(N_pts - 2)] - 2.0f * Du[static_cast<size_t>(N_pts - 1)]) * invHSq;
+
+            // Damping term D*u_prev
+            Du_prev[0] = (-2.0f * u_prev[0] + u_prev[1]) * invHSq;
+            for (int i = 1; i < N_pts - 1; ++i)
+                Du_prev[static_cast<size_t>(i)] = (u_prev[static_cast<size_t>(i - 1)] - 2.0f * u_prev[static_cast<size_t>(i)] + u_prev[static_cast<size_t>(i + 1)]) * invHSq;
+            Du_prev[static_cast<size_t>(N_pts - 1)] = (u_prev[static_cast<size_t>(N_pts - 2)] - 2.0f * u_prev[static_cast<size_t>(N_pts - 1)]) * invHSq;
         }
 
-        // Biharmonic D^2*u
-        for (int i = 0; i < N_pts; ++i)
-        {
-            const float left  = (i > 0) ? Du[static_cast<size_t>(i - 1)] : 0.0f;
-            const float right = (i < N_pts - 1) ? Du[static_cast<size_t>(i + 1)] : 0.0f;
-            D2u[static_cast<size_t>(i)] = (left - 2.0f * Du[static_cast<size_t>(i)] + right) * invHSq;
-        }
-
-        // Spatial difference on u_prev for damping term D*u_prev
-        for (int i = 0; i < N_pts; ++i)
-        {
-            const float left  = (i > 0) ? u_prev[static_cast<size_t>(i - 1)] : 0.0f;
-            const float right = (i < N_pts - 1) ? u_prev[static_cast<size_t>(i + 1)] : 0.0f;
-            Du_prev[static_cast<size_t>(i)] = (left - 2.0f * u_prev[static_cast<size_t>(i)] + right) * invHSq;
-        }
 
         // 3. Kirchhoff-Carrier dynamic tension vector k^n (Eq. 52):
         // k^n = (k / 2) * sqrt(E*h / (rho*L*(1 + sigma0*k))) * [Du^T, 0]^T
@@ -481,28 +480,93 @@ public:
         const float c3 = 2.0f * p.sigma1 * k;
         const float c4 = (p.sigma0 * k - 1.0f);
 
+        float minU = 1e6f;
         for (int i = 0; i < N_pts; ++i)
         {
-            const float Bu_i = c0 * (2.0f * u_curr[static_cast<size_t>(i)] + c1 * Du[static_cast<size_t>(i)] - c2 * D2u[static_cast<size_t>(i)] + c3 * Du[static_cast<size_t>(i)]);
+            const float u_val = u_curr[static_cast<size_t>(i)];
+            if (u_val < minU) minU = u_val;
+
+            const float Bu_i = c0 * (2.0f * u_val + c1 * Du[static_cast<size_t>(i)] - c2 * D2u[static_cast<size_t>(i)] + c3 * Du[static_cast<size_t>(i)]);
             const float Cu_i = c0 * (c4 * u_prev[static_cast<size_t>(i)] - c3 * Du_prev[static_cast<size_t>(i)]);
             Bu_plus_Cu[static_cast<size_t>(i)] = Bu_i + Cu_i;
             v_lin[static_cast<size_t>(i)] = Bu_i + Cu_i - u_prev[static_cast<size_t>(i)];
         }
 
-        // a) Fretboard: V_B
-        float VB = 0.0f;
-        std::fill(gradVB.begin(), gradVB.end(), 0.0f);
-        for (int i = 0; i < N_pts; ++i)
+        // Fret crown height is p.m0 (-0.0012 m). Fretboard surface is p.b0 (-0.0028 m).
+        // If minU > p.m0, string displacement is physically above all frets and fretboard.
+        const bool fretCollisionPossible = (minU <= p.m0);
+        bool fingerCollisionActive = false;
+        if (fingerEngaged)
         {
-            const float dist = p.b0 - u_curr[static_cast<size_t>(i)];
-            if (dist > 0.0f)
-            {
-                const float pB = std::pow(dist, p.alphaB);
-                gradVB[static_cast<size_t>(i)] = -h * p.KB * pB;
-                VB += (p.KB * h / (p.alphaB + 1.0f)) * pB * dist;
-            }
+            const float uFinger = (1.0f - fingerAlpha) * u_curr[static_cast<size_t>(fingerIdx)] + fingerAlpha * u_curr[static_cast<size_t>(fingerIdx + 1)];
+            if ((uFinger - w_curr) > 0.0f)
+                fingerCollisionActive = true;
         }
-        std::fill(gB.begin(), gB.end(), 0.0f);
+
+        const bool anyCollision = (fretCollisionPossible || fingerCollisionActive);
+
+        if (!anyCollision)
+        {
+            // Zero out auxiliary collision states (non-contact free vibration)
+            psi[0] = 0.0f;
+            psi[1] = 0.0f;
+            psi[2] = 0.0f;
+            prevXiB = 0.0f;
+            prevXiF = 0.0f;
+
+            // Fast-path Rank-1 Woodbury (Kirchhoff-Carrier dynamic tension ONLY):
+            // (I + kn * kn^T)^(-1) * b = b - (kn^T * b / (1 + kn^T * kn)) * kn
+            float kn_dot_kn = 0.0f;
+            float kn_dot_b  = 0.0f;
+
+            for (int i = 0; i < N_pts; ++i)
+            {
+                float Ef_i = 0.0f;
+                if (pluckDurSamples > 0)
+                {
+                    const int dist = std::abs(i - pluckIdx);
+                    if (dist <= 2)
+                    {
+                        const float spatialWeight = 0.5f * (1.0f + std::cos(3.14159265f * static_cast<float>(dist) / 3.0f));
+                        Ef_i = fe * lambdaString * spatialWeight * 0.40f;
+                    }
+                }
+
+                const float kcTerm = -kn[static_cast<size_t>(i)] * knDotZprev;
+                const float bi = Bu_plus_Cu[static_cast<size_t>(i)] + Ef_i + kcTerm;
+                b_string[static_cast<size_t>(i)] = bi;
+
+                const float k_val = kn[static_cast<size_t>(i)];
+                kn_dot_kn += k_val * k_val;
+                kn_dot_b  += k_val * bi;
+            }
+
+            const float x_kc = kn_dot_b / (1.0f + kn_dot_kn);
+
+            for (int i = 0; i < N_pts; ++i)
+            {
+                u_next[static_cast<size_t>(i)] = b_string[static_cast<size_t>(i)] - kn[static_cast<size_t>(i)] * x_kc;
+            }
+
+            w_next = 2.0f * w_curr - w_prev;
+        }
+        else
+        {
+            // a) Fretboard: V_B
+            float VB = 0.0f;
+            std::fill(gradVB.begin(), gradVB.end(), 0.0f);
+            for (int i = 0; i < N_pts; ++i)
+            {
+                const float dist = p.b0 - u_curr[static_cast<size_t>(i)];
+                if (dist > 0.0f)
+                {
+                    const float pB = std::pow(dist, p.alphaB);
+                    gradVB[static_cast<size_t>(i)] = -h * p.KB * pB;
+                    VB += (p.KB * h / (p.alphaB + 1.0f)) * pB * dist;
+                }
+            }
+            std::fill(gB.begin(), gB.end(), 0.0f);
+
         if (VB > 1e-12f)
         {
             const float denomB = std::sqrt(2.0f * VB + 1e-12f);
@@ -747,8 +811,10 @@ public:
         else psi[1] = 0.0f;
         if (VFG > 1e-12f) psi[2] = std::max(0.0f, psi[2] + 0.5f * diffDotGFG);
         else psi[2] = 0.0f;
+        } // end of else (full 4x4 Woodbury solver)
 
         // 9. Audio output drawn at the bridge boundary x = L (penultimate interior point)
+
         // Force on the bridge saddle is proportional to spatial slope: u[N-1] / h
         float bridgeForce = (u_next[static_cast<size_t>(N_pts - 1)]) / h;
 
@@ -800,11 +866,12 @@ public:
         saddleFilterState  = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
         saddleFilterState2 = (1.0f - saddleBeta) * saddleFilterState + saddleBeta * saddleFilterState2;
 
-        // 10. Pointer / State rotation
-        u_prev = u_curr;
-        u_curr = u_next;
+        // 10. Pointer / State rotation (O(1) buffer swaps, zero memory copies)
+        u_prev.swap(u_curr);
+        u_curr.swap(u_next);
         w_prev = w_curr;
         w_curr = w_next;
+
 
         // ── H-Polarization Tick ────────────────────────────────────────────────
         // Horizontal (lateral) string polarization, parallel to the soundboard.
@@ -818,29 +885,27 @@ public:
 
         const float invHSq_H = 1.0f / (h * h);
 
-        // H spatial Laplacian: Du_H = D* u_curr_H
-        for (int i = 0; i < N_pts; ++i)
+        if (N_pts >= 2)
         {
-            const float left_H  = (i > 0)        ? u_curr_H[static_cast<size_t>(i - 1)] : 0.0f;
-            const float right_H = (i < N_pts - 1) ? u_curr_H[static_cast<size_t>(i + 1)] : 0.0f;
-            Du_H[static_cast<size_t>(i)] = (left_H - 2.0f * u_curr_H[static_cast<size_t>(i)] + right_H) * invHSq_H;
+            // H spatial Laplacian: Du_H = D* u_curr_H
+            Du_H[0] = (-2.0f * u_curr_H[0] + u_curr_H[1]) * invHSq_H;
+            for (int i = 1; i < N_pts - 1; ++i)
+                Du_H[static_cast<size_t>(i)] = (u_curr_H[static_cast<size_t>(i - 1)] - 2.0f * u_curr_H[static_cast<size_t>(i)] + u_curr_H[static_cast<size_t>(i + 1)]) * invHSq_H;
+            Du_H[static_cast<size_t>(N_pts - 1)] = (u_curr_H[static_cast<size_t>(N_pts - 2)] - 2.0f * u_curr_H[static_cast<size_t>(N_pts - 1)]) * invHSq_H;
+
+            // H biharmonic: D2u_H = D* Du_H
+            D2u_H[0] = (-2.0f * Du_H[0] + Du_H[1]) * invHSq_H;
+            for (int i = 1; i < N_pts - 1; ++i)
+                D2u_H[static_cast<size_t>(i)] = (Du_H[static_cast<size_t>(i - 1)] - 2.0f * Du_H[static_cast<size_t>(i)] + Du_H[static_cast<size_t>(i + 1)]) * invHSq_H;
+            D2u_H[static_cast<size_t>(N_pts - 1)] = (Du_H[static_cast<size_t>(N_pts - 2)] - 2.0f * Du_H[static_cast<size_t>(N_pts - 1)]) * invHSq_H;
+
+            // H Laplacian on u_prev_H for frequency-dependent damping
+            Du_prev_H[0] = (-2.0f * u_prev_H[0] + u_prev_H[1]) * invHSq_H;
+            for (int i = 1; i < N_pts - 1; ++i)
+                Du_prev_H[static_cast<size_t>(i)] = (u_prev_H[static_cast<size_t>(i - 1)] - 2.0f * u_prev_H[static_cast<size_t>(i)] + u_prev_H[static_cast<size_t>(i + 1)]) * invHSq_H;
+            Du_prev_H[static_cast<size_t>(N_pts - 1)] = (u_prev_H[static_cast<size_t>(N_pts - 2)] - 2.0f * u_prev_H[static_cast<size_t>(N_pts - 1)]) * invHSq_H;
         }
 
-        // H biharmonic: D2u_H = D* Du_H
-        for (int i = 0; i < N_pts; ++i)
-        {
-            const float left_H  = (i > 0)        ? Du_H[static_cast<size_t>(i - 1)] : 0.0f;
-            const float right_H = (i < N_pts - 1) ? Du_H[static_cast<size_t>(i + 1)] : 0.0f;
-            D2u_H[static_cast<size_t>(i)] = (left_H - 2.0f * Du_H[static_cast<size_t>(i)] + right_H) * invHSq_H;
-        }
-
-        // H Laplacian on u_prev_H for frequency-dependent damping
-        for (int i = 0; i < N_pts; ++i)
-        {
-            const float left_H  = (i > 0)        ? u_prev_H[static_cast<size_t>(i - 1)] : 0.0f;
-            const float right_H = (i < N_pts - 1) ? u_prev_H[static_cast<size_t>(i + 1)] : 0.0f;
-            Du_prev_H[static_cast<size_t>(i)] = (left_H - 2.0f * u_prev_H[static_cast<size_t>(i)] + right_H) * invHSq_H;
-        }
 
         // H update coefficients (same as V except c1_H uses T0_H)
         const float c1_H = (T0_H * k * k) / rhoA;
@@ -868,9 +933,10 @@ public:
         saddleFilterStateH  = (1.0f - saddleBeta) * bridgeForce_H + saddleBeta * saddleFilterStateH;
         saddleFilterState2H = (1.0f - saddleBeta) * saddleFilterStateH + saddleBeta * saddleFilterState2H;
 
-        // H state rotation
-        u_prev_H = u_curr_H;
-        u_curr_H = u_next_H;
+        // H state rotation (O(1) buffer swaps, zero memory copies)
+        u_prev_H.swap(u_curr_H);
+        u_curr_H.swap(u_next_H);
+
 
         // Mix: V drives the saddle directly (100%); H couples laterally at ~35%.
         // The lateral rocking force on the saddle is less efficient than vertical drive.
