@@ -201,14 +201,27 @@ void Voice::noteOff() noexcept
 {
     // Begin smooth acoustic release envelope
     releasing = true;
+
+    // Frequency-dependent release time constant:
+    // Treble strings (plain nylon) damp rapidly (~35-45 ms) under fingertip flesh.
+    // Wound bass strings have larger mass and inertia; their fundamental thumps for ~75-105 ms.
+    const float freq = midiToFreq(midiNote > 0 ? midiNote : 40);
+    const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);
+
+    // Organic micro-release jitter: avoids identical mathematical gate shut-down across polyphonic chords
+    const float humanJitter = 1.0f + 0.08f * humanRand();
+    const float releaseTau = (0.038f + 0.052f * woundFactor) * humanJitter;
+    releaseCoeff = std::exp(-1.0f / (releaseTau * sampleRate));
+
     if (engineType == EngineType::DigitalWaveguide)
     {
         string.damp();
     }
     else
     {
-        // Physical flesh damping when finger releases fret wire (sigma0 viscous loss, unconditionally stable)
-        fdtdString.setDamping(40.0f);
+        // Frequency-scaled flesh damping on fret release (wound bass strings damp slightly slower than thin trebles)
+        const float releaseDamping = 45.0f - 18.0f * woundFactor;
+        fdtdString.setDamping(releaseDamping);
     }
 }
 
@@ -348,11 +361,11 @@ float Voice::tick() noexcept
         out *= releaseGain;
         releaseGain *= releaseCoeff;
 
-        // When release gain has decayed into near-inaudibility (-46 dB),
+        // When release gain has decayed into near-inaudibility (-52 dB),
         // trigger an anti-click linear fade to zero
-        if (releaseGain < 0.005f && fadeSamplesLeft < 0)
+        if (releaseGain < 0.0025f && fadeSamplesLeft < 0)
         {
-            fadeSamplesLeft = 64;
+            fadeSamplesLeft = 96;
         }
     }
     else
@@ -366,10 +379,10 @@ float Voice::tick() noexcept
         }
     }
 
-    // 64-sample linear fade-out to guarantee zero DC or step click
+    // 96-sample linear fade-out to guarantee zero DC or step click
     if (fadeSamplesLeft > 0)
     {
-        const float fadeFactor = static_cast<float>(fadeSamplesLeft) / 64.0f;
+        const float fadeFactor = static_cast<float>(fadeSamplesLeft) / 96.0f;
         out *= fadeFactor;
         --fadeSamplesLeft;
 
@@ -432,8 +445,8 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         {
             gainScale = releaseGain;
             releaseGain *= releaseCoeff;
-            if (releaseGain < 0.005f && fadeSamplesLeft < 0)
-                fadeSamplesLeft = 64;
+            if (releaseGain < 0.0025f && fadeSamplesLeft < 0)
+                fadeSamplesLeft = 96;
         }
         else
         {
@@ -443,7 +456,7 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
 
         if (fadeSamplesLeft > 0)
         {
-            gainScale *= (static_cast<float>(fadeSamplesLeft) / 64.0f);
+            gainScale *= (static_cast<float>(fadeSamplesLeft) / 96.0f);
             --fadeSamplesLeft;
             if (fadeSamplesLeft == 0)
             {

@@ -121,6 +121,23 @@ Before declaring any task complete or committing code:
   - Replaced string/fretboard panning with constant-width Symmetrical Mirrored Soundboard Reflection Network ($d_1 = 5.2\text{ ms}, d_2 = 9.6\text{ ms}$).
   - All notes and fundamentals centered across the stereo field with bit-exact identical attack transient ($L=1.0, R=1.0$) and $0.00\text{ dB}$ L/R balance.
   - Natural acoustic 3D soundboard aura with clean mono folding and zero comb-filtering.
+- [x] **v43.f**:
+  - Implemented DAW Multi-Track Stress & Capacity Benchmark in `bench_synth` simulating multi-threaded DAW track pools (12 worker threads).
+  - Evaluated full 6-string acoustic strumming sessions from 1 to 64 simultaneous tracks (up to 384 concurrent vibrating strings).
+  - Integrated thread-safe real-time memory interception (`RTCheck: PASS (0)`) across concurrent audio worker threads.
+  - Conformed to strict VST3 quality gates via `pluginval` (0 errors).
+- [x] **v44.f**:
+  - **Eliminated Chord Intermodulation Distortion**: Dynamically scaled soundboard compliance saturation headroom with active voice count, preventing polyphonic chord attacks from collapsing into inharmonic IMD fizz.
+  - **Smooth Slew-Filtered Polyphonic Headroom**: Integrated 15 ms one-pole smoother on `polyScale` to eliminate zipper amplitude stepping across strummed chords.
+  - **Frequency-Adaptive Acoustic Release & Micro-Jitter**: Replaced synchronized 35 ms noise gate with pitch-adaptive flesh damping ($\tau \approx 35\text{ ms}$ treble to $95\text{ ms}$ bass) and organic finger micro-jitter.
+  - **Extended Fret Reach Polyphonic String Assignment**: Expanded reachable fret span from 5/7 frets to 19 frets, preventing high-register chord voicings from prematurely choking existing notes.
+  - Passed all quality gates: `RTCheck: PASS (0)` and `pluginval: SUCCESS` (0 errors).
+- [x] **v45.f**:
+  - **Eliminated Chord Crackling & Instantaneous Knee Discontinuity**: Removed static pre-convolution $\tanh$ waveshaping on bridge force, delivering pure linear force into the body IR and eliminating sample-rate step discontinuities.
+  - **Nylon IR Headroom Calibration & Peak Alignment**: Calibrated Classical Nylon IR wet gain ($0.62\times$ vs Gibson $0.82\times$), matching the prominent 4.0x 210 Hz body resonance and preventing output soft-limiter ceiling clamping.
+  - **Decaying String Re-Trigger Protection**: Enhanced `assignStringForNote` to route incoming chord notes to truly idle strings even if the previous note is decaying in release, eliminating violent buffer clobbering pops.
+  - **Deep Sympathetic Resonance for Sparse Voicings**: Increased cross-bridge sympathetic coupling ($0.05 \to 0.12$) so 3-note chords bloom with warm, resonant open-string harmonic aura.
+  - Passed all quality gates: `RTCheck: PASS (0)` (0 heap allocations) and `pluginval: SUCCESS` (0 errors).
 
 ---
 

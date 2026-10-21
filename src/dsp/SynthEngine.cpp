@@ -18,6 +18,8 @@ void SynthEngine::init(float sr, int blockSize)
     }
     body.init(sr, blockSize, paramBodySize, 1.0f);
     sympathetic.init(sr);
+    polyScaleFilterCoeff = std::exp(-1.0f / (0.015f * sampleRate));
+    smoothedPolyScale = 1.0f;
     reset();
 }
 
@@ -248,7 +250,7 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
                     if (note >= minOpen)
                     {
                         const int fret = note - minOpen;
-                        if (fret <= 7 && fret < bestFret)
+                        if (fret <= 19 && fret < bestFret)
                         {
                             bestFret = fret;
                             bestAlt = alt;
@@ -445,16 +447,18 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         // Cross-bridge sympathetic resonance:
         // Driving vertical bridge force excites unplayed open strings, coupling equally across soundboard
         const float sympatheticForce = sympathetic.process(totalForceV);
-        const float coupledSymp = sympatheticForce * (0.05f * paramBodyMix);
+        const float coupledSymp = sympatheticForce * (0.12f * paramBodyMix);
         const float bridgeForce = totalForceV + coupledSymp;
 
         // Polyphonic bridge impedance headroom:
-        // Acoustic soundboard mechanical impedance distributes multi-string chord displacement (1 / sqrt(N))
-        const float polyScale = (activeVoices > 1)
-            ? (1.0f / std::sqrt(static_cast<float>(activeVoices)))
+        // Acoustic soundboard mechanical impedance distributes multi-string chord displacement.
+        // Real-time smooth slewing (tau ~ 15ms) eliminates zipper/stepping discontinuities when notes are strummed.
+        const float targetPolyScale = (activeVoices > 1)
+            ? (1.0f / std::sqrt(1.0f + 0.70f * static_cast<float>(activeVoices - 1)))
             : 1.0f;
+        smoothedPolyScale = targetPolyScale + polyScaleFilterCoeff * (smoothedPolyScale - targetPolyScale);
 
-        const float monoBridge = bridgeForce * polyScale;
+        const float monoBridge = bridgeForce * smoothedPolyScale;
 
         // Symmetrical Acoustic Soundboard Reflection Network:
         // Symmetrical reflection taps guarantee bit-exact attack centering (0.00 dB L/R difference across all registers).
@@ -473,21 +477,11 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         float driveL = monoBridge + widthParam * rL;
         float driveR = monoBridge + widthParam * rR;
 
-        // Soundboard Compliance Bloom / Soft Wood Saturation:
-        // Under heavy strumming and multi-string plucks, physical spruce soundboard compliance
-        // gently saturates, bloom-compressing raw bridge force transients before cavity resonance.
-        auto soundboardBloom = [](float x) noexcept -> float
-        {
-            constexpr float knee = 1.10f;
-            const float ax = std::abs(x);
-            if (ax <= knee) return x;
-            const float excess = ax - knee;
-            const float sat = knee + 0.45f * std::tanh(excess / 0.45f);
-            return (x > 0.0f ? 1.0f : -1.0f) * sat;
-        };
-
-        outputL[i] = soundboardBloom(driveL);
-        outputR[i] = soundboardBloom(driveR);
+        // Pure Linear Bridge Force Radiation into Acoustic Soundboard:
+        // Delivering clean linear force into the body IR/modal resonators eliminates all inharmonic
+        // intermodulation distortion (IMD) on chords and prevents discontinuous knee-switching crackles.
+        outputL[i] = driveL;
+        outputR[i] = driveR;
     }
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
@@ -496,16 +490,16 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     // 4. DC Blocker, Master Gain, and Transparent Soft Saturation
     constexpr float R = 0.9974f;
 
-    // Smooth acoustic saturation curve (prevents harsh square-wave fuzz on heavy chord plucks)
+    // Musical soft-limiter: transparent analog-style saturation only at extreme levels
     auto softLimit = [](float x) noexcept -> float
     {
-        constexpr float threshold = 0.75f;
-        constexpr float ceiling   = 0.98f;
+        constexpr float threshold = 0.85f;
+        constexpr float ceiling   = 0.99f;
         const float absX = std::abs(x);
         if (absX <= threshold)
             return x;
-        const float excess = (absX - threshold) / (1.6f - threshold);
-        const float compressed = threshold + (ceiling - threshold) * std::tanh(excess);
+        const float excess = absX - threshold;
+        const float compressed = threshold + (ceiling - threshold) * std::tanh(excess / (ceiling - threshold));
         return (x > 0.f ? 1.f : -1.f) * std::min(compressed, ceiling);
     };
 
@@ -530,8 +524,8 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         outR = dcOutR;
 
         // Calibrated master gain matching concert acoustic references with clean chord headroom
-        outL *= (paramMasterGain * 0.92f);
-        outR *= (paramMasterGain * 0.92f);
+        outL *= (paramMasterGain * 0.78f);
+        outR *= (paramMasterGain * 0.78f);
 
         // Musical soft-limiter: guarantees audio never hard-clips or fuzzes against the ceiling
         outL = softLimit(outL);
@@ -566,6 +560,7 @@ void SynthEngine::reset()
     for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
         pendingPlucks[p].active = false;
     prevMuteMode            = KarplusStrong::MuteMode::Open;
+    smoothedPolyScale       = 1.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -592,44 +587,35 @@ int SynthEngine::assignStringForNote(int note) const noexcept
     else if (note < 64) s = 4;
     else                s = 5;
 
-    // 2. If natural string is idle, or is already playing this exact note (repeated pluck), use it
-    if (!voices[s].isActive() || voices[s].getMidiNote() == note)
+    // 2. If natural string is completely idle, use it immediately
+    if (!voices[s].isActive())
         return s;
 
-    // 3. String s is currently active.
-    // Check if the note sounding on string s is physically held on the keyboard (i.e. part of a held chord):
-    const int activeNoteOnS = voices[s].getMidiNote();
-    const bool isChordHeld = (activeNoteOnS >= 0 && activeNoteOnS < 128 && heldNotes[activeNoteOnS] > 0.001f);
-
-    if (isChordHeld)
+    // 3. String s is currently active (either physically held or decaying in release).
+    // Search for an idle physical string that can comfortably voice this note (fret <= 19).
+    // This preserves ringing chord tails and prevents violent buffer re-trigger clobbering clicks!
+    int bestAlt = -1;
+    int bestFret = 999;
+    for (int alt = 0; alt < 6; ++alt)
     {
-        // User is holding down multiple keys in a chord.
-        // Search for an idle physical string that can comfortably voice this note in reachable hand reach (fret <= 5).
-        int bestAlt = -1;
-        int bestFret = 999;
-        for (int alt = 0; alt < 6; ++alt)
+        if (!voices[alt].isActive())
         {
-            if (!voices[alt].isActive())
+            const int minOpen = (alt == 0) ? 38 : openMidi[alt];
+            if (note >= minOpen)
             {
-                const int minOpen = (alt == 0) ? 38 : openMidi[alt];
-                if (note >= minOpen)
+                const int fret = note - minOpen;
+                if (fret <= 19 && fret < bestFret)
                 {
-                    const int fret = note - minOpen;
-                    if (fret <= 5 && fret < bestFret)
-                    {
-                        bestFret = fret;
-                        bestAlt = alt;
-                    }
+                    bestFret = fret;
+                    bestAlt = alt;
                 }
             }
         }
-        if (bestAlt >= 0)
-            return bestAlt;
     }
+    if (bestAlt >= 0)
+        return bestAlt;
 
-    // 4. Strict physical guitar choking:
-    // If the old note was already released (e.g. arpeggio or melodic line), or no free string is available,
-    // the new note is fretted on string s, physically damping/choking the old vibration.
+    // 4. If all alternative strings are occupied, reuse string s
     return s;
 }
 

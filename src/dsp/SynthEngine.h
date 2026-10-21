@@ -138,6 +138,10 @@ private:
     int findFreeVoice() const noexcept;
     int findVoiceForNote(int midiNote) const noexcept;
 
+    // Smooth polyphonic bridge impedance headroom (eliminates amplitude zipper steps across strummed plucks)
+    float smoothedPolyScale = 1.0f;
+    float polyScaleFilterCoeff = 0.0f;
+
     // 18 Hz Acoustic DC Blocker state (removes sub-bass DC bias)
     float dcX_L = 0.f;
     float dcY_L = 0.f;
