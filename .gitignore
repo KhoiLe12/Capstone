@@ -4,3 +4,6 @@ build/
 .vscode/
 scratch/
 tools/
+.venv/
+benchmarks/data/
+benchmarks/plots/

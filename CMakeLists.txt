@@ -107,6 +107,47 @@ endif()
 
 
 # ---------------------------------------------------------------------------
+# CLI Headless Audio Renderer (render_audio)
+# Used for Multi-Scale STFT spectral distance evaluation against acoustic datasets
+# ---------------------------------------------------------------------------
+add_executable(render_audio
+    src/bench/RenderAudioCLI.cpp
+    src/dsp/BiquadFilter.cpp
+    src/dsp/Exciter.cpp
+    src/dsp/KarplusStrong.cpp
+    src/dsp/Voice.cpp
+    src/dsp/BodyResonance.cpp
+    src/dsp/SynthEngine.cpp
+)
+
+target_include_directories(render_audio
+    PRIVATE
+        src/
+)
+
+target_compile_definitions(render_audio
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+)
+
+target_link_libraries(render_audio
+    PRIVATE
+        juce::juce_audio_basics
+        juce::juce_audio_formats
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+if (MSVC)
+    target_compile_options(render_audio PRIVATE /arch:AVX2 /fp:fast)
+endif()
+
+
+# ---------------------------------------------------------------------------
 # Automated Plugin Validation Target (pluginval)
 # ---------------------------------------------------------------------------
 find_program(PLUGINVAL_EXE NAMES pluginval pluginval.exe
