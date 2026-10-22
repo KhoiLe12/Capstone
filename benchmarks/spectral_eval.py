@@ -267,8 +267,8 @@ def main():
         rating_fdtd = "EXCELLENT" if loss_fdtd < 1.8 else ("GOOD" if loss_fdtd < 2.5 else "FAIR")
         print(f"{chord:<8}{'Bilbao FDTD':<16}{sc_fdtd:<22.4f}{log_fdtd:<16.4f}{loss_fdtd:<16.4f}{rating_fdtd:<12}")
 
-        # Generate comparative spectrogram plot for E and Am chords
-        if chord in ['E', 'Am']:
+        # Generate comparative spectrogram plot for key evaluation chords
+        if chord in ['E', 'Am', 'C']:
             plot_file = os.path.join(plots_dir, f"stft_comparison_{chord}.png")
             plot_comparison(ref_audio, syn_ks_audio, syn_fdtd_audio, chord, plot_file, sr)
             print(f"   --> Generated 4-panel spectrogram analysis plot: {plot_file}")
