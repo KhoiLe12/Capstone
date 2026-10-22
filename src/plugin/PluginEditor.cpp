@@ -31,6 +31,20 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     engineModelLabel.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(engineModelLabel);
 
+    // String Material Selection ComboBox
+    stringMaterialBox.addItem("Nylon Classical", 1);
+    stringMaterialBox.addItem("Steel Acoustic", 2);
+    addAndMakeVisible(stringMaterialBox);
+
+    stringMaterialAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        p.apvts, "stringMaterial", stringMaterialBox);
+
+    stringMaterialLabel.setText("String:", juce::dontSendNotification);
+    stringMaterialLabel.setFont(juce::FontOptions(12.f, juce::Font::bold));
+    stringMaterialLabel.setColour(juce::Label::textColourId, juce::Colour(0xffa0c0e0));
+    stringMaterialLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(stringMaterialLabel);
+
     // Body Model Selection ComboBox
     bodyModelBox.addItem("Classical Nylon (IR)", 1);
     bodyModelBox.addItem("Gibson Acoustic (IR)", 2);
@@ -97,7 +111,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
 
     startTimerHz(30);
 
-    setSize(980, 250);
+    setSize(1080, 250);
     setResizable(false, false);
 }
 
@@ -237,28 +251,34 @@ void HybridSynthEditor::resized()
     // Engine Model, Body Model & Articulation Strip
     auto strip = area.removeFromTop(34).reduced(8, 3);
 
-    const int engLabelW = 54;
+    const int engLabelW = 50;
     engineModelLabel.setBounds(strip.removeFromLeft(engLabelW));
     strip.removeFromLeft(4);
-    engineModelBox.setBounds(strip.removeFromLeft(155));
+    engineModelBox.setBounds(strip.removeFromLeft(145));
 
     strip.removeFromLeft(8);
-    const int labelW = 68;
+    const int matLabelW = 44;
+    stringMaterialLabel.setBounds(strip.removeFromLeft(matLabelW));
+    strip.removeFromLeft(4);
+    stringMaterialBox.setBounds(strip.removeFromLeft(125));
+
+    strip.removeFromLeft(8);
+    const int labelW = 44;
     bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
     strip.removeFromLeft(4);
-    bodyModelBox.setBounds(strip.removeFromLeft(140));
+    bodyModelBox.setBounds(strip.removeFromLeft(135));
 
     strip.removeFromLeft(8);
-    palmMuteToggle.setBounds(strip.removeFromLeft(125));
-    palmBadgeArea = strip.removeFromLeft(48).reduced(0, 2);
+    palmMuteToggle.setBounds(strip.removeFromLeft(120));
+    palmBadgeArea = strip.removeFromLeft(46).reduced(0, 2);
 
     strip.removeFromLeft(6);
-    fullMuteToggle.setBounds(strip.removeFromLeft(125));
-    fullBadgeArea = strip.removeFromLeft(50).reduced(0, 2);
+    fullMuteToggle.setBounds(strip.removeFromLeft(120));
+    fullBadgeArea = strip.removeFromLeft(48).reduced(0, 2);
 
     strip.removeFromLeft(6);
-    strumToggle.setBounds(strip.removeFromLeft(130));
-    strumBadgeArea = strip.removeFromLeft(60).reduced(0, 2);
+    strumToggle.setBounds(strip.removeFromLeft(125));
+    strumBadgeArea = strip.removeFromLeft(56).reduced(0, 2);
 
     // Rotary Knobs Section
     const int numKnobs  = 8;

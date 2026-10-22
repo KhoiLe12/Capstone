@@ -71,6 +71,13 @@ HybridSynthProcessor::createParameterLayout()
         juce::StringArray{ "Digital Waveguide (DWG)", "Bilbao FDTD (DAFx24)" },
         0));
 
+    // String Material: 0 = Nylon Classical, 1 = Steel Acoustic
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "stringMaterial", 1 },
+        "String Material",
+        juce::StringArray{ "Nylon Classical", "Steel Acoustic" },
+        0));
+
     // Body Model: 0 = Classical Nylon (IR), 1 = Gibson Acoustic (IR), 2 = Modal Bank (32-Mode)
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "bodyModel", 1 },
@@ -156,6 +163,7 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramBodyMix    = apvts.getRawParameterValue("bodyMix")->load();
     synth.paramBodyType   = apvts.getRawParameterValue("bodyModel")->load();
     synth.paramEngineType = apvts.getRawParameterValue("engineModel")->load();
+    synth.paramStringMaterial = apvts.getRawParameterValue("stringMaterial")->load();
     synth.paramStereoWidth = apvts.getRawParameterValue("stereoWidth")->load();
     synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
     synth.paramPalmMute   = apvts.getRawParameterValue("palmMute")->load() > 0.5f;

@@ -113,7 +113,7 @@ public:
         h = p.L / static_cast<float>(N);
 
         // Ensure vector capacity is pre-reserved to eliminate audio thread heap allocations
-        constexpr size_t kMaxGridSize = 256;
+        constexpr size_t kMaxGridSize = 512;
         if (u_next.capacity() < kMaxGridSize)
         {
             u_next.reserve(kMaxGridSize);

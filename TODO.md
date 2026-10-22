@@ -40,9 +40,10 @@ This document tracks all planned, ongoing, and completed features across physica
     - **Middle Pickup** (~$x/L = 0.88$) -> Strat-style scoop / quack.
     - **Bridge Pickup** (~$x/L = 0.94\text{--}0.96$) -> Bright, biting, high-harmonic bite.
   - Pickup selector switch: Neck, Neck+Middle, Middle, Middle+Bridge, Bridge.
-- [ ] **Magnetic String Damping & String Material Profile**:
-  - Nickel/Steel string density, tension, and higher Young's modulus ($E \approx 200\text{ GPa}$ vs. nylon $5\text{ GPa}$).
-  - Magnetic pull damping from pole-piece magnets.
+- [x] **Physical String Material & Density Profiles (v46.f)**:
+  - **Nylon Classical**: $\rho = 1140\text{ kg/m}^3$, $E \approx 1.2\text{ GPa}$, polymer viscoelastic damping, nylon radii.
+  - **Steel Acoustic**: $\rho \approx 6200\text{--}7850\text{ kg/m}^3$ (hex steel core with bronze wrap & plain steel wire), $E \approx 200\text{ GPa}$, high-tension ($T_0 \approx 100\text{--}150\text{ N}$ per string), metallic longitudinal P-wave snap ($c_L \approx 5000\text{ m/s}$), and longer sustain.
+  - Exposed `stringMaterial` parameter in VST3/AU/Standalone APVTS and GUI ComboBox.
 - [ ] **Electric Guitar Tone & Volume Circuit**:
   - Standard $250\text{k}\Omega$ / $500\text{k}\Omega$ potentiometer with $0.022\text{--}0.047\,\mu\text{F}$ tone capacitor model.
 - [ ] **Guitar Amp / Cabinet Simulation Stage**:

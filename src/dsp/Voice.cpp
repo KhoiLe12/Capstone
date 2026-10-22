@@ -24,7 +24,7 @@ void Voice::init(float sr)
 void Voice::noteOn(int note, float vel,
                    float brightness, float pickPosition, float decay,
                    float stiffness, KarplusStrong::MuteMode muteMode,
-                   int stringIdx)
+                   int stringIdx, int mat)
 {
     midiNote = note;
     velocity = vel;
@@ -34,20 +34,26 @@ void Voice::noteOn(int note, float vel,
     chokeGain = 1.0f;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
+    stringMaterial = mat;
 
     currentMuteMode = muteMode;
     currentDecay = decay;
 
     // 6 acoustic guitar strings: E2 (40), A2 (45), D3 (50), G3 (55), B3 (59), E4 (64)
-    static constexpr int openMidi[6]   = { 40, 45, 50, 55, 59, 64 };
-    static constexpr float radii[6]    = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
+    static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
 
-    // Effective bending core radius for stiffness EI:
-    // On acoustic/classical guitars, wound bass strings (strings 0, 1, 2) have an outer wire wrap
-    // that flexes freely with negligible beam bending stiffness; bending rigidity comes solely
-    // from the inner multifilament nylon core (r_core ~ 0.18-0.20 mm).
-    // Plain treble strings (strings 3, 4, 5) are flexible monofilament nylon.
-    static constexpr float bendingRadii[6] = { 0.00018f, 0.00019f, 0.00020f, 0.00026f, 0.00024f, 0.00020f };
+    // Nylon string geometries (radii and inner flexible bending core radii)
+    static constexpr float nylonRadii[6]        = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
+    static constexpr float nylonBendingRadii[6] = { 0.00018f, 0.00019f, 0.00020f, 0.00026f, 0.00024f, 0.00020f };
+
+    // Steel string geometries (standard light acoustic set 12-53):
+    // Strings 0, 1, 2, 3: phosphor bronze / nickel wound on hex steel core
+    // Strings 4, 5: plain steel wire
+    static constexpr float steelRadii[6]        = { 0.00067f, 0.00053f, 0.00041f, 0.00030f, 0.00020f, 0.00015f };
+    static constexpr float steelBendingRadii[6] = { 0.00018f, 0.00018f, 0.00018f, 0.00016f, 0.00020f, 0.00015f };
+    static constexpr float steelDensities[6]    = { 6200.0f,  6400.0f,  6600.0f,  6800.0f,  7850.0f,  7850.0f };
+
+    const bool isSteel = (stringMaterial == 1);
 
     int s = stringIdx;
     if (s < 0 || s > 5)
@@ -71,10 +77,12 @@ void Voice::noteOn(int note, float vel,
         FdtdString::StringParams p;
         p.fretNumber = fret;
         p.L = fretLength;
-        p.r = radii[s];
-        p.r_stiffness = bendingRadii[s];
-        p.rho = 1140.0f;
-        p.E = 1.2e9f * (0.15f + 1.2f * stiffness);
+        p.r = isSteel ? steelRadii[s] : nylonRadii[s];
+        p.r_stiffness = isSteel ? steelBendingRadii[s] : nylonBendingRadii[s];
+        p.rho = isSteel ? steelDensities[s] : 1140.0f;
+        // Nylon Young's modulus E ~ 1.2 GPa, Steel E ~ 200 GPa:
+        p.E = isSteel ? (2.0e11f * (0.35f + 0.85f * stiffness))
+                      : (1.2e9f  * (0.15f + 1.20f * stiffness));
 
         const float A = 3.14159265358979323846f * p.r * p.r;
         const float I = 3.14159265358979323846f * p.r_stiffness * p.r_stiffness * p.r_stiffness * p.r_stiffness * 0.25f;
@@ -99,22 +107,17 @@ void Voice::noteOn(int note, float vel,
         const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel) * humanJitter, 0.05f, 1.0f);
 
         // Register-dependent acoustic decay and compliance:
-        // Higher pitched / fretted notes complete more vibration cycles per second, draining energy faster.
-        // Tuned to give high frets singing sustain through 8th notes (matching authentic nylon reference)
-        // without harsh synthetic screeching.
         const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
-        const float registerDecayScale = std::pow(fRatio, 0.80f);
+        const float registerDecayScale = std::pow(fRatio, isSteel ? 0.65f : 0.80f);
 
         // Fretboard Positional Damping Profile:
-        // Open strings (fret == 0) rest on a hard bone nut, producing longer sustain and clearer ring-out (~0.88x loss).
-        // Fretted strings (fret > 0) have flesh damping from the fingerpad behind the fret wire (~1.08x loss).
         const float nutVsFretScale = (fret == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(fret));
-        float effSigma0 = (0.75f + 1.25f * (1.0f - decay)) * registerDecayScale * nutVsFretScale;
+        float effSigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - decay)) : (0.75f + 1.25f * (1.0f - decay)))
+                          * registerDecayScale * nutVsFretScale;
 
-        // Plain nylon treble damping across the entire register up to 1200 Hz:
-        // Keeps high harmonics smooth and warm like real nylon while allowing full sustain.
         const float trebleFactor = std::clamp((targetFreq - 146.0f) / (1175.0f - 146.0f), 0.0f, 1.0f);
-        float effSigma1 = 1.5e-4f + 1.8e-3f * trebleFactor;
+        float effSigma1 = isSteel ? (0.8e-4f + 0.9e-3f * trebleFactor)
+                                  : (1.5e-4f + 1.8e-3f * trebleFactor);
         float effDispScale = 1.0f;
 
         if (muteMode == KarplusStrong::MuteMode::Palm)
@@ -136,20 +139,20 @@ void Voice::noteOn(int note, float vel,
         p.sigma1 = effSigma1;
         p.brightness = effBrightness;
 
-        // Physical wound bass string vs plain nylon treble factor:
-        // Strings 0 (E2), 1 (A2), 2 (D3) are silver-plated wound nylon core (winding rasp);
-        // Strings 3 (G3), 4 (B3), 5 (E4) are smooth plain monofilament nylon (glassy slip).
-        p.woundFactor = (s <= 2) ? (1.0f - static_cast<float>(s) * 0.25f) : 0.0f;
+        // Longitudes and tension bloom
+        p.longitudinalAttack = isSteel ? 0.35f : 0.15f;
+        p.phantomCoupling    = isSteel ? 0.30f : 0.20f;
 
-        // Calibrated classical guitar fret action clearance (1.3 mm bass down to 1.0 mm treble)
+        // Physical wound bass string vs plain treble factor:
+        p.woundFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.22f) : 0.0f;
+
+        // Calibrated guitar fret action clearance (1.3 mm bass down to 1.0 mm treble)
         p.m0 = -0.0010f - 0.0003f * (1.0f - static_cast<float>(s) / 5.0f);
         p.b0 = -0.0028f;
 
         fdtdString.init(sampleRate, p);
 
-        // String physical compliance scales with vibrating length and velocity:
-        // Hard plucks (velocity > 0.8) drive string into fret obstacle barrier for authentic sizzle/growl;
-        // Soft and medium plucks (velocity < 0.7) stay cleanly above frets for pure, warm tone.
+        // String physical compliance scales with vibrating length and velocity
         const float lengthScale = std::clamp(std::sqrt(p.L / 0.65f), 0.60f, 1.0f);
         const float peakDisp = (-0.0004f - 0.00125f * clampedVel) * effDispScale * lengthScale;
         const float clampedPickPos = std::clamp(pickPosition + pickJitter, 0.08f, 0.48f);
@@ -164,31 +167,27 @@ void Voice::noteOn(int note, float vel,
     }
 
     const float freq = midiToFreq(note);
-    string.setFrequency(freq, stiffness);
+    string.setFrequency(freq, isSteel ? std::min(1.0f, stiffness * 1.5f) : stiffness);
     string.setMuteMode(muteMode);
-    string.setDecay(decay);
+    string.setDecay(isSteel ? std::min(0.98f, decay * 1.08f) : decay);
 
     // Exciter length matches one wavelength (delay-line size)
     const int exciterLen = std::min(static_cast<int>(sampleRate / freq),
                                     kMaxExciterLength);
 
-    // Register-dependent nylon string physics:
-    // Wound strings have higher mass and tactile winding scrape
+    // Register-dependent string physics:
     const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);
 
     float effBrightness = brightness;
     if (muteMode == KarplusStrong::MuteMode::Full)
     {
-        // Dead notes:
-        // Wound bass strings have warm, wooden fundamental thumps (darker, fleshy)
-        // Plain treble strings have crisp, papery clicks (higher frequency snap)
         effBrightness = brightness * (0.28f + 0.22f * (1.0f - woundFactor));
     }
 
-    // Fill with velocity-dependent physical classical nylon finger pulse (flesh + nail)
+    // Fill with exciter model (Plectrum for steel, Nylon Finger for nylon)
     exciter.fill(exciterScratch, exciterLen,
                  velocity,
-                 ExciterType::NYLON_FINGER_MODEL,
+                 isSteel ? ExciterType::PLECTRUM_MODEL : ExciterType::NYLON_FINGER_MODEL,
                  effBrightness,
                  pickPosition,
                  sampleRate,

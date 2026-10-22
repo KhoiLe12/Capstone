@@ -22,6 +22,12 @@ public:
         BilbaoFdtd       = 1
     };
 
+    enum class StringMaterial
+    {
+        NylonClassical = 0,
+        SteelAcoustic  = 1
+    };
+
     Voice() = default;
 
     /** Allocate KS delay line and FDTD buffers for this sample rate. Call once at startup. */
@@ -31,25 +37,31 @@ public:
     void setEngineType(EngineType type) noexcept { engineType = type; }
     EngineType getEngineType() const noexcept    { return engineType; }
 
+    /** Select string material (Nylon Classical vs Steel Acoustic). */
+    void setStringMaterial(int material) noexcept { stringMaterial = material; }
+    int getStringMaterial() const noexcept        { return stringMaterial; }
+
     /** Physical guitar string index (0 = E2, 1 = A2, 2 = D3, 3 = G3, 4 = B3, 5 = E4). */
     void setPhysicalStringIndex(int idx) noexcept { physicalStringIndex = idx; }
     int getPhysicalStringIndex() const noexcept   { return physicalStringIndex; }
 
     /**
      * Trigger a new note.
-     * @param midiNote     MIDI note number 0-127
-     * @param velocity     Normalised velocity 0..1
-     * @param brightness   Exciter brightness 0..1
-     * @param pickPosition Plectrum contact point, fraction of string length
-     * @param stiffness    String stiffness / inharmonicity 0..1
-     * @param muteMode     Articulation mode (Open, Palm, or Full mute dead notes)
-     * @param stringIdx    Physical guitar string index (0..5)
+     * @param midiNote       MIDI note number 0-127
+     * @param velocity       Normalised velocity 0..1
+     * @param brightness     Exciter brightness 0..1
+     * @param pickPosition   Plectrum contact point, fraction of string length
+     * @param stiffness      String stiffness / inharmonicity 0..1
+     * @param muteMode       Articulation mode (Open, Palm, or Full mute dead notes)
+     * @param stringIdx      Physical guitar string index (0..5)
+     * @param stringMaterial String material (0 = Nylon Classical, 1 = Steel Acoustic)
      */
     void noteOn(int midiNote, float velocity,
                 float brightness, float pickPosition, float decay,
                 float stiffness = 0.25f,
                 KarplusStrong::MuteMode muteMode = KarplusStrong::MuteMode::Open,
-                int stringIdx = -1);
+                int stringIdx = -1,
+                int stringMaterial = 0);
 
     /** Signal note release (string continues natural decay). */
     void noteOff() noexcept;
@@ -91,6 +103,7 @@ private:
     FdtdString    fdtdString;
 
     EngineType    engineType = EngineType::DigitalWaveguide;
+    int           stringMaterial = 0; // 0 = Nylon Classical, 1 = Steel Acoustic
     int           physicalStringIndex = -1;
 
     int   midiNote   = -1;

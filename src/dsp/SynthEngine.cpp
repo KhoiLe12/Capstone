@@ -124,9 +124,10 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     voices[s].setPhysicalStringIndex(s);
 
     const auto muteMode = getEffectiveMuteMode();
+    const int mat = static_cast<int>(paramStringMaterial + 0.5f);
     voices[s].noteOn(midiNote, velocity,
                      paramBrightness, paramPickPos, paramDecay,
-                     paramStiffness, muteMode, s);
+                     paramStiffness, muteMode, s, mat);
 }
 
 void SynthEngine::noteOff(int midiNote)
@@ -316,9 +317,10 @@ void SynthEngine::schedulePluck(int stringIdx, int midiNote, float velocity, flo
         voices[s].setPhysicalStringIndex(s);
 
         const auto muteMode = getEffectiveMuteMode();
+        const int mat = static_cast<int>(paramStringMaterial + 0.5f);
         voices[s].noteOn(midiNote, velocity,
                          brightness, paramPickPos, paramDecay,
-                         paramStiffness, muteMode, s);
+                         paramStiffness, muteMode, s, mat);
         return;
     }
 
@@ -402,11 +404,12 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
                     voices[s].setPhysicalStringIndex(s);
 
                     const auto muteMode = getEffectiveMuteMode();
+                    const int mat = static_cast<int>(paramStringMaterial + 0.5f);
                     voices[s].noteOn(pendingPlucks[p].midiNote,
                                      pendingPlucks[p].velocity,
                                      pendingPlucks[p].brightness,
                                      paramPickPos, paramDecay,
-                                     paramStiffness, muteMode, s);
+                                     paramStiffness, muteMode, s, mat);
                     pendingPlucks[p].active = false;
                 }
             }

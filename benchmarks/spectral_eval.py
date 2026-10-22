@@ -168,12 +168,14 @@ def multi_scale_stft_loss(x_ref, x_syn, scales=STFT_SCALES, eps=1e-7):
     return avg_sc, avg_log, combined
 
 
-def render_synth(chord_notes, engine_type, duration_sec, out_path, renderer_bin="./build/render_audio"):
+def render_synth(chord_notes, engine_type, duration_sec, out_path, material=1.0, body_type=1.0, renderer_bin="./build/render_audio"):
     chord_str = ",".join(map(str, chord_notes))
     cmd = [
         renderer_bin,
         "--engine", str(engine_type),
         "--chord", chord_str,
+        "--material", str(material),
+        "--bodyType", str(body_type),
         "--dur", str(duration_sec),
         "--vel", "0.85",
         "--out", out_path

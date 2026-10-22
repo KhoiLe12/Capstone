@@ -26,6 +26,11 @@ private:
     juce::Label    engineModelLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> engineModelAttach;
 
+    // String Material Selection ComboBox
+    juce::ComboBox stringMaterialBox;
+    juce::Label    stringMaterialLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> stringMaterialAttach;
+
     // Body Model Selection ComboBox
     juce::ComboBox bodyModelBox;
     juce::Label    bodyModelLabel;

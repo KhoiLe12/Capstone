@@ -22,6 +22,8 @@ int main(int argc, char* argv[])
     std::vector<int> midiNotes = { 40, 47, 52, 55, 59, 64 }; // E major chord default
     float velocity = 0.85f;
     float bodyType = 0.0f;   // 0 = Classical Nylon IR, 1 = Gibson Acoustic IR
+    float stringMaterial = 0.0f; // 0 = Nylon Classical, 1 = Steel Acoustic
+    float strumSpreadMs = 0.0f;  // Delay per string in ms (e.g. 8-12ms for acoustic strum)
     float bodyMix = 0.70f;
     float sampleRate = 44100.0f;
     float durationSec = 4.0f;
@@ -48,6 +50,14 @@ int main(int argc, char* argv[])
         else if (arg == "--vel" && i + 1 < argc)
         {
             velocity = std::stof(argv[++i]);
+        }
+        else if ((arg == "--material" || arg == "--stringMaterial") && i + 1 < argc)
+        {
+            stringMaterial = std::stof(argv[++i]);
+        }
+        else if ((arg == "--strum" || arg == "--strumSpreadMs") && i + 1 < argc)
+        {
+            strumSpreadMs = std::stof(argv[++i]);
         }
         else if (arg == "--bodyType" && i + 1 < argc)
         {
@@ -77,16 +87,27 @@ int main(int argc, char* argv[])
     SynthEngine engine;
     engine.init(sampleRate, blockSize);
     engine.paramEngineType = engineType;
+    engine.paramStringMaterial = stringMaterial;
     engine.paramBodyType = bodyType;
     engine.paramBodyMix = bodyMix;
     engine.paramDecay = 0.75f;
     engine.paramBrightness = 0.65f;
     engine.paramMasterGain = 0.85f;
 
-    // Trigger plucks
-    for (int note : midiNotes)
+    struct ScheduledNote {
+        int sampleOffset;
+        int note;
+        float vel;
+        bool triggered;
+    };
+    std::vector<ScheduledNote> scheduledNotes;
+    scheduledNotes.reserve(midiNotes.size());
+    for (size_t n = 0; n < midiNotes.size(); ++n)
     {
-        engine.noteOn(note, velocity);
+        const int offset = (strumSpreadMs > 0.0f)
+            ? static_cast<int>(static_cast<float>(n) * (strumSpreadMs / 1000.0f) * sampleRate)
+            : 0;
+        scheduledNotes.push_back({ offset, midiNotes[n], velocity, false });
     }
 
     std::vector<float> audioL(totalSamples, 0.0f);
@@ -98,6 +119,16 @@ int main(int argc, char* argv[])
     int samplesRendered = 0;
     while (samplesRendered < totalSamples)
     {
+        // Trigger any notes scheduled up to the current sample
+        for (auto& sn : scheduledNotes)
+        {
+            if (!sn.triggered && samplesRendered >= sn.sampleOffset)
+            {
+                engine.noteOn(sn.note, sn.vel);
+                sn.triggered = true;
+            }
+        }
+
         const int numToProcess = std::min(blockSize, totalSamples - samplesRendered);
         engine.process(blockL.data(), blockR.data(), numToProcess);
 

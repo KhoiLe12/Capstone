@@ -7,3 +7,5 @@ tools/
 .venv/
 benchmarks/data/
 benchmarks/plots/
+__pycache__/
+*.pyc
