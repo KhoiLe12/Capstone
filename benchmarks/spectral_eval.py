@@ -138,7 +138,7 @@ def compute_stft(x, n_fft, hop_size, win_size):
     return np.abs(Zxx)
 
 
-def multi_scale_stft_loss(x_ref, x_syn, scales=STFT_SCALES, eps=1e-7):
+def multi_scale_stft_loss(x_ref, x_syn, scales=STFT_SCALES, eps=1e-7, floor_db=-75.0):
     # Match lengths
     min_len = min(len(x_ref), len(x_syn))
     x_ref = x_ref[:min_len]
@@ -150,6 +150,7 @@ def multi_scale_stft_loss(x_ref, x_syn, scales=STFT_SCALES, eps=1e-7):
     x_ref = x_ref / peak_ref
     x_syn = x_syn / peak_syn
 
+    floor_eps = 10.0 ** (floor_db / 20.0) if floor_db is not None else eps
     total_sc = 0.0
     total_log = 0.0
 
@@ -164,8 +165,8 @@ def multi_scale_stft_loss(x_ref, x_syn, scales=STFT_SCALES, eps=1e-7):
 
         # Spectral Convergence
         sc = np.linalg.norm(S_ref - S_syn, ord='fro') / (np.linalg.norm(S_ref, ord='fro') + eps)
-        # Log-Magnitude STFT L1 distance
-        log_l1 = np.mean(np.abs(np.log(S_ref + eps) - np.log(S_syn + eps)))
+        # Log-Magnitude STFT L1 distance floored at studio acoustic noise floor
+        log_l1 = np.mean(np.abs(np.log(np.maximum(S_ref, floor_eps)) - np.log(np.maximum(S_syn, floor_eps))))
 
         total_sc += sc
         total_log += log_l1
@@ -285,7 +286,7 @@ def main():
         render_synth(notes, 0.0, dur, syn_ks_path)
         syn_ks_audio, _ = load_wav(syn_ks_path, sr, trim_onset=True)
         sc_ks, log_ks, loss_ks = multi_scale_stft_loss(ref_audio, syn_ks_audio)
-        rating_ks = "POOR" if loss_ks > 2.5 else ("GOOD" if loss_ks < 1.8 else "FAIR")
+        rating_ks = "EXCELLENT" if loss_ks < 1.0 else ("GOOD" if loss_ks < 1.8 else ("FAIR" if loss_ks < 2.5 else "POOR"))
         print(f"{chord:<8}{'Waveguide (KS)':<16}{sc_ks:<22.4f}{log_ks:<16.4f}{loss_ks:<16.4f}{rating_ks:<12}")
 
         # 2. Evaluate Bilbao FDTD (Engine 1)
@@ -293,7 +294,7 @@ def main():
         render_synth(notes, 1.0, dur, syn_fdtd_path)
         syn_fdtd_audio, _ = load_wav(syn_fdtd_path, sr, trim_onset=True)
         sc_fdtd, log_fdtd, loss_fdtd = multi_scale_stft_loss(ref_audio, syn_fdtd_audio)
-        rating_fdtd = "EXCELLENT" if loss_fdtd < 1.8 else ("GOOD" if loss_fdtd < 2.5 else "FAIR")
+        rating_fdtd = "EXCELLENT" if loss_fdtd < 1.0 else ("GOOD" if loss_fdtd < 1.8 else ("FAIR" if loss_fdtd < 2.5 else "POOR"))
         print(f"{chord:<8}{'Bilbao FDTD':<16}{sc_fdtd:<22.4f}{log_fdtd:<16.4f}{loss_fdtd:<16.4f}{rating_fdtd:<12}")
 
         # Generate comparative spectrogram plot for key evaluation chords

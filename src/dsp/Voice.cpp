@@ -115,9 +115,10 @@ void Voice::noteOn(int note, float vel,
         float effSigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - decay)) : (0.75f + 1.25f * (1.0f - decay)))
                           * registerDecayScale * nutVsFretScale;
 
-        const float trebleFactor = std::clamp((targetFreq - 146.0f) / (1175.0f - 146.0f), 0.0f, 1.0f);
-        float effSigma1 = isSteel ? (0.8e-4f + 0.9e-3f * trebleFactor)
-                                  : (1.5e-4f + 1.8e-3f * trebleFactor);
+        const float trebleFactor = std::clamp((targetFreq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
+        const float decaySigma1Scale = (1.0f + 0.6f * (1.0f - decay));
+        float effSigma1 = (isSteel ? (3.5e-4f + 1.8e-3f * trebleFactor)
+                                   : (4.5e-4f + 2.5e-3f * trebleFactor)) * decaySigma1Scale;
         float effDispScale = 1.0f;
 
         if (muteMode == KarplusStrong::MuteMode::Palm)

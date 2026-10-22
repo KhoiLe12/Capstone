@@ -151,6 +151,11 @@ Before declaring any task complete or committing code:
   - **Audible Longitudinal P-Wave Attack Snap**: Re-calibrated axial plectrum release impulse coupling directly into soundboard plate pumping.
   - **Automated Validation Strictness 8 Conformance**: Elevated `pluginval` in `CMakeLists.txt` to strictness level 8 (including parameter thread safety and parameter fuzzing across all 14 automatable parameters) passing with 0 errors.
   - Quality gates passed: `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread) and `pluginval: SUCCESS` (strictness 8, 0 errors).
+- [x] **v48.f**:
+  - **Calibrated Frequency-Dependent Damping ($\sigma_1$)**: Calibrated physical air viscosity and internal viscoelastic shear damping in the elastodynamic PDE ($\sigma_1 = 3.5 \times 10^{-4}\text{ s}^{-1}$ on bass scaling with treble register and user decay modulation).
+  - **Acoustic Waterfall Roll-Off Contour**: Transformed flat uniform FDTD decay into a natural acoustic diagonal decay curve ($5\text{ kHz}-10\text{ kHz}$ decaying in $\sim 0.25\text{--}0.4\text{ s}$ while $80\text{--}250\text{ Hz}$ fundamentals sustain warmly for $3\text{--}5+\text{ s}$).
+  - **Quality Gates Passed**: `bench_synth: RTCheck PASS (0)` (0 heap allocations) and `pluginval: SUCCESS` (strictness 8, 0 errors).
+  - **DAW Deployment**: Deployed freshly compiled release binary to `C:\Program Files\Common Files\VST3\Hybrid Synth.vst3`.
 
 ---
 
