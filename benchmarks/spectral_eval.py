@@ -183,40 +183,47 @@ def render_synth(chord_notes, engine_type, duration_sec, out_path, renderer_bin=
         raise RuntimeError(f"render_audio failed: {res.stderr}")
 
 
-def plot_comparison(ref_audio, syn_audio, chord_name, out_plot_path, sr=44100):
-    min_len = min(len(ref_audio), len(syn_audio), int(sr * 3.0)) # First 3.0 seconds
+def plot_comparison(ref_audio, ks_audio, fdtd_audio, chord_name, out_plot_path, sr=44100):
+    min_len = min(len(ref_audio), len(ks_audio), len(fdtd_audio), int(sr * 3.0)) # First 3.0 seconds
     ref = ref_audio[:min_len] / (np.max(np.abs(ref_audio[:min_len])) + 1e-7)
-    syn = syn_audio[:min_len] / (np.max(np.abs(syn_audio[:min_len])) + 1e-7)
+    ks  = ks_audio[:min_len] / (np.max(np.abs(ks_audio[:min_len])) + 1e-7)
+    fdtd = fdtd_audio[:min_len] / (np.max(np.abs(fdtd_audio[:min_len])) + 1e-7)
 
     n_fft = 1024
     hop_size = 256
-    window = scipy.signal.windows.hann(n_fft)
 
     _, _, S_ref = scipy.signal.stft(ref, nperseg=n_fft, noverlap=n_fft - hop_size, nfft=n_fft)
-    _, _, S_syn = scipy.signal.stft(syn, nperseg=n_fft, noverlap=n_fft - hop_size, nfft=n_fft)
+    _, _, S_ks  = scipy.signal.stft(ks, nperseg=n_fft, noverlap=n_fft - hop_size, nfft=n_fft)
+    _, _, S_fdtd = scipy.signal.stft(fdtd, nperseg=n_fft, noverlap=n_fft - hop_size, nfft=n_fft)
 
-    min_frames = min(S_ref.shape[1], S_syn.shape[1])
-    S_ref_db = 20 * np.log10(np.abs(S_ref[:, :min_frames]) + 1e-5)
-    S_syn_db = 20 * np.log10(np.abs(S_syn[:, :min_frames]) + 1e-5)
-    diff_db = np.abs(S_ref_db - S_syn_db)
+    min_frames = min(S_ref.shape[1], S_ks.shape[1], S_fdtd.shape[1])
+    S_ref_db  = 20 * np.log10(np.abs(S_ref[:, :min_frames]) + 1e-5)
+    S_ks_db   = 20 * np.log10(np.abs(S_ks[:, :min_frames]) + 1e-5)
+    S_fdtd_db = 20 * np.log10(np.abs(S_fdtd[:, :min_frames]) + 1e-5)
+    diff_fdtd_db = np.abs(S_ref_db - S_fdtd_db)
 
-    fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True, sharey=True)
+    fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True, sharey=True)
 
     im0 = axes[0].imshow(S_ref_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
-    axes[0].set_title(f"Acoustic Guitar Dataset Reference ({chord_name} Chord)")
+    axes[0].set_title(f"1. Real Acoustic Guitar Dataset Reference ({chord_name} Chord)", fontsize=11, fontweight='bold')
     axes[0].set_ylabel("Freq (Hz)")
     axes[0].set_ylim(0, 10000)
 
-    im1 = axes[1].imshow(S_syn_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
-    axes[1].set_title(f"Hybrid Synth: Stefan Bilbao Non-Linear FDTD ({chord_name} Chord)")
+    im1 = axes[1].imshow(S_ks_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
+    axes[1].set_title(f"2. Hybrid Synth: Digital Waveguide / Karplus-Strong ({chord_name} Chord)", fontsize=11, fontweight='bold')
     axes[1].set_ylabel("Freq (Hz)")
     axes[1].set_ylim(0, 10000)
 
-    im2 = axes[2].imshow(diff_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=0, vmax=40, cmap='magma')
-    axes[2].set_title(f"Multi-Scale STFT Absolute Residual Error (|Ref - Syn|)")
-    axes[2].set_xlabel("Time (seconds)")
+    im2 = axes[2].imshow(S_fdtd_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
+    axes[2].set_title(f"3. Hybrid Synth: Stefan Bilbao Non-Linear FDTD ({chord_name} Chord)", fontsize=11, fontweight='bold')
     axes[2].set_ylabel("Freq (Hz)")
     axes[2].set_ylim(0, 10000)
+
+    im3 = axes[3].imshow(diff_fdtd_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=0, vmax=40, cmap='magma')
+    axes[3].set_title(f"4. FDTD Absolute Residual Spectral Error (|Reference - FDTD|)", fontsize=11, fontweight='bold')
+    axes[3].set_xlabel("Time (seconds)")
+    axes[3].set_ylabel("Freq (Hz)")
+    axes[3].set_ylim(0, 10000)
 
     fig.tight_layout()
     fig.savefig(out_plot_path, dpi=300)
@@ -261,8 +268,8 @@ def main():
         # Generate comparative spectrogram plot for E and Am chords
         if chord in ['E', 'Am']:
             plot_file = os.path.join(plots_dir, f"stft_comparison_{chord}.png")
-            plot_comparison(ref_audio, syn_fdtd_audio, chord, plot_file, sr)
-            print(f"   --> Generated spectrogram analysis plot: {plot_file}")
+            plot_comparison(ref_audio, syn_ks_audio, syn_fdtd_audio, chord, plot_file, sr)
+            print(f"   --> Generated 4-panel spectrogram analysis plot: {plot_file}")
         print("-" * 90)
 
     print("\nBenchmark completed successfully! All plots and audio cached under `benchmarks/`.")
