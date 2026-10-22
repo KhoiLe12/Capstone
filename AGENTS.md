@@ -145,6 +145,12 @@ Before declaring any task complete or committing code:
   - **Parameter & GUI Integration**: Added `stringMaterial` parameter in APVTS and GUI ComboBox (`Nylon Classical` vs `Steel Acoustic`) and added `--material` and `--strum` CLI options in `render_audio`.
   - **Objective Benchmark Breakthrough**: Multi-Scale STFT spectral distance dropped across all chords, with Chord C achieving a **`GOOD`** rating ($2.40$ combined loss, $1.69$ log-STFT distance).
   - Quality gates passed: `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread).
+- [x] **v47.f**:
+  - **Helmholtz Plectrum Release Velocity Kick**: Modeled finite plectrum slip velocity ($v_\text{slip} = c \cdot \partial u / \partial x$) launching sharp traveling acoustic Helmholtz corner into the FDTD PDE rather than releasing from static rest.
+  - **Calibrated Tactile Plectrum Scrape & High-Frequency Rasp**: Rescaled mechanical scrape generator from negligible meter units to dimensionless slope units sitting at authentic $-18\text{ dB to }-24\text{ dB}$ acoustic ratio, with roundwound bronze wire corrugation ridges (~2600 Hz) and high-frequency bypass around the 12 dB saddle filter.
+  - **Audible Longitudinal P-Wave Attack Snap**: Re-calibrated axial plectrum release impulse coupling directly into soundboard plate pumping.
+  - **Automated Validation Strictness 8 Conformance**: Elevated `pluginval` in `CMakeLists.txt` to strictness level 8 (including parameter thread safety and parameter fuzzing across all 14 automatable parameters) passing with 0 errors.
+  - Quality gates passed: `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread) and `pluginval: SUCCESS` (strictness 8, 0 errors).
 
 ---
 

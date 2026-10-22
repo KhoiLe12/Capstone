@@ -29,6 +29,11 @@ void SynthEngine::init(float sr, int blockSize)
 
 void SynthEngine::noteOn(int midiNote, float velocity)
 {
+    noteOn(midiNote, velocity, -1.0f, -1.0f);
+}
+
+void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride, float pickPosOverride)
+{
     if (velocity <= 0.0001f)
     {
         noteOff(midiNote);
@@ -126,7 +131,9 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     const auto muteMode = getEffectiveMuteMode();
     const int mat = static_cast<int>(paramStringMaterial + 0.5f);
     voices[s].noteOn(midiNote, velocity,
-                     paramBrightness, paramPickPos, paramDecay,
+                     (brightnessOverride >= 0.0f ? brightnessOverride : paramBrightness),
+                     (pickPosOverride >= 0.0f ? pickPosOverride : paramPickPos),
+                     paramDecay,
                      paramStiffness, muteMode, s, mat);
 }
 

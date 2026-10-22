@@ -43,7 +43,7 @@ DATASET_URLS = {
 }
 
 CHORD_MIDI_NOTES = {
-    'E':  [40, 47, 52, 55, 59, 64], # E2, B2, E3, G#3, B3, E4
+    'E':  [40, 47, 52, 56, 59, 64], # E2, B2, E3, G#3, B3, E4
     'Am': [45, 52, 57, 60, 64],     # A2, E3, A3, C4, E4
     'C':  [48, 52, 55, 60, 64],     # C3, E3, G3, C4, E4
     'G':  [43, 47, 50, 55, 59, 67], # G2, B2, D3, G3, B3, G4
@@ -102,8 +102,17 @@ def load_wav(path, target_sr=44100, trim_onset=False):
             samples = scipy.signal.resample(samples, num_target)
 
         if trim_onset:
-            onset = find_onset_index(samples, sr=target_sr)
-            samples = samples[onset:]
+            peak = np.max(np.abs(samples))
+            if peak > 1e-6:
+                above_thresh = np.where(np.abs(samples) > peak * 0.02)[0]
+                if len(above_thresh) > 0:
+                    raw_onset = above_thresh[0]
+                    pre_roll_samples = int((15.0 / 1000.0) * target_sr)
+                    if raw_onset >= pre_roll_samples:
+                        samples = samples[raw_onset - pre_roll_samples:]
+                    else:
+                        pad_needed = pre_roll_samples - raw_onset
+                        samples = np.pad(samples, (pad_needed, 0), mode='constant')
 
         return samples, target_sr
 
@@ -168,7 +177,7 @@ def multi_scale_stft_loss(x_ref, x_syn, scales=STFT_SCALES, eps=1e-7):
     return avg_sc, avg_log, combined
 
 
-def render_synth(chord_notes, engine_type, duration_sec, out_path, material=1.0, body_type=1.0, renderer_bin="./build/render_audio"):
+def render_synth(chord_notes, engine_type, duration_sec, out_path, material=1.0, body_type=1.0, strum_ms=26.0, renderer_bin="./build/render_audio"):
     chord_str = ",".join(map(str, chord_notes))
     cmd = [
         renderer_bin,
@@ -177,6 +186,8 @@ def render_synth(chord_notes, engine_type, duration_sec, out_path, material=1.0,
         "--material", str(material),
         "--bodyType", str(body_type),
         "--dur", str(duration_sec),
+        "--strum", str(strum_ms),
+        "--strumMode", "1",
         "--vel", "0.85",
         "--out", out_path
     ]
@@ -185,8 +196,25 @@ def render_synth(chord_notes, engine_type, duration_sec, out_path, material=1.0,
         raise RuntimeError(f"render_audio failed: {res.stderr}")
 
 
-def plot_comparison(ref_audio, ks_audio, fdtd_audio, chord_name, out_plot_path, sr=44100):
-    min_len = min(len(ref_audio), len(ks_audio), len(fdtd_audio), int(sr * 3.0)) # First 3.0 seconds
+def get_single_strum_duration(samples, sr, min_gap_sec=0.4, max_dur_sec=3.5):
+    """
+    Detects if the reference recording contains a second strum stroke,
+    and returns the safe duration of the first isolated strum.
+    """
+    win = int(sr * 0.04)
+    env = np.convolve(np.abs(samples), np.ones(win)/win, mode='same')
+    peak = np.max(env)
+    peaks, _ = scipy.signal.find_peaks(env, distance=int(sr * min_gap_sec), prominence=peak * 0.20)
+    if len(peaks) > 1:
+        p1, p2 = peaks[0], peaks[1]
+        valley_idx = p1 + np.argmin(env[p1:p2])
+        safe_dur = max(1.2, float(valley_idx) / sr)
+        return min(safe_dur, max_dur_sec)
+    return min(max_dur_sec, len(samples) / sr)
+
+
+def plot_comparison(ref_audio, ks_audio, fdtd_audio, chord_name, out_plot_path, sr=44100, dur_sec=3.0):
+    min_len = min(len(ref_audio), len(ks_audio), len(fdtd_audio), int(sr * dur_sec))
     ref = ref_audio[:min_len] / (np.max(np.abs(ref_audio[:min_len])) + 1e-7)
     ks  = ks_audio[:min_len] / (np.max(np.abs(ks_audio[:min_len])) + 1e-7)
     fdtd = fdtd_audio[:min_len] / (np.max(np.abs(fdtd_audio[:min_len])) + 1e-7)
@@ -206,22 +234,22 @@ def plot_comparison(ref_audio, ks_audio, fdtd_audio, chord_name, out_plot_path, 
 
     fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True, sharey=True)
 
-    im0 = axes[0].imshow(S_ref_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
+    im0 = axes[0].imshow(S_ref_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
     axes[0].set_title(f"1. Real Acoustic Guitar Dataset Reference ({chord_name} Chord)", fontsize=11, fontweight='bold')
     axes[0].set_ylabel("Freq (Hz)")
     axes[0].set_ylim(0, 10000)
 
-    im1 = axes[1].imshow(S_ks_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
+    im1 = axes[1].imshow(S_ks_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
     axes[1].set_title(f"2. Hybrid Synth: Digital Waveguide / Karplus-Strong ({chord_name} Chord)", fontsize=11, fontweight='bold')
     axes[1].set_ylabel("Freq (Hz)")
     axes[1].set_ylim(0, 10000)
 
-    im2 = axes[2].imshow(S_fdtd_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
+    im2 = axes[2].imshow(S_fdtd_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
     axes[2].set_title(f"3. Hybrid Synth: Stefan Bilbao Non-Linear FDTD ({chord_name} Chord)", fontsize=11, fontweight='bold')
     axes[2].set_ylabel("Freq (Hz)")
     axes[2].set_ylim(0, 10000)
 
-    im3 = axes[3].imshow(diff_fdtd_db, aspect='auto', origin='lower', extent=[0, 3.0, 0, sr // 2], vmin=0, vmax=40, cmap='magma')
+    im3 = axes[3].imshow(diff_fdtd_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=0, vmax=40, cmap='magma')
     axes[3].set_title(f"4. FDTD Absolute Residual Spectral Error (|Reference - FDTD|)", fontsize=11, fontweight='bold')
     axes[3].set_xlabel("Time (seconds)")
     axes[3].set_ylabel("Freq (Hz)")
@@ -248,8 +276,9 @@ def main():
 
     for chord, ref_path in ref_paths.items():
         ref_audio, sr = load_wav(ref_path, trim_onset=True)
+        dur = get_single_strum_duration(ref_audio, sr)
+        ref_audio = ref_audio[:int(sr * dur)]
         notes = CHORD_MIDI_NOTES[chord]
-        dur = min(4.0, len(ref_audio) / sr)
 
         # 1. Evaluate Waveguide (Engine 0)
         syn_ks_path = os.path.join(data_dir, f"syn_ks_{chord}.wav")
@@ -270,7 +299,7 @@ def main():
         # Generate comparative spectrogram plot for key evaluation chords
         if chord in ['E', 'Am', 'C']:
             plot_file = os.path.join(plots_dir, f"stft_comparison_{chord}.png")
-            plot_comparison(ref_audio, syn_ks_audio, syn_fdtd_audio, chord, plot_file, sr)
+            plot_comparison(ref_audio, syn_ks_audio, syn_fdtd_audio, chord, plot_file, sr, dur_sec=dur)
             print(f"   --> Generated 4-panel spectrogram analysis plot: {plot_file}")
         print("-" * 90)
 

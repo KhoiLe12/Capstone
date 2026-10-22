@@ -24,6 +24,7 @@ public:
 
     /** Trigger a new note (MIDI note number + normalised velocity 0..1). */
     void noteOn(int midiNote, float velocity);
+    void noteOn(int midiNote, float velocity, float brightnessOverride, float pickPosOverride);
 
     /** Release a note (string continues to decay naturally). */
     void noteOff(int midiNote);

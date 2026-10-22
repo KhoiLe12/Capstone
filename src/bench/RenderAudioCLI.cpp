@@ -24,6 +24,8 @@ int main(int argc, char* argv[])
     float bodyType = 0.0f;   // 0 = Classical Nylon IR, 1 = Gibson Acoustic IR
     float stringMaterial = 0.0f; // 0 = Nylon Classical, 1 = Steel Acoustic
     float strumSpreadMs = 0.0f;  // Delay per string in ms (e.g. 8-12ms for acoustic strum)
+    int strumMode = 1;           // 0 = Flat linear MIDI spacing, 1 = Physical acoustic strum
+    bool isDownstroke = true;    // true = downstroke (bass to treble), false = upstroke
     float bodyMix = 0.70f;
     float sampleRate = 44100.0f;
     float durationSec = 4.0f;
@@ -54,6 +56,15 @@ int main(int argc, char* argv[])
         else if ((arg == "--material" || arg == "--stringMaterial") && i + 1 < argc)
         {
             stringMaterial = std::stof(argv[++i]);
+        }
+        else if (arg == "--strumMode" && i + 1 < argc)
+        {
+            strumMode = std::stoi(argv[++i]);
+        }
+        else if (arg == "--stroke" && i + 1 < argc)
+        {
+            std::string s = argv[++i];
+            isDownstroke = (s == "down" || s == "0" || s == "downstroke");
         }
         else if ((arg == "--strum" || arg == "--strumSpreadMs") && i + 1 < argc)
         {
@@ -98,16 +109,83 @@ int main(int argc, char* argv[])
         int sampleOffset;
         int note;
         float vel;
+        float brightness;
+        float pickPos;
         bool triggered;
     };
     std::vector<ScheduledNote> scheduledNotes;
     scheduledNotes.reserve(midiNotes.size());
-    for (size_t n = 0; n < midiNotes.size(); ++n)
+
+    const int numNotes = static_cast<int>(midiNotes.size());
+    std::vector<int> sortedNotes = midiNotes;
+    if (isDownstroke)
+        std::sort(sortedNotes.begin(), sortedNotes.end());
+    else
+        std::sort(sortedNotes.begin(), sortedNotes.end(), std::greater<int>());
+
+    const float baseBrt = 0.65f;
+    const float basePos = 0.23f;
+
+    for (int n = 0; n < numNotes; ++n)
     {
-        const int offset = (strumSpreadMs > 0.0f)
-            ? static_cast<int>(static_cast<float>(n) * (strumSpreadMs / 1000.0f) * sampleRate)
-            : 0;
-        scheduledNotes.push_back({ offset, midiNotes[n], velocity, false });
+        int offset = 0;
+        float vel = velocity;
+        float brt = baseBrt;
+        float pos = basePos;
+
+        if (strumSpreadMs > 0.0f && numNotes > 1)
+        {
+            if (strumMode == 0)
+            {
+                // Mode 0: Flat linear MIDI spacing (what user did manually in piano roll)
+                offset = static_cast<int>(static_cast<float>(n) * (strumSpreadMs / 1000.0f) * sampleRate);
+                vel = velocity;
+                brt = baseBrt;
+                pos = basePos;
+            }
+            else
+            {
+                // Mode 1: Physical Acoustic Strum (organic wrist arc + plectrum flex + attack angle)
+                const float totalStrumMs = static_cast<float>(numNotes - 1) * strumSpreadMs;
+                const float u = static_cast<float>(n) / static_cast<float>(numNotes - 1); // 0.0 to 1.0
+
+                if (isDownstroke)
+                {
+                    // Wrist inertia curve: initial contact drag on bass strings, whipping acceleration through treble strings
+                    const float timingWarp = 0.60f * u + 0.40f * (u * u);
+                    const float tMs = totalStrumMs * timingWarp;
+                    offset = static_cast<int>((tMs / 1000.0f) * sampleRate);
+
+                    // Plectrum deceleration taper: pick transfers kinetic momentum to wound strings
+                    vel = std::clamp(velocity * (1.0f - 0.035f * static_cast<float>(n)), 0.05f, 1.0f);
+
+                    // Plectrum flex & glancing angle:
+                    // Bass string gets square hit; middle strings flex at 45-60 deg (softened); final string snaps off edge
+                    if (n == 0)
+                        brt = baseBrt;
+                    else if (n < numNotes - 1)
+                        brt = std::clamp(baseBrt * (0.86f + 0.05f * u), 0.05f, 1.0f);
+                    else
+                        brt = std::clamp(baseBrt * 1.15f, 0.05f, 1.0f);
+
+                    // Hand pivoting arc: closer to soundhole on bass (0.24), angled closer to bridge on treble (0.17)
+                    pos = std::clamp(basePos + 0.01f - 0.07f * u, 0.08f, 0.45f);
+                }
+                else
+                {
+                    // Upstroke: lighter grazing rake from treble to bass
+                    const float timingWarp = 0.50f * u + 0.50f * std::sqrt(u);
+                    const float tMs = totalStrumMs * 0.82f * timingWarp;
+                    offset = static_cast<int>((tMs / 1000.0f) * sampleRate);
+
+                    vel = std::clamp(velocity * 0.82f * (1.0f - 0.03f * static_cast<float>(n)), 0.05f, 1.0f);
+                    brt = std::clamp(baseBrt * 1.05f, 0.05f, 1.0f);
+                    pos = std::clamp(basePos - 0.05f + 0.06f * u, 0.08f, 0.45f);
+                }
+            }
+        }
+
+        scheduledNotes.push_back({ offset, sortedNotes[n], vel, brt, pos, false });
     }
 
     std::vector<float> audioL(totalSamples, 0.0f);
@@ -124,7 +202,7 @@ int main(int argc, char* argv[])
         {
             if (!sn.triggered && samplesRendered >= sn.sampleOffset)
             {
-                engine.noteOn(sn.note, sn.vel);
+                engine.noteOn(sn.note, sn.vel, sn.brightness, sn.pickPos);
                 sn.triggered = true;
             }
         }

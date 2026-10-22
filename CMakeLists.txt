@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 46.0.0)
+project(HybridSynth VERSION 47.0.0)
 
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
 
@@ -159,7 +159,7 @@ if (PLUGINVAL_EXE)
     add_custom_target(validate
         COMMAND "${PLUGINVAL_EXE}"
                 --validate "${PLUGIN_VALIDATE_PATH}"
-                --strictness-level 5
+                --strictness-level 8
                 --skip-gui-tests
                 --verbose
         DEPENDS HybridSynth_VST3

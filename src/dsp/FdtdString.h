@@ -276,6 +276,7 @@ public:
         scrapeTotalSamples = 0;
         scrapeAmp = 0.0f;
         scrapeFilterState = 0.0f;
+        lastScrapeForce = 0.0f;
     }
 
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
@@ -342,14 +343,19 @@ public:
                                                + 0.25f * u_curr[static_cast<size_t>(i + 1)];
         }
 
-        // Fingernail release slip: subtle acoustic release snap gives authentic attack definition
-        // without the violent hammer velocity kick that creates piano-like transients.
-        const float nailSlipAmp = peakDisplacementMeters * (0.08f + 0.12f * b);
+        // Plectrum & Fingernail Helmholtz Release Slip:
+        // At release, string slips off plectrum edge with finite acoustic slip velocity v_slip = c * du/dx.
+        // Discrete Cauchy condition: u_prev = u_curr - k * v_slip, launching authentic traveling Helmholtz corner.
+        const float cWave = std::sqrt(p.T0 / rhoA);
+        const float nominalSlope = std::abs(peakDisplacementMeters) / xLoc;
+        const float slipVel = (peakDisplacementMeters > 0.0f ? -1.0f : 1.0f) * cWave * nominalSlope * (0.85f + 0.65f * b);
+        const float slipOffset = k * slipVel;
+
         for (int i = 0; i < N_pts; ++i)
         {
             const float dist = std::abs(static_cast<float>(i + 1) * h - xLoc);
-            const float nailPulse = (dist < w) ? (nailSlipAmp * 0.5f * (1.0f + std::cos(3.14159265f * dist / w))) : 0.0f;
-            u_prev[static_cast<size_t>(i)] = u_curr[static_cast<size_t>(i)] - nailPulse;
+            const float pulse = (dist < w) ? (0.5f * (1.0f + std::cos(3.1415926535f * dist / w))) : 0.0f;
+            u_prev[static_cast<size_t>(i)] = u_curr[static_cast<size_t>(i)] + pulse * slipOffset;
         }
 
         w_curr = 0.0f;
@@ -399,13 +405,18 @@ public:
         saddleFilterPhantom = 0.0f;
 
         // Tactile scrape generator initialization
-        // Wound strings have wider contact and longer pre-release rasp (~17ms)
-        // Plain treble nylon has crisp, glassy micro-slip (~7ms)
-        const float scrapeDurationSec = 0.007f + 0.010f * p.woundFactor;
+        // Wound strings have wider contact and longer pre-release rasp (~22ms)
+        // Plain treble wire has crisp, glassy micro-slip (~9ms)
+        const float scrapeDurationSec = 0.009f + 0.015f * p.woundFactor;
         scrapeTotalSamples = static_cast<int>(scrapeDurationSec * fs);
         scrapeSamplesLeft = scrapeTotalSamples;
-        scrapeAmp = std::abs(peakDisplacementMeters) * (0.10f + 0.25f * b) * (0.8f + 0.4f * p.woundFactor);
+
+        // Calibrate scrape amplitude relative to nominal bridge slope (dimensionless slope units)
+        // Calibrated to sit at authentic -18 dB to -24 dB acoustic level
+        const float nominalBridgeSlope = std::abs(peakDisplacementMeters) / (p.L - xLoc);
+        scrapeAmp = nominalBridgeSlope * (0.28f + 0.40f * b) * (0.75f + 0.65f * p.woundFactor);
         scrapeFilterState = 0.0f;
+        lastScrapeForce = 0.0f;
     }
 
     /** Excite string at fractional location with raised-cosine pulse (Eq. 5). */
@@ -857,10 +868,9 @@ public:
                 texture = (1.0f - 0.45f * p.woundFactor) * hfScrape + (0.45f * p.woundFactor) * ridgeRasp * (0.8f + 0.2f * noise);
             }
 
-            scrapeForce = scrapeAmp * texture * env * 0.35f;
+            scrapeForce = scrapeAmp * texture * env;
             scrapeSamplesLeft--;
         }
-        bridgeForce += scrapeForce;
 
         // Bone saddle dual-pole terminating mechanical impedance lowpass filter (12 dB/octave)
         saddleFilterState  = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
@@ -977,17 +987,19 @@ public:
         // - Transverse V (100%) & H (35%)
         // - Dynamic Phantom Harmonics 2*f0 (octave bloom)
         // - Axial P-wave attack snap (scaled so as not to sound like a metallic piano wire ping)
-        const float longAcoustic = longSample * 0.06f;
+        const float longAcoustic = longSample * (p.woundFactor > 0.1f ? 0.22f : 0.14f);
         const float phantomAcoustic = saddleFilterPhantom * 0.35f;
-        return transverseMix + phantomAcoustic + longAcoustic;
+        lastScrapeForce = scrapeForce;
+        const float scrapeAcoustic = scrapeForce * 0.85f;
+        return transverseMix + phantomAcoustic + longAcoustic + scrapeAcoustic;
     }
 
     /** Dual-axis saddle output: returns distinct vertical (pumping) and horizontal (rocking) forces. */
     void tickPolar(float& outV, float& outH) noexcept
     {
         const float total = tick();
-        // outV is vertical plate pumping: V transverse + axial tension phantom + longitudinal snap
-        outV = saddleFilterState2 + saddleFilterPhantom * 0.35f + (longitudinalS1 * 0.06f);
+        // outV is vertical plate pumping: V transverse + axial tension phantom + longitudinal snap + tactile scrape
+        outV = saddleFilterState2 + saddleFilterPhantom * 0.35f + (longitudinalS1 * (p.woundFactor > 0.1f ? 0.22f : 0.14f)) + (lastScrapeForce * 0.85f);
         // outH is lateral rocking along saddle line
         outH = saddleFilterState2H;
     }
@@ -1177,4 +1189,5 @@ private:
     float scrapeAmp = 0.0f;
     float scrapeFilterState = 0.0f;
     uint32_t scrapeRng = 0x12345678u;
+    float lastScrapeForce = 0.0f;
 };
