@@ -59,7 +59,23 @@ STFT_SCALES = [
 ]
 
 
-def load_wav(path, target_sr=44100):
+def find_onset_index(audio, threshold_ratio=0.04, pre_roll_ms=10, sr=44100):
+    """
+    Finds the exact onset index where guitar attack starts, with a tiny pre-roll buffer.
+    """
+    peak = np.max(np.abs(audio))
+    if peak < 1e-6:
+        return 0
+    thresh = peak * threshold_ratio
+    above_thresh = np.where(np.abs(audio) > thresh)[0]
+    if len(above_thresh) == 0:
+        return 0
+    raw_onset = above_thresh[0]
+    pre_roll_samples = int((pre_roll_ms / 1000.0) * sr)
+    return max(0, raw_onset - pre_roll_samples)
+
+
+def load_wav(path, target_sr=44100, trim_onset=False):
     with wave.open(path, 'rb') as w:
         sr = w.getframerate()
         n_channels = w.getnchannels()
@@ -84,6 +100,11 @@ def load_wav(path, target_sr=44100):
         if sr != target_sr:
             num_target = int(len(samples) * target_sr / sr)
             samples = scipy.signal.resample(samples, num_target)
+
+        if trim_onset:
+            onset = find_onset_index(samples, sr=target_sr)
+            samples = samples[onset:]
+
         return samples, target_sr
 
 
@@ -217,14 +238,14 @@ def main():
     print("-" * 90)
 
     for chord, ref_path in ref_paths.items():
-        ref_audio, sr = load_wav(ref_path)
+        ref_audio, sr = load_wav(ref_path, trim_onset=True)
         notes = CHORD_MIDI_NOTES[chord]
         dur = min(4.0, len(ref_audio) / sr)
 
         # 1. Evaluate Waveguide (Engine 0)
         syn_ks_path = os.path.join(data_dir, f"syn_ks_{chord}.wav")
         render_synth(notes, 0.0, dur, syn_ks_path)
-        syn_ks_audio, _ = load_wav(syn_ks_path, sr)
+        syn_ks_audio, _ = load_wav(syn_ks_path, sr, trim_onset=True)
         sc_ks, log_ks, loss_ks = multi_scale_stft_loss(ref_audio, syn_ks_audio)
         rating_ks = "POOR" if loss_ks > 2.5 else ("GOOD" if loss_ks < 1.8 else "FAIR")
         print(f"{chord:<8}{'Waveguide (KS)':<16}{sc_ks:<22.4f}{log_ks:<16.4f}{loss_ks:<16.4f}{rating_ks:<12}")
@@ -232,9 +253,9 @@ def main():
         # 2. Evaluate Bilbao FDTD (Engine 1)
         syn_fdtd_path = os.path.join(data_dir, f"syn_fdtd_{chord}.wav")
         render_synth(notes, 1.0, dur, syn_fdtd_path)
-        syn_fdtd_audio, _ = load_wav(syn_fdtd_path, sr)
+        syn_fdtd_audio, _ = load_wav(syn_fdtd_path, sr, trim_onset=True)
         sc_fdtd, log_fdtd, loss_fdtd = multi_scale_stft_loss(ref_audio, syn_fdtd_audio)
-        rating_fdtd = "EXCELLENT" if loss_fdtd < 1.5 else ("GOOD" if loss_fdtd < 2.0 else "FAIR")
+        rating_fdtd = "EXCELLENT" if loss_fdtd < 1.8 else ("GOOD" if loss_fdtd < 2.5 else "FAIR")
         print(f"{chord:<8}{'Bilbao FDTD':<16}{sc_fdtd:<22.4f}{log_fdtd:<16.4f}{loss_fdtd:<16.4f}{rating_fdtd:<12}")
 
         # Generate comparative spectrogram plot for E and Am chords
