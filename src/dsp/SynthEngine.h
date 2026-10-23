@@ -154,4 +154,8 @@ private:
     static constexpr int REFLECTION_BUF_SIZE = 2048;
     float reflectionBuf[REFLECTION_BUF_SIZE] = { 0.f };
     int   reflectionIdx = 0;
+
+    // Direct airborne plectrum radiation scratch buffer (pre-allocated, zero heap)
+    static constexpr int CLICK_BUF_SIZE = 4096;
+    float clickBuf[CLICK_BUF_SIZE] = { 0.f };
 };

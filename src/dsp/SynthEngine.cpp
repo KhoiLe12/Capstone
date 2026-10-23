@@ -441,9 +441,12 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
 
         float totalForceV = 0.f;
         int activeVoices = 0;
+        float totalClick = 0.f;
 
         for (int v = 0; v < NUM_VOICES; ++v)
         {
+            totalClick += voices[v].tickPickClick();
+
             if (!voices[v].isActive())
                 continue;
 
@@ -453,6 +456,9 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             // All string fundamentals are 100% centered (constant spatial location for every note)
             totalForceV += fV;
         }
+
+        if (i < CLICK_BUF_SIZE)
+            clickBuf[i] = totalClick;
 
         // Cross-bridge sympathetic resonance:
         // Driving vertical bridge force excites unplayed open strings, coupling equally across soundboard
@@ -496,6 +502,16 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
     body.processBlock(outputL, outputR, numSamples);
+
+    // 3. Direct Airborne Plectrum Radiation:
+    // Injects the direct high-frequency pick snap (~4–12 kHz) directly into both channels,
+    // bypassing the soundboard body lowpass filter while preserving master gain and DC blocking.
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float click = (i < CLICK_BUF_SIZE) ? clickBuf[i] : 0.0f;
+        outputL[i] += click;
+        outputR[i] += click;
+    }
 
     // 4. DC Blocker, Master Gain, and Transparent Soft Saturation
     constexpr float R = 0.9974f;
@@ -559,6 +575,7 @@ void SynthEngine::reset()
     dcX_L = 0.f; dcY_L = 0.f;
     dcX_R = 0.f; dcY_R = 0.f;
     std::fill_n(reflectionBuf, REFLECTION_BUF_SIZE, 0.f);
+    std::fill_n(clickBuf, CLICK_BUF_SIZE, 0.f);
     reflectionIdx = 0;
     keyswitchPalmMuteActive = false;
     keyswitchFullMuteActive = false;

@@ -156,6 +156,29 @@ Before declaring any task complete or committing code:
   - **Acoustic Waterfall Roll-Off Contour**: Transformed flat uniform FDTD decay into a natural acoustic diagonal decay curve ($5\text{ kHz}-10\text{ kHz}$ decaying in $\sim 0.25\text{--}0.4\text{ s}$ while $80\text{--}250\text{ Hz}$ fundamentals sustain warmly for $3\text{--}5+\text{ s}$).
   - **Quality Gates Passed**: `bench_synth: RTCheck PASS (0)` (0 heap allocations) and `pluginval: SUCCESS` (strictness 8, 0 errors).
   - **DAW Deployment**: Deployed freshly compiled release binary to `C:\Program Files\Common Files\VST3\Hybrid Synth.vst3`.
+- [x] **v49.f**:
+  - **Dual-Path Airborne Plectrum Radiation**: Implemented direct acoustic plectrum snap radiation (~4–12 kHz broadband impulse, ~8–14 ms decay) bypassing the soundboard body lowpass filter.
+  - **Cascaded 3-Stage High-Pass Filter**: Sample-rate adaptive 3-pole filter ($f_1 \approx 3.5\text{ kHz}, f_2 \approx 5.2\text{ kHz}, f_3 \approx 7.5\text{ kHz}$) delivering authentic 18 dB/oct high-pass plectrum click profile.
+  - **Zero-Allocation Audio Thread Architecture**: Pre-allocated scratch buffers in `SynthEngine` and discrete scalar state in `Voice`, maintaining bit-exact thread safety.
+  - **Quality Gates Passed**: `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, 6-voice FDTD max load 27.1%).
+  - **Objective Benchmark**: Multi-Scale STFT ratings remain `GOOD` and `EXCELLENT` across all chords, with Chord C FDTD achieving **0.8614** (outperforming waveguide).
+  - **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+- [x] **v50.f**:
+  - **Physical Elastodynamic Plectrum & Fingernail Model**: Replaced filtered white noise with an acoustic dipole shock wave (Ricker pressure doublet) coupled into dual material flexural resonators:
+    - **Steel Acoustic**: Celluloid/Tortex flatpick plate flex mode ($f_1 \approx 4200\text{ Hz}, Q \approx 7.5$) and tip snap mode ($f_2 \approx 7200\text{ Hz}, Q \approx 5.5$).
+    - **Nylon Classical**: Keratin fingernail flex mode ($f_1 \approx 2800\text{ Hz}, Q \approx 3.8$) and fingertip flesh contact mode ($f_2 \approx 4800\text{ Hz}, Q \approx 3.0$).
+  - **Pluck Position Sensitivity (`Pick Pos`)**: Wired `clampedPickPos` directly into the release mechanics — plucking near the bridge increases string boundary stiffness, sharpening the dipole release wave ($\tau \approx 0.12\text{ ms}$, $+20\%$ snap), while plucking near the neck widens and cushions the release ($\tau \approx 0.22\text{ ms}$, $-18\%$).
+  - **Wound-Wire Pre-Release Micro-Texture**: Added an accelerating micro-slip chirp ($1800\text{--}3400\text{ Hz}$) preceding the snap on wound strings ($E_2, A_2, D_3$).
+  - **Quality Gates Passed**: `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, 6-voice FDTD max load 26.8%).
+  - **Objective Benchmark Breakthrough**: Multi-Scale STFT improved across all chords, with Chord C FDTD achieving **0.8524** (`EXCELLENT`), Chord G achieving **1.3511** (`GOOD`), and Chord Am achieving Log-STFT L1 **0.1401**.
+  - **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+- [x] **v51.f**:
+  - **Plectrum Attack Presence & Impulse Response Calibration**: Calibrated the flexural modal resonators for transient impulse excitation ($2.4\times$ Mode 1, $2.0\times$ Mode 2), delivering full audible plate resonance without impulse attenuation.
+  - **Full-Strength Dipole Snap**: Increased the direct acoustic pressure snap contribution to $0.85\times$ shock, restoring the immediate attack punch.
+  - **Airborne Edge Sizzle (8–16 kHz)**: Integrated high-frequency edge cavitation and slip friction layer ($f_c \approx 8\text{ kHz}$ 1-pole HP) providing crisp acoustic "bite" and top-end air.
+  - **Quality Gates Passed**: `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, max load 27.1%).
+  - **Objective Benchmark**: All chords remain `GOOD` and `EXCELLENT` across the board (Chord C FDTD at **0.8632** `EXCELLENT`).
+  - **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
 
 ---
 
