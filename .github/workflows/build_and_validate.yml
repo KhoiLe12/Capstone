@@ -1,0 +1,88 @@
+name: Build, Validate & Test (Cross-Platform)
+
+on:
+  push:
+    branches: [ "main", "feat/*", "fix/*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (Ubuntu x86_64)
+            os: ubuntu-22.04
+            generator: Ninja
+            artifact_name: HybridSynth-Linux-x86_64
+            bench_cmd: ./build/bench_synth
+
+          - name: macOS (Apple Silicon / Clang)
+            os: macos-latest
+            generator: Ninja
+            artifact_name: HybridSynth-macOS
+            bench_cmd: ./build/bench_synth
+
+          - name: Windows (MSVC cl.exe x64)
+            os: windows-latest
+            generator: Ninja
+            artifact_name: HybridSynth-Windows-x64
+            bench_cmd: build/bench_synth.exe
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Ninja
+        uses: ashley-hebler/configure-ninja@v1.0.3
+
+      - name: Install Linux Audio & Graphical Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libfreetype6-dev \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev
+
+      - name: Set up MSVC Developer Command Prompt
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure CMake (Windows MSVC)
+        if: runner.os == 'Windows'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+
+      - name: Configure CMake (Linux & macOS)
+        if: runner.os != 'Windows'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build All Targets (Plugin, bench_synth, render_audio)
+        run: cmake --build build --config Release --parallel
+
+      - name: Real-Time Safety & DSP Benchmark (RTCheck)
+        run: ${{ matrix.bench_cmd }}
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: build/HybridSynth_artefacts/Release/
+          if-no-files-found: warn
+

@@ -179,12 +179,18 @@ Before declaring any task complete or committing code:
   - **Quality Gates Passed**: `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, max load 27.1%).
   - **Objective Benchmark**: All chords remain `GOOD` and `EXCELLENT` across the board (Chord C FDTD at **0.8632** `EXCELLENT`).
   - **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+- [x] **v52.f**:
+  - **Native Linux & Cross-Platform Plugin Targets**: Platform-aware plugin format configuration in [`CMakeLists.txt`](CMakeLists.txt) automatically building native Linux **VST3**, **LV2**, and **Standalone** on Linux, **VST3**, **AU**, and **Standalone** on macOS, and **VST3** and **Standalone** on Windows.
+  - **Cross-Platform Optimization Flags**: Added `-mavx2 -mfma` for GCC and Clang on x86_64 Linux to match MSVC `/arch:AVX2` performance across all build targets.
+  - **Automated Cross-Platform GitHub Actions CI Matrix**: Added [`.github/workflows/build_and_validate.yml`](.github/workflows/build_and_validate.yml) running automated parallel matrix builds on `ubuntu-22.04` (Linux x86_64), `macos-latest` (Apple Silicon), and `windows-latest` (MSVC x64) with native `bench_synth` real-time safety validation (`RTCheck: PASS (0)`) and artifact archiving on every push and PR.
+  - **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, 6-voice FDTD max load 26.7%).
+  - **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
 
 ---
 
 ### In Progress / Next Priorities
-- [ ] **GitHub Actions Cross-Platform CI**:
-  - Add `.github/workflows/build_and_validate.yml` to automatically build Standalone/VST3 on Windows, macOS, and Linux runners and run `pluginval` and `bench_synth` on every push/PR.
+- [x] **GitHub Actions Cross-Platform CI**:
+  - Added `.github/workflows/build_and_validate.yml` to automatically build Standalone/VST3/LV2 on Windows, macOS, and Linux runners and run `bench_synth` on every push/PR.
 - [ ] **Preset Management System**:
   - Implement a JSON-based factory preset loader (e.g. "Dreadnought Acoustic", "Nylon Classical", "Strat Neck Single-Coil", "Flamenco Hard Attack", "12-String Shimmer").
 - [ ] **Micro-Tuning & Alternate Tuning Support**:

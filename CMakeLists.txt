@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 51.0.0)
+project(HybridSynth VERSION 52.0.0)
 
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
 
@@ -11,13 +11,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(JUCE)
 
 # ---------------------------------------------------------------------------
+# Cross-Platform Plugin Formats (macOS: VST3+AU, Linux: VST3+LV2, Windows: VST3)
+# ---------------------------------------------------------------------------
+set(HYBRID_SYNTH_FORMATS VST3 Standalone)
+if (APPLE)
+    list(APPEND HYBRID_SYNTH_FORMATS AU)
+endif()
+if (UNIX AND NOT APPLE)
+    list(APPEND HYBRID_SYNTH_FORMATS LV2)
+endif()
+
+# ---------------------------------------------------------------------------
 # Plugin target
 # ---------------------------------------------------------------------------
 juce_add_plugin(HybridSynth
     COMPANY_NAME                "Capstone"
     PLUGIN_MANUFACTURER_CODE    Caps
     PLUGIN_CODE                 Hybs
-    FORMATS                     VST3 AU Standalone
+    FORMATS                     ${HYBRID_SYNTH_FORMATS}
     PRODUCT_NAME                "Hybrid Synth"
     IS_SYNTH                    TRUE
     NEEDS_MIDI_INPUT            TRUE
@@ -64,6 +75,10 @@ target_link_libraries(HybridSynth
 
 if (MSVC)
     target_compile_options(HybridSynth PRIVATE /arch:AVX2 /fp:fast)
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        target_compile_options(HybridSynth PRIVATE -mavx2 -mfma)
+    endif()
 endif()
 
 
@@ -103,6 +118,10 @@ target_link_libraries(bench_synth
 
 if (MSVC)
     target_compile_options(bench_synth PRIVATE /arch:AVX2 /fp:fast)
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        target_compile_options(bench_synth PRIVATE -mavx2 -mfma)
+    endif()
 endif()
 
 
@@ -144,6 +163,10 @@ target_link_libraries(render_audio
 
 if (MSVC)
     target_compile_options(render_audio PRIVATE /arch:AVX2 /fp:fast)
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        target_compile_options(render_audio PRIVATE -mavx2 -mfma)
+    endif()
 endif()
 
 
