@@ -71,6 +71,103 @@ void Voice::noteOn(int note, float vel,
 
     physicalStringIndex = s;
 
+    const float clampedVel = std::clamp(velocity, 0.01f, 1.0f);
+
+    // Check for Authentic Full Mute / Dead Notes ("X" notes):
+    // Fretting hand rests loosely across the fretboard. No standing wave or pitch f0 can form.
+    // Instead, the plectrum strike delivers an unpitched mechanical dipole impulse into
+    // the bridge saddle, exciting the BodyResonance soundboard cavity (A0/T1 modes)
+    // with an authentic, deep, woody acoustic chug!
+    if (muteMode == KarplusStrong::MuteMode::Full)
+    {
+        isDeadNotePulse = true;
+        deadPulseElapsed = 0;
+        deadPulseDuration = static_cast<int>(0.028f * sampleRate); // ~28 ms
+
+        // Mass-dependent dipole impulse geometry:
+        // Wound bass strings (E2, A2, D3) have substantial mass and tension,
+        // delivering a broader mechanical thrust (~1.35 ms) pumping the 105 Hz body cavity (A0 mode).
+        // Plain treble strings (G3, B3, E4) deliver a narrower mechanical thrust (~0.75 ms) pumping the 200 Hz plate mode.
+        const float woundMassFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.18f) : 0.40f;
+        const float pulseSec = 0.00075f + 0.00060f * woundMassFactor;
+        deadPulseSigma = std::max(10.0f, pulseSec * sampleRate);
+        deadPulseCenter = 2.0f * deadPulseSigma;
+
+        // Force amplitude: physical bridge drive proportional to velocity and string gauge:
+        deadPulseAmp = clampedVel * (isSteel ? 0.36f : 0.30f) * (0.75f + 0.70f * woundMassFactor);
+
+        // Reset string models so ZERO periodic pitch f0 can circulate
+        fdtdString.reset();
+        string.reset();
+
+        // ── Direct Airborne Plectrum Physical Radiation for Dead Notes (v55.f) ───
+        const float clampedPickPos = std::clamp(pickPosition, 0.08f, 0.48f);
+        const float posStiffness = 1.0f + 0.85f * (0.24f - clampedPickPos);
+        const float woundBonus   = 1.0f + 0.55f * woundMassFactor;
+        const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel), 0.05f, 1.0f);
+
+        // Full acoustic presence: crisp tactile pick snap & wire clack
+        pickClickAmp = clampedVel * effBrightness * (isSteel ? 0.125f : 0.095f) * woundBonus * posStiffness;
+
+        const float clickDurSec = isSteel ? (0.011f + 0.005f * effBrightness) : (0.009f + 0.004f * effBrightness);
+        pickClickSamplesLeft    = static_cast<int>(clickDurSec * sampleRate);
+        pickClickElapsed        = 0;
+
+        pickEdgeDecayRate       = 3.8f / (clickDurSec * sampleRate);
+        pickEdgeHPState         = 0.0f;
+
+        const float sigmaSec    = (isSteel ? 0.00014f : 0.00019f) * (1.15f - 0.35f * effBrightness) / std::max(0.6f, posStiffness);
+        pickDipoleSigma         = std::max(2.5f, sigmaSec * sampleRate);
+        pickDipoleCenter        = 2.2f * pickDipoleSigma;
+
+        // Material flexural eigenmodes (Steel: ~4.2 kHz & ~7.2 kHz; Nylon: ~2.8 kHz & ~4.8 kHz)
+        const float f1 = (isSteel ? 4200.0f : 2800.0f) * (0.92f + 0.16f * effBrightness) * (0.95f + 0.10f * posStiffness);
+        const float Q1 = isSteel ? 7.5f : 3.8f;
+        const float f2 = (isSteel ? 7200.0f : 4800.0f) * (0.90f + 0.20f * effBrightness);
+        const float Q2 = isSteel ? 5.5f : 3.0f;
+
+        const float w1 = 2.0f * kPi * std::clamp(f1, 200.0f, sampleRate * 0.45f) / sampleRate;
+        const float bw1 = f1 / Q1;
+        const float r1 = std::clamp(std::exp(-kPi * bw1 / sampleRate), 0.1f, 0.995f);
+        pickRes1_b0 = (1.0f - r1 * r1) * 0.5f;
+        pickRes1_a1 = -2.0f * r1 * std::cos(w1);
+        pickRes1_a2 = r1 * r1;
+        pickRes1_x1 = 0.0f; pickRes1_x2 = 0.0f; pickRes1_y1 = 0.0f; pickRes1_y2 = 0.0f;
+
+        const float w2 = 2.0f * kPi * std::clamp(f2, 400.0f, sampleRate * 0.45f) / sampleRate;
+        const float bw2 = f2 / Q2;
+        const float r2 = std::clamp(std::exp(-kPi * bw2 / sampleRate), 0.1f, 0.995f);
+        pickRes2_b0 = (1.0f - r2 * r2) * 0.5f;
+        pickRes2_a1 = -2.0f * r2 * std::cos(w2);
+        pickRes2_a2 = r2 * r2;
+        pickRes2_x1 = 0.0f; pickRes2_x2 = 0.0f; pickRes2_y1 = 0.0f; pickRes2_y2 = 0.0f;
+
+        pickClickRng = static_cast<uint32_t>(0xDEAD1234u)
+                       ^ static_cast<uint32_t>(note * 7919)
+                       ^ static_cast<uint32_t>(clampedVel * 65535.0f)
+                       ^ static_cast<uint32_t>(s * 31337);
+
+        // Pre-release wound string rasp
+        if (woundMassFactor > 0.45f)
+        {
+            const float ridgeDurSec = 0.0035f + 0.0035f * woundMassFactor;
+            pickRidgeDurSamples = static_cast<int>(ridgeDurSec * sampleRate);
+            pickRidgeAmp = clampedVel * (0.35f + 0.65f * effBrightness) * woundMassFactor * 0.45f;
+            pickRidgePhase = 0.0f;
+            pickRidgePhaseInc = 2.0f * kPi * 1800.0f / sampleRate;
+            pickRidgeChirpRate = (2.0f * kPi * (3400.0f - 1800.0f) / sampleRate) / static_cast<float>(std::max(1, pickRidgeDurSamples));
+        }
+        else
+        {
+            pickRidgeAmp        = 0.0f;
+            pickRidgeDurSamples = 0;
+        }
+
+        return;
+    }
+
+    isDeadNotePulse = false;
+
     if (engineType == EngineType::BilbaoFdtd)
     {
         const int fret = std::max(0, std::min(22, note - openMidi[s]));
@@ -103,11 +200,10 @@ void Voice::noteOn(int note, float vel,
         p.T0 = T0;
 
         // Dynamic velocity-dependent brightness with humanization micro-variation:
-        const float clampedVel = std::clamp(velocity, 0.01f, 1.0f);
         const float humanJitter = 1.0f + 0.03f * humanRand();
         const float pickJitter  = 0.012f * humanRand();
         const float humanAngle  = humanRand();
-        const float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel) * humanJitter, 0.05f, 1.0f);
+        float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel) * humanJitter, 0.05f, 1.0f);
 
         // Register-dependent acoustic decay and compliance:
         const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
@@ -126,17 +222,14 @@ void Voice::noteOn(int note, float vel,
 
         if (muteMode == KarplusStrong::MuteMode::Palm)
         {
-            // Palm muting: fleshy palm heel on bridge absorbs high partials and drops sustain to ~80-100ms
-            effSigma0 = std::max(28.0f, effSigma0 * 2.2f);
-            effSigma1 = std::max(1.5e-3f, effSigma1 * 2.0f);
-            effDispScale = 0.65f;
-        }
-        else if (muteMode == KarplusStrong::MuteMode::Full)
-        {
-            // Full mute / dead notes ("X" notes): fretting hand rests flat across strings
-            effSigma0 = std::max(70.0f, effSigma0 * 4.0f);
-            effSigma1 = std::max(3.5e-3f, effSigma1 * 2.5f);
-            effDispScale = 0.45f;
+            // Palm muting: fleshy palm heel rests on bridge saddles.
+            // High sigma1 viscoelastic absorption rapidly dissipates high partials (>350 Hz),
+            // while allowing the low fundamental and 2nd harmonic (80-250 Hz) to produce
+            // a tight, punchy acoustic "chug" lasting ~75-110 ms (v55.f).
+            effSigma0 = (isSteel ? 9.5f : 11.0f) + 8.5f * (1.0f - decay);
+            effSigma1 = std::max(2.8e-3f, effSigma1 * 4.0f);
+            effDispScale = 0.90f;
+            effBrightness *= 0.50f;
         }
 
         p.sigma0 = effSigma0;
@@ -179,8 +272,11 @@ void Voice::noteOn(int note, float vel,
             const float posStiffness = 1.0f + 0.85f * (0.24f - clampedPickPos);
             const float woundBonus   = 1.0f + 0.55f * p.woundFactor;
 
+            // Mute mode amplitude & contour scaling:
+            const float muteClickScale = (muteMode == KarplusStrong::MuteMode::Palm) ? 0.38f : 1.0f;
+
             // Amplitude scaling: calibrated to natural -18 dB to -22 dB acoustic ratio
-            pickClickAmp = clampedVel * effBrightness * (isSteel ? 0.115f : 0.085f) * woundBonus * posStiffness;
+            pickClickAmp = clampedVel * effBrightness * (isSteel ? 0.115f : 0.085f) * woundBonus * posStiffness * muteClickScale;
 
             const float clickDurSec = isSteel ? (0.009f + 0.006f * effBrightness)
                                               : (0.007f + 0.005f * effBrightness);
@@ -195,6 +291,10 @@ void Voice::noteOn(int note, float vel,
             // Bridge pluck -> faster, narrower shock (~0.12 ms); Neck pluck -> wider (~0.22 ms)
             const float sigmaSec    = (isSteel ? 0.00014f : 0.00019f) * (1.15f - 0.35f * effBrightness) / std::max(0.6f, posStiffness);
             pickDipoleSigma         = std::max(2.5f, sigmaSec * sampleRate);
+            if (muteMode == KarplusStrong::MuteMode::Palm)
+                pickDipoleSigma *= 1.45f;
+            else if (muteMode == KarplusStrong::MuteMode::Full)
+                pickDipoleSigma *= 1.85f;
             pickDipoleCenter        = 2.2f * pickDipoleSigma; // peak occurs shortly after release starts
 
             // Material flexural eigenmodes:
@@ -248,11 +348,8 @@ void Voice::noteOn(int note, float vel,
                            ^ static_cast<uint32_t>(s * 31337);
         }
 
-        if (muteMode == KarplusStrong::MuteMode::Full)
-        {
-            // Trigger physical mechanical hand slap / fret impact transient
-            choke(velocity);
-        }
+        // Note: Full mute ("X" note / percussive dead note) is simulated physically
+        // by the string's calibrated effSigma0/effSigma1 loss, allowing natural acoustic body excitation.
         return;
     }
 
@@ -325,11 +422,14 @@ void Voice::setMuteMode(KarplusStrong::MuteMode mode) noexcept
 
     if (mode == KarplusStrong::MuteMode::Palm)
     {
-        fdtdString.setDamping(28.0f);
+        fdtdString.setDamping(10.5f, 3.2e-3f);
     }
     else if (mode == KarplusStrong::MuteMode::Full)
     {
-        fdtdString.setDamping(70.0f);
+        if (active && !isDeadNotePulse)
+        {
+            choke(0.75f);
+        }
     }
     else
     {
@@ -344,39 +444,68 @@ void Voice::choke(float chokeVelocity) noexcept
         active = true;
         releasing = false;
         midiNote = 40; // Default to low E string for acoustic soundboard thud
+        isDeadNotePulse = true;
+        deadPulseElapsed = 0;
+        deadPulseDuration = static_cast<int>(0.028f * sampleRate);
+        deadPulseSigma = 55.0f;
+        deadPulseCenter = 2.0f * deadPulseSigma;
+        deadPulseAmp = chokeVelocity * 0.35f;
+        fdtdString.reset();
+        string.reset();
+
+        // Direct airborne tactile fretboard slap click (v55.f)
+        const bool isSteel = (stringMaterial == 1);
+        pickClickAmp = chokeVelocity * (isSteel ? 0.12f : 0.090f);
+        const float clickDurSec = 0.012f;
+        pickClickSamplesLeft = static_cast<int>(clickDurSec * sampleRate);
+        pickClickElapsed = 0;
+        pickEdgeDecayRate = 3.8f / (clickDurSec * sampleRate);
+        pickEdgeHPState = 0.0f;
+        pickDipoleSigma = std::max(2.5f, 0.00015f * sampleRate);
+        pickDipoleCenter = 2.2f * pickDipoleSigma;
+
+        const float f1 = isSteel ? 4200.0f : 2800.0f;
+        const float Q1 = isSteel ? 7.5f : 3.8f;
+        const float f2 = isSteel ? 7200.0f : 4800.0f;
+        const float Q2 = isSteel ? 5.5f : 3.0f;
+        const float w1 = 2.0f * kPi * f1 / sampleRate;
+        const float bw1 = f1 / Q1;
+        const float r1 = std::clamp(std::exp(-kPi * bw1 / sampleRate), 0.1f, 0.995f);
+        pickRes1_b0 = (1.0f - r1 * r1) * 0.5f;
+        pickRes1_a1 = -2.0f * r1 * std::cos(w1);
+        pickRes1_a2 = r1 * r1;
+        pickRes1_x1 = 0.0f; pickRes1_x2 = 0.0f; pickRes1_y1 = 0.0f; pickRes1_y2 = 0.0f;
+
+        const float w2 = 2.0f * kPi * f2 / sampleRate;
+        const float bw2 = f2 / Q2;
+        const float r2 = std::clamp(std::exp(-kPi * bw2 / sampleRate), 0.1f, 0.995f);
+        pickRes2_b0 = (1.0f - r2 * r2) * 0.5f;
+        pickRes2_a1 = -2.0f * r2 * std::cos(w2);
+        pickRes2_a2 = r2 * r2;
+        pickRes2_x1 = 0.0f; pickRes2_x2 = 0.0f; pickRes2_y1 = 0.0f; pickRes2_y2 = 0.0f;
+
+        pickRidgeDurSamples = 0;
+        pickRidgeAmp = 0.0f;
+        return;
     }
 
     choking = true;
     chokeGain = 1.0f;
 
-    // Physical contact with palm/fret hand instantly absorbs string kinetic energy:
-    // Damping time constant 1.8ms (chokeCoeff): string ringing drops to <6% in ~5ms
-    chokeCoeff = std::exp(-1.0f / (0.0018f * sampleRate));
-    // Transient impulse of ~45ms excites the acoustic body IR without synthetic bass boom
-    chokeSamplesLeft = static_cast<int>(0.045f * sampleRate);
+    // Physical contact with palm/fret hand absorbs string kinetic energy over ~10-15 ms:
+    chokeCoeff = std::exp(-1.0f / (0.010f * sampleRate));
+    chokeSamplesLeft = static_cast<int>(0.035f * sampleRate);
 
-    // Instant damping for FDTD physical string (pure sigma0, CFL safe)
-    fdtdString.setDamping(95.0f);
-
+    // Mechanical hand slap impulse into bridge saddle (excites BodyResonance soundboard)
     const float freq = midiToFreq(midiNote > 0 ? midiNote : 40);
     const float woundFactor = std::clamp((196.0f - freq) / (196.0f - 82.0f), 0.0f, 1.0f);
 
-    // 1. Soundboard cavity air thud (A0 Helmholtz / lower bout mode):
-    // Wound strings have higher mass impact -> deep, warm 105 Hz thud; plain strings ~145 Hz
-    const float thudFreq = 105.0f + 40.0f * (1.0f - woundFactor);
-    slapThudPhase = 0.f;
-    slapThudPhaseInc = 2.0f * kPi * thudFreq / sampleRate;
-    slapThudAmp = chokeVelocity * (0.38f + 0.35f * woundFactor);
-    const float thudTime = 0.012f + 0.012f * woundFactor; // 12ms (plain) to 24ms (wound)
-    slapThudDecay = std::exp(-1.0f / (thudTime * sampleRate));
-
-    // 2. Fret-wire contact snap (sharp high-frequency mechanical transient):
-    const float clickFreq = 1800.0f + 800.0f * (1.0f - woundFactor);
-    slapClickPhase = 0.f;
-    slapClickPhaseInc = 2.0f * kPi * clickFreq / sampleRate;
-    slapClickAmp = chokeVelocity * (0.24f + 0.20f * (1.0f - woundFactor));
-    const float clickTime = 0.004f + 0.004f * woundFactor; // 4ms to 8ms
-    slapClickDecay = std::exp(-1.0f / (clickTime * sampleRate));
+    slapActive = true;
+    slapPulseAmp = chokeVelocity * 0.30f * (0.8f + 0.4f * woundFactor);
+    slapPulseSigma = 48.0f;
+    slapPulseCenter = 40.0f;
+    slapPulseElapsed = 0;
+    slapPulseDuration = static_cast<int>(0.025f * sampleRate);
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +515,29 @@ void Voice::choke(float chokeVelocity) noexcept
 float Voice::tick() noexcept
 {
     if (!active) return 0.f;
+
+    if (isDeadNotePulse)
+    {
+        float out = 0.0f;
+        if (deadPulseElapsed < deadPulseDuration)
+        {
+            const float t = static_cast<float>(deadPulseElapsed) - deadPulseCenter;
+            const float u = t / deadPulseSigma;
+            if (std::abs(u) < 3.8f)
+            {
+                out = -u * std::exp(-0.5f * u * u) * deadPulseAmp;
+            }
+            ++deadPulseElapsed;
+        }
+        else
+        {
+            active = false;
+            isDeadNotePulse = false;
+            midiNote = -1;
+            out = 0.0f;
+        }
+        return out;
+    }
 
     // Scale FDTD spatial slope to match DWG digital line level cleanly
     float out = (engineType == EngineType::BilbaoFdtd) ? (fdtdString.tick() * 95.0f) : string.tick();
@@ -405,36 +557,35 @@ float Voice::tick() noexcept
         out *= chokeGain;
         chokeGain *= chokeCoeff;
 
-        // Once the string vibration has decayed into silence (< 0.01 = -40dB), reset the delay line
+        // Once the string vibration has decayed into silence (< 0.002 = -54dB), reset the delay line
         // so no residual harmonic pitch can circulate or leak through.
-        if (chokeGain < 0.01f && chokeGain > 0.0f)
+        if (chokeGain < 0.002f && chokeGain > 0.0f)
         {
             string.reset();
             fdtdString.reset();
             chokeGain = 0.0f;
         }
 
-        float slapOut = 0.f;
-        if (slapThudAmp > 1e-5f)
+        if (slapActive)
         {
-            slapOut += slapThudAmp * std::sin(slapThudPhase);
-            slapThudPhase += slapThudPhaseInc;
-            if (slapThudPhase >= 2.0f * kPi) slapThudPhase -= 2.0f * kPi;
-            slapThudAmp *= slapThudDecay;
+            if (slapPulseElapsed < slapPulseDuration)
+            {
+                const float t = static_cast<float>(slapPulseElapsed) - slapPulseCenter;
+                const float u = t / slapPulseSigma;
+                if (std::abs(u) < 3.8f)
+                {
+                    out += -u * std::exp(-0.5f * u * u) * slapPulseAmp;
+                }
+                ++slapPulseElapsed;
+            }
+            else
+            {
+                slapActive = false;
+            }
         }
-
-        if (slapClickAmp > 1e-5f)
-        {
-            slapOut += slapClickAmp * std::sin(slapClickPhase);
-            slapClickPhase += slapClickPhaseInc;
-            if (slapClickPhase >= 2.0f * kPi) slapClickPhase -= 2.0f * kPi;
-            slapClickAmp *= slapClickDecay;
-        }
-
-        out += slapOut;
 
         --chokeSamplesLeft;
-        if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && slapThudAmp <= 1e-5f && slapClickAmp <= 1e-5f))
+        if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && !slapActive))
         {
             active = false;
             choking = false;
@@ -502,6 +653,32 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         return;
     }
 
+    if (isDeadNotePulse)
+    {
+        float fV = 0.0f;
+        if (deadPulseElapsed < deadPulseDuration)
+        {
+            const float t = static_cast<float>(deadPulseElapsed) - deadPulseCenter;
+            const float u = t / deadPulseSigma;
+            if (std::abs(u) < 3.8f)
+            {
+                fV = -u * std::exp(-0.5f * u * u) * deadPulseAmp;
+            }
+            ++deadPulseElapsed;
+        }
+        else
+        {
+            active = false;
+            isDeadNotePulse = false;
+            midiNote = -1;
+            fV = 0.0f;
+        }
+
+        outV = fV;
+        outH = 0.0f;
+        return;
+    }
+
     if (engineType == EngineType::BilbaoFdtd)
     {
         float fV = 0.0f, fH = 0.0f;
@@ -527,7 +704,7 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         {
             gainScale = chokeGain;
             chokeGain *= chokeCoeff;
-            if (chokeGain < 0.01f && chokeGain > 0.0f)
+            if (chokeGain < 0.002f && chokeGain > 0.0f)
             {
                 string.reset();
                 fdtdString.reset();
@@ -565,26 +742,25 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         outH = fH * gainScale;
 
         // Choke mechanical hand slap is added to vertical plate pumping
-        if (choking)
+        if (choking && slapActive)
         {
-            float slapOut = 0.f;
-            if (slapThudAmp > 1e-5f)
+            if (slapPulseElapsed < slapPulseDuration)
             {
-                slapOut += slapThudAmp * std::sin(slapThudPhase);
-                slapThudPhase += slapThudPhaseInc;
-                if (slapThudPhase >= 2.0f * kPi) slapThudPhase -= 2.0f * kPi;
-                slapThudAmp *= slapThudDecay;
+                const float t = static_cast<float>(slapPulseElapsed) - slapPulseCenter;
+                const float u = t / slapPulseSigma;
+                if (std::abs(u) < 3.8f)
+                {
+                    outV += -u * std::exp(-0.5f * u * u) * slapPulseAmp;
+                }
+                ++slapPulseElapsed;
             }
-            if (slapClickAmp > 1e-5f)
+            else
             {
-                slapOut += slapClickAmp * std::sin(slapClickPhase);
-                slapClickPhase += slapClickPhaseInc;
-                if (slapClickPhase >= 2.0f * kPi) slapClickPhase -= 2.0f * kPi;
-                slapClickAmp *= slapClickDecay;
+                slapActive = false;
             }
-            outV += slapOut;
+
             --chokeSamplesLeft;
-            if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && slapThudAmp <= 1e-5f && slapClickAmp <= 1e-5f))
+            if (chokeSamplesLeft <= 0 || (chokeGain <= 0.0f && !slapActive))
             {
                 active = false;
                 choking = false;
@@ -615,10 +791,12 @@ void Voice::reset() noexcept
     active = false;
     releasing = false;
     choking = false;
+    isDeadNotePulse = false;
+    deadPulseElapsed = 0;
+    slapActive = false;
+    slapPulseElapsed = 0;
     chokeGain = 1.0f;
     chokeSamplesLeft = 0;
-    slapThudAmp = 0.f;
-    slapClickAmp = 0.f;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
     midiNote = -1;

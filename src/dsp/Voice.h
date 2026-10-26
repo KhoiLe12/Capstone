@@ -98,6 +98,7 @@ public:
     int   getMidiNote() const noexcept { return midiNote; }
     float getEnergy()   const noexcept
     {
+        if (isDeadNotePulse) return deadPulseAmp * 0.5f;
         const float eng = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
         return eng * (releasing ? releaseGain : (choking ? chokeGain : 1.0f));
     }
@@ -133,18 +134,23 @@ private:
     float chokeCoeff       = 0.99f;
     int   chokeSamplesLeft = 0;
 
-    // Dual-component acoustic slap:
-    // 1. Low-end soundboard cavity thud (A0 Helmholtz / lower bout mode)
-    float slapThudAmp      = 0.f;
-    float slapThudPhase    = 0.f;
-    float slapThudPhaseInc = 0.f;
-    float slapThudDecay    = 0.99f;
+    // Dead-note ("X" note) mechanical bridge saddle dipole impulse:
+    // Models the non-oscillating physical impact of a plectrum plucking an overdamped string,
+    // exciting the soundboard body IR cavity (A0/T1 modes) with ZERO periodic pitch f0.
+    bool     isDeadNotePulse       = false;
+    float    deadPulseAmp          = 0.0f;
+    float    deadPulseSigma        = 50.0f;
+    float    deadPulseCenter       = 100.0f;
+    int      deadPulseElapsed      = 0;
+    int      deadPulseDuration     = 0;
 
-    // 2. Fret-wire contact click (snappy metal/wood contact)
-    float slapClickAmp      = 0.f;
-    float slapClickPhase    = 0.f;
-    float slapClickPhaseInc = 0.f;
-    float slapClickDecay    = 0.99f;
+    // Choke hand slap mechanical dipole impulse into bridge saddle
+    bool     slapActive            = false;
+    float    slapPulseAmp          = 0.0f;
+    float    slapPulseSigma        = 48.0f;
+    float    slapPulseCenter       = 40.0f;
+    int      slapPulseElapsed      = 0;
+    int      slapPulseDuration     = 0;
 
     // Direct airborne plectrum physical radiation (v50.f)
     // Physical elastodynamic model of acoustic dipole shock wave + dual flexural eigenmodes + wire ridge micro-texture
