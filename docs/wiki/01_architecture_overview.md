@@ -51,6 +51,13 @@ Unlike standard electronic synthesizers with generic round-robin voice stealing,
 - If multiple strings can play a note, the allocator chooses an idle string closest to the current fretting position.
 - **Decaying String Re-Trigger Protection (v45.f)**: If an incoming chord note targets a physical string currently decaying in release, the allocator prioritizes truly idle strings to prevent audible voice-clobbering pops.
 
+### Monophonic Lead Legato Routing Engine (v57.f–v58.f)
+When `paramLegatoEnabled` is true, incoming notes in DAW piano rolls are evaluated for acoustic hammer-ons and pull-offs before string allocation:
+1. **Monophonic State Verification**: Exactly 1 note must be currently held (`numCurrentlyHeld == 1`). If 2 or more notes are held, polyphonic chord behavior is preserved.
+2. **Onset Age Guard**: The held note must have been sounding for $\ge 160$ samples ($\sim 4\text{ ms}$) to prevent near-simultaneous chord voicings from collapsing.
+3. **Physical Fretting Reach**: Legato triggers if the new note is on the same natural string ($\text{interval} \le 12$) OR within an adjacent cross-boundary melodic reach ($0 \le \text{fret} \le 19$, $\text{interval} \le 3$).
+4. **Seamless Handover**: The active voice updates its fundamental pitch without pick transient click, and transfers `heldNotes` tracking so subsequent Note-Offs release cleanly.
+
 ---
 
 ## 3. Polyphonic Bridge Impedance & Headroom Scaling

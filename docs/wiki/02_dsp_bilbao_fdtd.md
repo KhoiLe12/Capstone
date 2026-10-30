@@ -68,3 +68,32 @@ We employ an **adaptive dual-path solver**:
 | **Equilibrium Tension ($T_0$)** | $45\text{--}75\text{ N}$ per string | $105\text{--}145\text{ N}$ per string |
 | **Acoustic Character** | Warm, round, fast treble dissipation | Bright, ringing, sustained, metallic snap |
 
+---
+
+## 6. Bilbao FDTD Legato Transition Mechanics (v56.f–v58.f)
+
+When a legato transition occurs on an actively vibrating string, the FDTD grid must adapt to a new vibrating speaking length $L_\text{new}$ without causing discontinuities, clicks, or loss of existing wave energy.
+
+### A. Bridge-Aligned Spatial Grid Remap
+On an acoustic guitar, the bridge saddle is stationary at coordinate $x = L$, and fretting shortens the string from the nut end ($x = 0$). Grid points are therefore aligned relative to the bridge:
+$$\text{distFromBridge} = (N_\text{pts} - i) \cdot h_\text{new}$$
+$$\text{oldGridPos} = N_\text{pts, old} - \frac{\text{distFromBridge}}{h_\text{old}}$$
+Existing transverse displacements $u^n$ and $u^{n-1}$ are linearly interpolated between adjacent old grid indices and tapered smoothly to zero at the new fretted nut boundary:
+$$u_\text{new}(i) = \left[ (1 - \text{frac}) \cdot u_\text{old}(\text{idx}_0) + \text{frac} \cdot u_\text{old}(\text{idx}_1) \right] \cdot \min\left(1, \frac{i + 1}{4}\right)$$
+
+### B. Dynamic Dispersion-Compensated Tension Calibration (v57.f)
+To prevent microtonal pitch drift during legato retuning, equilibrium tension $T_0$ is solved dynamically using the elastodynamic dispersion formula:
+$$T_0 = \rho A (2 L f_\text{tuned})^2 - \frac{\pi^2 E I}{L^2}$$
+Ensures identical fundamental pitch accuracy ($< 0.1\text{ Hz}$ error) between picked notes and legato hammer/pull notes.
+
+### C. Fret Contact & Pizzicato Excitation
+- **Hammer-On**: Injects a localized downward impact impulse into the first few grid points near the fretted nut:
+  $$u_\text{curr}[1..3] += \text{tapAmp}, \quad \text{tapAmp} = -0.000045 \times \text{vel}$$
+- **Pull-Off**: Imparts an authentic left-hand pizzicato triangular release pluck centered at $x_\text{release} = L_\text{new} - L_\text{old}$:
+  $$u_\text{curr}[i] += \text{pullAmp} \times \text{triangle}(x_i), \quad \text{pullAmp} = 0.00070 \times \text{vel} \times \text{bassBoost}$$
+  Low frets ($\text{fret} \le 2$) use $\text{bassBoost} = 1.55\times$ to balance low-register radiation.
+
+### D. Zero-Allocation Scratch Buffering (v58.f)
+To prevent heap allocations (`malloc`) on the audio thread during grid remaps, `saved_curr` and `saved_prev` scratch vectors are pre-reserved to `kMaxGridSize = 512` in `init()`, guaranteeing `RTCheck PASS (0)`.
+
+

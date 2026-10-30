@@ -54,3 +54,22 @@ Hard plucks increase string elongation, momentarily raising string tension and p
 $$\Delta f(t) = \Delta f_\text{peak} \cdot e^{-t / \tau_\text{settle}}$$
 Accurately reproduces the acoustic "pitch-drop settle" heard when digging hard into low bass strings.
 
+---
+
+## 5. Waveguide Legato Transition Mechanics (v56.f–v58.f)
+
+When a legato transition occurs on Engine 0 (Digital Waveguide):
+
+1. **Continuous Delay Line Retuning**:
+   - The loop delay length and allpass fractional filter coefficients are updated to the new frequency $f_\text{new}$ via `setFrequency()`.
+   - Existing circulating delay line contents (`delayLineV`, `delayLineH`) are preserved rather than reset, maintaining ongoing acoustic oscillation.
+2. **Fret Contact Energy Scaling**:
+   - Fret hand contact dissipates a small fraction of circulating wave momentum:
+     - Hammer-On: $\text{energyRetention} = 0.80$ ($20\%$ absorption from finger pad damping).
+     - Pull-Off: $\text{energyRetention} = 0.92$ ($8\%$ absorption during quick release).
+3. **Mechanical Saddle Impulse Injection**:
+   - Warm fret tap impulse injected into write head (`delayLineV`):
+     $$\text{tapAmp} = \text{vel} \times (0.040 \text{ hammer} \mid 0.085 \text{ pull})$$
+   - Direct airborne plectrum attack bursts are zeroed, ensuring purely mechanical legato articulation.
+
+

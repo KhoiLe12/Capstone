@@ -20,6 +20,9 @@ constexpr size_t kMaxGridSize = 512;
 u_next.reserve(kMaxGridSize);
 u_curr.reserve(kMaxGridSize);
 u_prev.reserve(kMaxGridSize);
+// Pre-allocated FDTD legato scratch buffers (v58.f):
+saved_curr.reserve(kMaxGridSize);
+saved_prev.reserve(kMaxGridSize);
 ```
 
 ### Denormal & NaN Protection

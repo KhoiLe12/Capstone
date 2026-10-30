@@ -32,15 +32,26 @@ The synthesizer features 4 distinct physical playing articulations, modeled via 
 - Rapidly attenuates ringing string energy to zero within $\sim 10\text{ ms}$ (`chokeCoeff = exp(-1.0 / (0.010 * fs))`).
 - Injects a mechanical hand slap impulse into the bridge saddle, pumping the acoustic body IR naturally. **Zero synthetic sine oscillators**.
 
-### E. Legato Articulations: Hammer-Ons & Pull-Offs (v56.f)
+### E. Legato Articulations: Hammer-Ons & Pull-Offs (v56.f–v58.f)
 - **Physical Context**: Fretting finger descends onto a higher fret (Hammer-On) or snaps off to a lower fret (Pull-Off) on an already vibrating string without right-hand plectrum pick re-excitation.
-- **Acoustic Mechanics**:
+- **DAW Piano Roll Overlapping Note Protocol (v57.f)**:
+  - Supports standard DAW piano roll overlapping note phrasing (FL Studio, Ableton Live, Logic Pro, Cubase, Studio One, Reaper).
+  - When notes overlap during monophonic lead lines, the synthesizer automatically executes a seamless acoustic legato transition on the vibrating string.
+  - Ascending overlapping intervals execute **Hammer-Ons**; descending overlapping intervals execute **Pull-Offs**.
+  - **Note-Off Handover**: Sustained legato transitions gracefully ignore the earlier note's Note-Off message, transferring voice ownership to the new pitch without cutoffs.
+- **Cross-Boundary Fretting Reach (v58.f)**:
+  - In standard guitar string allocation, adjacent scale notes often span default string boundaries (e.g. $C_4 \to D_4$, $F \to G$, $A \to B$).
+  - When exactly 1 note is actively held on physical string $s$, the engine allows cross-boundary notes to hammer on or pull off on string $s$ if physically reachable ($0 \le \text{fret} \le 19$) within a melodic fretting span ($\text{interval} \le 3$ semitones).
+- **Simultaneous Chord Protection via Voice Onset Age (v58.f)**:
+  - Legato transitions require the held note to have been sounding for at least $\sim 4\text{ ms}$ (`samplesSinceNoteOn >= 160` at 44.1k/48k).
+  - Simultaneous chord voicings drawn at the same piano roll tick have 0 ms onset difference, guaranteeing chord notes are never stolen or collapsed into legato runs.
+- **Acoustic Mechanics & Synthesis**:
   - **Zero Plectrum Snap**: Direct airborne pick attack, flexural tortex eigenmodes, and wound wire rasp chirps are completely bypassed.
   - **Wave Momentum Continuity**: Bridge-aligned spatial grid mapping smoothly maps propagating wave packets between old and new vibrating lengths without discontinuity jumps.
-  - **Calibrated Damping Invariant**: FDTD loss parameters ($\sigma_0, \sigma_1$) match register-dependent open sustain decay rather than artificially doubling damping.
-  - **Hammer-On Mechanics**: Fretting finger impacts the fret wire, injecting a soft downward impulse ($\text{tapAmp} = -0.000035 \times \text{vel}$) right at the boundary nut ($x = 0$).
-  - **Pull-Off Left-Hand Pizzicato**: The fretting finger releasing from the higher fret snaps laterally across the string at $x_\text{release} = L_\text{new} - L_\text{old}$, imparting a warm triangular displacement wave ($\text{pullAmp} = 0.00020 \times \text{vel}$) across the newly lengthened string so notes sustain with full resonance (matching hammer-on RMS within $\pm 1.5\text{ dB}$).
-  - **Adaptive Triggering**: Automatically detects legato transitions on actively vibrating strings within a 1-octave span ($\Delta \le 12$ semitones) during monophonic lead lines; can be overridden via `paramLegatoEnabled`.
+  - **Dynamic Dispersion-Compensated Tension $T_0$ (v57.f)**: Exact sub-Hertz fundamental pitch tracking via dynamic tension calculation:
+    $$T_0 = \rho A (2 L f_\text{tuned})^2 - \frac{\pi^2 E I}{L^2}$$
+  - **Hammer-On Mechanics**: Fretting finger impacts the fret wire, injecting a soft downward impulse ($\text{tapAmp} = -0.000045 \times \text{vel}$) right at the boundary nut ($x = 0$).
+  - **Calibrated Full-Body Pull-Off Mechanics (v57.f)**: The fretting finger releasing from the higher fret snaps laterally across the string at $x_\text{release} = L_\text{new} - L_\text{old}$, creating a triangular displacement wave ($\text{pullAmp} = 0.00070 \times \text{vel} \times \text{bassBoost}$). Low frets ($\text{fret} \le 2$) use $\text{bassBoost} = 1.55\times$ to overcome bridge boundary impedance and match hammer-on levels within $\pm 0.7\text{ dB}$.
 
 ---
 
