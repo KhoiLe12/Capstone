@@ -71,6 +71,12 @@ public:
      */
     void trigger(const float* exciterBuf, int length, float velocity = 0.8f);
 
+    /**
+     * Legato transition (Hammer-On / Pull-Off) without resetting delay line history.
+     * Retunes delay lines to new frequency and injects a subtle finger tap/release impulse.
+     */
+    void legatoTransition(float newFreqHz, float velocity, bool isHammerOn, float stiffness = 0.25f) noexcept;
+
     /** Advance one sample and return the string output at the bridge. */
     float tick() noexcept;
 

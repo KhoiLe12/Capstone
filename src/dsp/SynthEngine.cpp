@@ -100,12 +100,11 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
         return;
     }
 
-    heldNotes[midiNote] = velocity;
-
     // If strumming is active (via parameter toggle or keyswitch),
     // held notes define the chord for the strumming engine.
     if (isStrumActive())
     {
+        heldNotes[midiNote] = velocity;
         int heldCount = 0;
         for (int n = GUITAR_MIN_NOTE; n <= GUITAR_MAX_NOTE; ++n)
             if (heldNotes[n] > 0.001f)
@@ -123,6 +122,79 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
     }
 
     const bool isFdtd = (paramEngineType >= 0.5f);
+
+    // ── Legato Articulation Detection (DAW Piano Roll Overlapping Notes) ──
+    // On acoustic guitar, a hammer-on or pull-off occurs ONLY when playing a monophonic lead line
+    // along the SAME physical string, where the new note starts while the previous fret is still held.
+    // Chords and non-overlapping notes MUST ALWAYS be played with fresh plectrum pick strikes!
+    int legatoVoice = -1;
+    if (paramLegatoEnabled && !isStrumActive() && !isFullMuteActive())
+    {
+        // Count how many notes are actively held down in the DAW before this new note arrived:
+        int numCurrentlyHeld = 0;
+        int heldVoiceIdx = -1;
+        int heldMidiNote = -1;
+
+        for (int v = 0; v < NUM_VOICES; ++v)
+        {
+            if (voices[v].isActive())
+            {
+                const int n = voices[v].getMidiNote();
+                if (n > 0 && heldNotes[n] > 0.001f)
+                {
+                    heldVoiceIdx = v;
+                    heldMidiNote = n;
+                    ++numCurrentlyHeld;
+                }
+            }
+        }
+
+        // Legato is strictly valid ONLY for monophonic lead transitions where exactly 1 note is held:
+        if (numCurrentlyHeld == 1 && heldVoiceIdx >= 0)
+        {
+            // The held note must have been sounding for at least ~4ms (160 samples at 44.1k/48k)
+            // to distinguish an intentional legato transition from a simultaneous chord / polyphonic voicing:
+            if (voices[heldVoiceIdx].getSamplesSinceNoteOn() >= 160)
+            {
+                const int interval = std::abs(midiNote - heldMidiNote);
+                if (interval >= 1 && interval <= 12)
+                {
+                    const int heldStr = voices[heldVoiceIdx].getPhysicalStringIndex();
+                    if (heldStr >= 0 && heldStr < 6)
+                    {
+                        static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
+                        const int minOpen = (heldStr == 0) ? 38 : openMidi[heldStr];
+                        const int fret = midiNote - minOpen;
+
+                        // Case 1: Same natural string: full span up to 12 semitones
+                        const bool sameNaturalString = (assignStringForNote(midiNote) == heldStr);
+
+                        // Case 2: Adjacent string boundary crossover (e.g. C3 to D3 on string 1):
+                        // Valid hammer-on / pull-off if physically reachable on the held string (fret 0..19)
+                        // within a comfortable melodic fretting reach (interval <= 3 semitones):
+                        const bool reachableLegatoOnHeldString = (fret >= 0 && fret <= 19 && interval <= 3);
+
+                        if (sameNaturalString || reachableLegatoOnHeldString)
+                        {
+                            legatoVoice = heldVoiceIdx;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (legatoVoice >= 0)
+    {
+        const int oldNote = voices[legatoVoice].getMidiNote();
+        const bool isHammerOn = (midiNote > oldNote);
+        heldNotes[oldNote] = 0.0f; // Hand position transferred to new note
+        heldNotes[midiNote] = velocity;
+        voices[legatoVoice].legatoTransition(midiNote, velocity, isHammerOn, paramStiffness);
+        return;
+    }
+
+    heldNotes[midiNote] = velocity;
     const int s = assignStringForNote(midiNote);
 
     voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);

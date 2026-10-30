@@ -6,6 +6,41 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v58.f
+- **DAW Legato Cross-Boundary Fretting Reach**:
+  - Resolved string-allocation boundary conflict in `SynthEngine`: previously, `assignStringForNote()` routed adjacent notes across string boundaries (e.g., $C_4 \to D_4$, $F \to G$, $A \to B$) to new open strings, causing overlapping notes to play as two-note chords rather than legato transitions.
+  - Enabled cross-boundary fretting reach on actively vibrating strings: if a voice is held on physical string $s$, and the new overlapping note is physically reachable on string $s$ ($0 \le \text{fret} \le 19$) with interval $\le 3$ semitones, the engine seamlessly executes the acoustic legato transition (hammer-on or pull-off) on the vibrating string.
+- **Simultaneous Chord Protection via Voice Onset Age**:
+  - Implemented minimum onset age check (`samplesSinceNoteOn >= 160`, $\sim 4\text{ ms}$): prevents simultaneous chord voicings or near-simultaneous MIDI attacks from being erroneously categorized as legato transitions, guaranteeing chord polyphony is never stolen or collapsed.
+- **Zero-Allocation FDTD Legato Scratch**:
+  - Pre-reserved scratch buffers (`saved_curr`, `saved_prev`) in `FdtdString` eliminating heap allocations during runtime legato grid retuning.
+- **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, peak load 26.62%).
+- **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+
+### v57.f
+- **DAW MIDI Overlapping Note Legato Integration**:
+  - Implemented the universal DAW piano roll overlapping note standard in `SynthEngine`: drawing notes that overlap in FL Studio, Ableton Live, Logic Pro, Cubase, or Reaper automatically engages seamless acoustic legato on the vibrating string.
+  - Ascending overlapping intervals execute **Hammer-Ons** (percussive fret tap impulse, zero pick click); descending overlapping intervals execute **Pull-Offs** (left-hand pizzicato snap, ringing open sustain).
+  - Sustained legato transitions gracefully ignore the earlier note's Note-Off message, preventing premature audio cutoff.
+- **Dispersion-Compensated Legato Tension Calibration**:
+  - Eliminated hardcoded string tension bug in `Voice::legatoTransition()`: dynamic string tension $T_0(f, L, \rho_A, EI)$ guarantees exact sub-Hertz fundamental pitch tracking across all fretted legato transitions (e.g. $F^\sharp_2 = 92.8\text{ Hz}$, $G^\sharp_2 = 104.0\text{ Hz}$), matching picked notes perfectly.
+- **Calibrated Full-Body Pull-Off Mechanics**:
+  - Increased fret-hand lateral release displacement to $0.60\text{ mm}$ and added low-fret compliance compensation ($1.55\times$ on frets $\le 2$), eliminating trailing note volume drop-off and matching hammer-on levels within $\pm 0.7\text{ dB}$.
+- **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, peak load 12.53%).
+- **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+
+### v56.f
+- **Acoustic Legato Articulations: Hammer-Ons & Pull-Offs**:
+  - Initial foundation for acoustic legato note transitions on actively vibrating strings within a 1-octave interval ($\Delta \le 12$ semitones) without interrupting chord strumming or dead-note mechanics; controllable via `paramLegatoEnabled`.
+  - **Zero Plectrum Snap**: Bypasses all direct airborne plectrum clicks, high-frequency edge bite, and wound wire rasp chirps on legato notes, modeling authentic fret-hand fretting mechanics.
+  - **Wave Momentum Continuity**: Bridge-aligned spatial grid mapping smoothly maps propagating wave packets between old and new vibrating lengths without discontinuity jumps.
+  - **Calibrated Damping Invariant**: FDTD loss parameters ($\sigma_0, \sigma_1$) match register-dependent open sustain decay rather than artificially doubling damping.
+  - **Hammer-On Mechanics**: Fretting finger impacts the fret wire, injecting a soft downward impulse ($\text{tapAmp} = -0.000035 \times \text{vel}$) right at the boundary nut ($x = 0$).
+  - **Pull-Off Left-Hand Pizzicato Excitation**: Modeled physical left-hand fret-hand pluck where the finger snaps laterally at $x_\text{release} = L_\text{new} - L_\text{old}$, creating a triangular displacement wave ($\text{pullAmp} = 0.00020 \times \text{vel}$) across the newly lengthened string so notes sustain with full resonance (all 5 notes in phrase balanced within $\pm 1.5\text{ dB}$).
+  - **Harness Comparison Tooling**: Added `--noLegato` / `--forceRepluck` CLI mode to render identical melodic phrases ($E_2 \to F^\sharp_2 \to G^\sharp_2 \to F^\sharp_2 \to E_2$) for direct A/B testing of legato hammer/pulls vs individual plectrum strikes on the web dashboard.
+- **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, peak load 26.35%).
+- **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+
 ### v55.f
 - **Full-Spectrum Dead-Note Tactile Pick Presence**: Restored full $1.0\times$ plectrum click amplitude with dual flexural eigenmodes ($f_1 \approx 4200\text{ Hz}, f_2 \approx 7200\text{ Hz}$ on steel, $2800\text{ Hz} / 4800\text{ Hz}$ on nylon), high-frequency edge air bite ($8\text{--}16\text{ kHz}$), and pre-release wound wire rasp on dead notes, delivering crisp acoustic tactile attack presence over the low-end body chug.
 - **Keyswitch Choke Slap Click**: Enabled direct airborne tactile click in `Voice::choke()` when triggered via keyswitch D1 (`KEYSWITCH_CHOKE`), ensuring hand chokes have tactile snap + body thud.

@@ -63,6 +63,12 @@ public:
                 int stringIdx = -1,
                 int stringMaterial = 0);
 
+    /**
+     * Legato transition (Hammer-On or Pull-Off) without plectrum snap.
+     * Retunes the active string while preserving existing acoustic momentum.
+     */
+    void legatoTransition(int newMidiNote, float newVelocity, bool isHammerOn, float stiffness = 0.25f) noexcept;
+
     /** Signal note release (string continues natural decay). */
     void noteOff() noexcept;
 
@@ -96,6 +102,7 @@ public:
 
     bool  isActive()    const noexcept { return active; }
     int   getMidiNote() const noexcept { return midiNote; }
+    int   getSamplesSinceNoteOn() const noexcept { return samplesSinceNoteOn; }
     float getEnergy()   const noexcept
     {
         if (isDeadNotePulse) return deadPulseAmp * 0.5f;
@@ -127,6 +134,7 @@ private:
     float releaseGain     = 1.0f;
     float releaseCoeff    = 0.999f;
     int   fadeSamplesLeft = -1;
+    int   samplesSinceNoteOn = 0;
 
     // Physical acoustic choke & hand slap transient state
     bool  choking          = false;

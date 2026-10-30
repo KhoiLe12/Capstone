@@ -43,6 +43,7 @@ public:
     // -------------------------------------------------------------------
     // Physical Parameters & Articulations — set by PluginProcessor
     // -------------------------------------------------------------------
+    bool paramLegatoEnabled = true; ///< Enable acoustic hammer-on / pull-off legato on same-string intervals
     static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24 / FL: C2) Hold Keyswitch
     static constexpr int KEYSWITCH_FULL_MUTE = 26; ///< D1 (MIDI Note 26 / FL: D2) Hold/Choke Keyswitch
     static constexpr int KEYSWITCH_STRUM_8TH = 28; ///< E1 (MIDI Note 28 / FL: E2) 8th-Note Strum Keyswitch

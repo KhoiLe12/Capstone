@@ -111,11 +111,11 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v55.f**
-- **Zero-pitch percussive dead-note dipole impulses** driving body cavity ($105\text{ Hz}$) and soundboard plate ($200\text{ Hz}$).
-- **Selective viscoelastic palm mute damping** with responsive fundamental sustain ($\tau \approx 75\text{--}110\text{ ms}$).
-- **Full tactile plectrum snap** ($1.0\times$), flexural modal resonators, edge air bite ($8\text{--}16\text{ kHz}$), and pre-release wire rasp.
-- **Cross-platform build system & CI matrix** (Windows, macOS, Linux Standalone/VST3/AU/LV2) with `bench_synth: RTCheck PASS (0)`.
+### Current Version Status: **v58.f**
+- **DAW Legato Cross-Boundary Fretting Reach**: Resolved string-allocation boundary bug where overlapping whole-step / half-step notes (such as $C_4 \to D_4$, $F \to G$, $A \to B$) on the DAW piano roll were mistakenly routed to different strings instead of hammering on the actively held vibrating string.
+- **Simultaneous Chord Protection via Voice Onset Age**: Added minimum voice onset threshold (`samplesSinceNoteOn >= 160`, ~4ms) preventing simultaneous chord voicings or near-simultaneous MIDI attacks from collapsing or misfiring legato transitions.
+- **Zero-Allocation FDTD Legato Scratch**: Pre-reserved scratch buffers (`saved_curr`, `saved_prev`) in `FdtdString` eliminating heap allocations during runtime legato retuning.
+- **Real-Time Zero-Allocation Safety**: `bench_synth: RTCheck PASS (0)` on all block sizes (32..512) and multi-track sweeps.
 
 ### In Progress / Next Priorities
 - [x] **GitHub Actions Cross-Platform CI**:

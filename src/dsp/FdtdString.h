@@ -140,6 +140,8 @@ public:
             Du_H.reserve(kMaxGridSize);
             D2u_H.reserve(kMaxGridSize);
             Du_prev_H.reserve(kMaxGridSize);
+            saved_curr.reserve(kMaxGridSize);
+            saved_prev.reserve(kMaxGridSize);
         }
 
         // States
@@ -276,6 +278,115 @@ public:
         scrapeTotalSamples = 0;
         scrapeAmp = 0.0f;
         scrapeFilterState = 0.0f;
+        lastScrapeForce = 0.0f;
+    }
+
+    /**
+     * Legato transition (Hammer-On / Pull-Off) for FDTD elastodynamic string PDE.
+     * Retunes vibrating length L to new fret without zeroing existing wave displacement,
+     * transferring existing wave momentum to the new speaking length.
+     */
+    void legatoTransition(const StringParams& newParams, float velocity, bool isHammerOn) noexcept
+    {
+        // 1. Save existing wave momentum
+        const float oldL = p.L;
+        const int oldN_pts = N_pts;
+        saved_curr.resize(static_cast<size_t>(oldN_pts));
+        saved_prev.resize(static_cast<size_t>(oldN_pts));
+        std::copy_n(u_curr.data(), oldN_pts, saved_curr.data());
+        std::copy_n(u_prev.data(), oldN_pts, saved_prev.data());
+
+        // 2. Re-initialize grid parameters for new vibrating length & frequency
+        p = newParams;
+        initialSigma1 = p.sigma1;
+        const float A = 3.14159265358979323846f * p.r * p.r;
+        const float rBending = (p.r_stiffness > 0.0f) ? p.r_stiffness : p.r;
+        const float I = 3.14159265358979323846f * rBending * rBending * rBending * rBending * 0.25f;
+        rhoA = p.rho * A;
+        EI   = p.E * I;
+        EA   = p.E * A;
+
+        const float cSq = p.T0 / rhoA;
+        const float kappaSq = EI / rhoA;
+        const float hMin = std::sqrt(0.5f * (cSq * k * k + 4.0f * p.sigma1 * k + std::sqrt((cSq * k * k + 4.0f * p.sigma1 * k) * (cSq * k * k + 4.0f * p.sigma1 * k) + 16.0f * kappaSq * k * k)));
+        N = static_cast<int>(std::floor(p.L / hMin));
+        if (N < 10) N = 10;
+        h = p.L / static_cast<float>(N);
+        N_pts = N - 1;
+
+        // 3. Physically correct boundary mapping:
+        // On a real guitar, the bridge is fixed at coordinate x = 0 (or x = L_bridge),
+        // and fretting shortens the string from the nut end (x_fret = oldL - newL).
+        // The bridge slope is computed at the bridge boundary index (N_pts - 1).
+        // Therefore, we align the grid at the bridge end:
+        // x_bridge_dist = (N_pts - 1 - i) * h
+        // old_idx = oldN_pts - 1 - (x_bridge_dist / old_h)
+        const float oldH = oldL / static_cast<float>(oldN_pts + 1);
+
+        for (int i = 0; i < N_pts; ++i)
+        {
+            // Distance from bridge (point N_pts is 0 distance from bridge)
+            const float distFromBridge = static_cast<float>(N_pts - i) * h;
+            const float oldGridPos = static_cast<float>(oldN_pts) - (distFromBridge / oldH);
+            const int idx0 = std::clamp(static_cast<int>(std::floor(oldGridPos)), 0, oldN_pts - 1);
+            const int idx1 = std::clamp(idx0 + 1, 0, oldN_pts - 1);
+            const float frac = std::clamp(oldGridPos - static_cast<float>(idx0), 0.0f, 1.0f);
+
+            // Taper displacement smoothly to 0 at the new fretted nut (i = 0)
+            const float boundaryTaper = std::min(1.0f, static_cast<float>(i + 1) / 4.0f);
+
+            if (oldGridPos >= 0.0f && idx0 < static_cast<int>(saved_curr.size()) && idx1 < static_cast<int>(saved_curr.size()))
+            {
+                u_curr[static_cast<size_t>(i)] = ((1.0f - frac) * saved_curr[static_cast<size_t>(idx0)] + frac * saved_curr[static_cast<size_t>(idx1)]) * boundaryTaper;
+                u_prev[static_cast<size_t>(i)] = ((1.0f - frac) * saved_prev[static_cast<size_t>(idx0)] + frac * saved_prev[static_cast<size_t>(idx1)]) * boundaryTaper;
+            }
+            else
+            {
+                u_curr[static_cast<size_t>(i)] = 0.0f;
+                u_prev[static_cast<size_t>(i)] = 0.0f;
+            }
+            u_next[static_cast<size_t>(i)] = 0.0f;
+        }
+
+        // 4. Acoustic fret excitation on legato note transition:
+        if (isHammerOn)
+        {
+            // Hammer-On: Warm fret wire impact impulse
+            if (N_pts > 4)
+            {
+                const float tapAmp = -velocity * 0.000045f;
+                u_curr[1] += tapAmp * 0.5f;
+                u_curr[2] += tapAmp;
+                u_curr[3] += tapAmp * 0.5f;
+                u_prev[2] += tapAmp * 0.2f;
+            }
+        }
+        else
+        {
+            // Pull-Off: Left-hand pizzicato release at the released fret position.
+            // As the finger releases from the higher fret, it snaps the string laterally,
+            // imparting an authentic triangular pluck displacement wave over the newly lengthened string.
+            const float xRelease = std::clamp(p.L - oldL, 0.04f, 0.35f * p.L);
+            // Lower frets (and open string) require higher pull-off compliance to overcome
+            // bridge boundary impedance and Fletcher-Munson bass perception curves:
+            const float bassBoost = (p.fretNumber <= 2) ? 1.55f : 1.15f;
+            const float pullAmp = velocity * 0.00070f * bassBoost;
+            for (int i = 0; i < N_pts; ++i)
+            {
+                const float x = static_cast<float>(i + 1) * h;
+                float disp = 0.0f;
+                if (x < xRelease)
+                    disp = pullAmp * (x / xRelease);
+                else
+                    disp = pullAmp * (p.L - x) / (p.L - xRelease);
+
+                u_curr[static_cast<size_t>(i)] += disp;
+                u_prev[static_cast<size_t>(i)] += disp; // Plucked release from rest for rich fundamental sustain
+            }
+        }
+
+        // Reset scrape to avoid plectrum click
+        scrapeSamplesLeft = 0;
         lastScrapeForce = 0.0f;
     }
 
@@ -1129,6 +1240,8 @@ private:
     std::vector<float> gF;
     std::vector<float> gFG;
     std::vector<float> b_string;
+    std::vector<float> saved_curr;
+    std::vector<float> saved_prev;
 
     float saddleBeta = 0.0f;
     float saddleFilterState = 0.0f;

@@ -29,6 +29,10 @@ int main(int argc, char* argv[])
     float bodyMix = 0.70f;
     float sampleRate = 44100.0f;
     float durationSec = 4.0f;
+    bool palmMute = false;
+    bool fullMute = false;
+    float noteSpacingSec = 0.0f; // Sequential note timing (for melodies / legato tests)
+    bool forceRepluck = false;   // Disable legato detection to render picked re-strum comparison
     std::string outputPath = "synth_output.wav";
 
     for (int i = 1; i < argc; ++i)
@@ -37,6 +41,22 @@ int main(int argc, char* argv[])
         if (arg == "--engine" && i + 1 < argc)
         {
             engineType = std::stof(argv[++i]);
+        }
+        else if (arg == "--forceRepluck" || arg == "--noLegato")
+        {
+            forceRepluck = true;
+        }
+        else if (arg == "--seq" && i + 1 < argc)
+        {
+            noteSpacingSec = std::stof(argv[++i]);
+        }
+        else if (arg == "--palmMute" || arg == "--palm")
+        {
+            palmMute = true;
+        }
+        else if (arg == "--fullMute" || arg == "--dead")
+        {
+            fullMute = true;
         }
         else if (arg == "--chord" && i + 1 < argc)
         {
@@ -101,9 +121,12 @@ int main(int argc, char* argv[])
     engine.paramStringMaterial = stringMaterial;
     engine.paramBodyType = bodyType;
     engine.paramBodyMix = bodyMix;
+    engine.paramPalmMute = palmMute;
+    engine.paramFullMute = fullMute;
     engine.paramDecay = 0.75f;
     engine.paramBrightness = 0.65f;
     engine.paramMasterGain = 0.85f;
+    engine.paramLegatoEnabled = !forceRepluck;
 
     struct ScheduledNote {
         int sampleOffset;
@@ -118,10 +141,13 @@ int main(int argc, char* argv[])
 
     const int numNotes = static_cast<int>(midiNotes.size());
     std::vector<int> sortedNotes = midiNotes;
-    if (isDownstroke)
-        std::sort(sortedNotes.begin(), sortedNotes.end());
-    else
-        std::sort(sortedNotes.begin(), sortedNotes.end(), std::greater<int>());
+    if (noteSpacingSec <= 0.0f)
+    {
+        if (isDownstroke)
+            std::sort(sortedNotes.begin(), sortedNotes.end());
+        else
+            std::sort(sortedNotes.begin(), sortedNotes.end(), std::greater<int>());
+    }
 
     const float baseBrt = 0.65f;
     const float basePos = 0.23f;
@@ -133,7 +159,12 @@ int main(int argc, char* argv[])
         float brt = baseBrt;
         float pos = basePos;
 
-        if (strumSpreadMs > 0.0f && numNotes > 1)
+        if (noteSpacingSec > 0.0f)
+        {
+            // Sequential melodic notes (e.g., Hammer-on / Pull-off phrase)
+            offset = static_cast<int>(static_cast<float>(n) * noteSpacingSec * sampleRate);
+        }
+        else if (strumSpreadMs > 0.0f && numNotes > 1)
         {
             if (strumMode == 0)
             {

@@ -32,6 +32,16 @@ The synthesizer features 4 distinct physical playing articulations, modeled via 
 - Rapidly attenuates ringing string energy to zero within $\sim 10\text{ ms}$ (`chokeCoeff = exp(-1.0 / (0.010 * fs))`).
 - Injects a mechanical hand slap impulse into the bridge saddle, pumping the acoustic body IR naturally. **Zero synthetic sine oscillators**.
 
+### E. Legato Articulations: Hammer-Ons & Pull-Offs (v56.f)
+- **Physical Context**: Fretting finger descends onto a higher fret (Hammer-On) or snaps off to a lower fret (Pull-Off) on an already vibrating string without right-hand plectrum pick re-excitation.
+- **Acoustic Mechanics**:
+  - **Zero Plectrum Snap**: Direct airborne pick attack, flexural tortex eigenmodes, and wound wire rasp chirps are completely bypassed.
+  - **Wave Momentum Continuity**: Bridge-aligned spatial grid mapping smoothly maps propagating wave packets between old and new vibrating lengths without discontinuity jumps.
+  - **Calibrated Damping Invariant**: FDTD loss parameters ($\sigma_0, \sigma_1$) match register-dependent open sustain decay rather than artificially doubling damping.
+  - **Hammer-On Mechanics**: Fretting finger impacts the fret wire, injecting a soft downward impulse ($\text{tapAmp} = -0.000035 \times \text{vel}$) right at the boundary nut ($x = 0$).
+  - **Pull-Off Left-Hand Pizzicato**: The fretting finger releasing from the higher fret snaps laterally across the string at $x_\text{release} = L_\text{new} - L_\text{old}$, imparting a warm triangular displacement wave ($\text{pullAmp} = 0.00020 \times \text{vel}$) across the newly lengthened string so notes sustain with full resonance (matching hammer-on RMS within $\pm 1.5\text{ dB}$).
+  - **Adaptive Triggering**: Automatically detects legato transitions on actively vibrating strings within a 1-octave span ($\Delta \le 12$ semitones) during monophonic lead lines; can be overridden via `paramLegatoEnabled`.
+
 ---
 
 ## 2. MIDI Keyswitch Specification

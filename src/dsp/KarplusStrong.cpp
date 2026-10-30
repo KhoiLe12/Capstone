@@ -319,6 +319,36 @@ float KarplusStrong::tick() noexcept
 }
 
 // ---------------------------------------------------------------------------
+// Legato Articulation (Hammer-On & Pull-Off)
+// ---------------------------------------------------------------------------
+
+void KarplusStrong::legatoTransition(float newFreqHz, float velocity, bool isHammerOn, float stiffness) noexcept
+{
+    // 1. Smoothly retune delay lengths and loop coefficients to new frequency
+    setFrequency(newFreqHz, stiffness);
+
+    // 2. Scale existing circulating energy to simulate finger damping during fret contact
+    const float energyRetention = isHammerOn ? 0.80f : 0.92f;
+    for (float& s : delayLineV) s *= energyRetention;
+    for (float& s : delayLineH) s *= energyRetention;
+
+    // 3. Inject warm mechanical fret/finger impulse (zero pick rasp)
+    // A hammer-on slams the finger down (percussive tap); a pull-off imparts a left-hand pizzicato pluck
+    const float tapAmp = velocity * (isHammerOn ? 0.040f : 0.085f);
+    if (!delayLineV.empty())
+    {
+        // Inject at write head
+        const int idx = writeHeadV % static_cast<int>(delayLineV.size());
+        delayLineV[static_cast<size_t>(idx)] += tapAmp;
+        if (delayLineV.size() > 1)
+        {
+            const int idx2 = (writeHeadV + 1) % static_cast<int>(delayLineV.size());
+            delayLineV[static_cast<size_t>(idx2)] += tapAmp * 0.5f;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Reset
 // ---------------------------------------------------------------------------
 

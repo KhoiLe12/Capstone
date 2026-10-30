@@ -32,6 +32,7 @@ void Voice::noteOn(int note, float vel,
     midiNote = note;
     velocity = vel;
     active   = true;
+    samplesSinceNoteOn = 0;
     releasing = false;
     choking  = false;
     chokeGain = 1.0f;
@@ -387,6 +388,92 @@ void Voice::noteOn(int note, float vel,
     string.trigger(exciterScratch, exciterLen, velocity);
 }
 
+void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, float stiffness) noexcept
+{
+    midiNote = newNote;
+    velocity = newVelocity;
+    samplesSinceNoteOn = 0;
+    releasing = false;
+    releaseGain = 1.0f;
+    fadeSamplesLeft = -1; // Reset any decay auto-fade
+    active = true;
+
+    const float freq = midiToFreq(midiNote);
+    const bool isSteel = (stringMaterial == 1);
+    int s = physicalStringIndex;
+    if (s < 0 || s > 5)
+    {
+        if (newNote < 45)      s = 0;
+        else if (newNote < 50) s = 1;
+        else if (newNote < 55) s = 2;
+        else if (newNote < 59) s = 3;
+        else if (newNote < 64) s = 4;
+        else                   s = 5;
+    }
+
+    // Zero any direct airborne plectrum clicks (hammer-ons and pull-offs have NO pick attack)
+    pickClickSamplesLeft = 0;
+    pickClickAmp = 0.0f;
+    pickRidgeDurSamples = 0;
+    pickRidgeAmp = 0.0f;
+
+    if (engineType == EngineType::DigitalWaveguide)
+    {
+        string.legatoTransition(freq, newVelocity, isHammerOn, stiffness);
+    }
+    else
+    {
+        // Compute new FDTD parameters for the fretted string length
+        static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
+        static constexpr float nylonRadii[6]        = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
+        static constexpr float nylonBendingRadii[6] = { 0.00018f, 0.00019f, 0.00020f, 0.00026f, 0.00024f, 0.00020f };
+        static constexpr float steelRadii[6]        = { 0.00067f, 0.00053f, 0.00041f, 0.00030f, 0.00020f, 0.00015f };
+        static constexpr float steelBendingRadii[6] = { 0.00018f, 0.00018f, 0.00018f, 0.00016f, 0.00020f, 0.00015f };
+        static constexpr float steelDensities[6]    = { 6200.0f,  6400.0f,  6600.0f,  6800.0f,  7850.0f,  7850.0f };
+
+        FdtdString::StringParams p;
+        p.fretNumber = std::max(0, newNote - openMidi[s]);
+        p.L          = 0.65f * std::pow(2.0f, -static_cast<float>(p.fretNumber) / 12.0f);
+        p.f0         = freq;
+        p.r          = isSteel ? steelRadii[s] : nylonRadii[s];
+        p.r_stiffness = isSteel ? steelBendingRadii[s] : nylonBendingRadii[s];
+        p.rho        = isSteel ? steelDensities[s] : 1140.0f;
+        p.E          = isSteel ? (2.0e11f * (0.35f + 0.85f * stiffness))
+                               : (1.2e9f  * (0.15f + 1.20f * stiffness));
+
+        const float A = 3.14159265358979323846f * p.r * p.r;
+        const float I = 3.14159265358979323846f * p.r_stiffness * p.r_stiffness * p.r_stiffness * p.r_stiffness * 0.25f;
+        const float rhoA = p.rho * A;
+        const float EI = p.E * I;
+
+        // Discrete grid numerical dispersion compensation across physical strings (0..5)
+        static constexpr float centsOffsets[6] = { 1.5f, 1.5f, 1.0f, 0.8f, 0.5f, 0.0f };
+        const float tunedFreq = freq * std::pow(2.0f, -centsOffsets[s] / 1200.0f);
+
+        // Compute string tension dynamically to ensure EXACT pitch tracking matching noteOn:
+        float T0 = rhoA * std::pow(2.0f * p.L * tunedFreq, 2.0f) - (3.14159265f * 3.14159265f * EI) / (p.L * p.L);
+        if (T0 < 5.0f) T0 = 5.0f;
+        p.T0 = T0;
+
+        // Register-dependent acoustic decay and compliance (matching noteOn):
+        const float fRatio = std::clamp(freq / 82.4f, 1.0f, 16.0f);
+        const float registerDecayScale = std::pow(fRatio, isSteel ? 0.65f : 0.80f);
+        const float nutVsFretScale = (p.fretNumber == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(p.fretNumber));
+        p.sigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - currentDecay)) : (0.75f + 1.25f * (1.0f - currentDecay)))
+                   * registerDecayScale * nutVsFretScale;
+
+        const float trebleFactor = std::clamp((freq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
+        const float decaySigma1Scale = (1.0f + 0.6f * (1.0f - currentDecay));
+        p.sigma1 = (isSteel ? (3.5e-4f + 1.8e-3f * trebleFactor)
+                            : (4.5e-4f + 2.5e-3f * trebleFactor)) * decaySigma1Scale;
+
+        p.brightness = 0.60f;
+        p.woundFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.22f) : 0.0f;
+
+        fdtdString.legatoTransition(p, newVelocity, isHammerOn);
+    }
+}
+
 void Voice::noteOff() noexcept
 {
     // Begin smooth acoustic release envelope
@@ -515,6 +602,7 @@ void Voice::choke(float chokeVelocity) noexcept
 float Voice::tick() noexcept
 {
     if (!active) return 0.f;
+    ++samplesSinceNoteOn;
 
     if (isDeadNotePulse)
     {
@@ -652,6 +740,7 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         outH = 0.0f;
         return;
     }
+    ++samplesSinceNoteOn;
 
     if (isDeadNotePulse)
     {
