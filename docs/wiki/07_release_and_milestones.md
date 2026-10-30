@@ -6,6 +6,33 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v60.f
+- **First-Launch Preset Parity & Host Session Persistence**:
+  - Resolved initial instantiation mismatch where reopening the plugin defaulted to fallback values rather than the displayed preset:
+    - Processor constructor explicitly invokes `setCurrentProgram(0)` on creation.
+    - Updated `createParameterLayout()` default values to match Preset 0 (*Dreadnought Acoustic*: Steel, Bilbao FDTD, Gibson IR, decay 0.78, brightness 0.72, stiffness 0.28).
+    - Serialized `currentProgram` to XML in `getStateInformation()` and restored in `setStateInformation()`, ensuring host project recalls faithfully restore both the audio parameters and the active preset selector.
+- **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, peak load 26.53%).
+- **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+
+### v59.f
+- **Factory Preset Management & DAW Program Integration**:
+  - Implemented 8 factory physical modeling presets:
+    1. *"Dreadnought Acoustic"*: Steel string, Gibson Acoustic IR body, full sustain, Bilbao FDTD.
+    2. *"Nylon Concert Classical"*: Nylon string, Classical Nylon IR body, gentle plectrum contact, Bilbao FDTD.
+    3. *"Flamenco Rasgueado"*: Nylon string, Classical IR, snappy attack angle, low decay, wide stereo field.
+    4. *"Fingerstyle Auditorium"*: Steel string, Gibson IR body, high sustain, Digital Waveguide engine.
+    5. *"Vintage Parlor Blues"*: Steel string, 32-mode Modal Bank, compact body, woody grit, Bilbao FDTD.
+    6. *"12-String Shimmer"*: Steel string, Modal Bank, jumbo body, maximum stereo aura, Digital Waveguide.
+    7. *"Percussive Palm Chops"*: Steel string, Gibson IR, palm mute engaged, tight acoustic chug.
+    8. *"Warm Jazz Archtop"*: Nylon string, 32-mode Modal Bank, deep warmth, gentle soundhole pick position.
+  - Full native DAW program integration: implemented `getNumPrograms()`, `getCurrentProgram()`, `setCurrentProgram()`, and `getProgramName()` in `HybridSynthProcessor`, enabling FL Studio, Logic Pro, Cubase, and Studio One native wrapper preset selectors.
+  - Custom UI header dropdown selector: added `presetBox` in `PluginEditor` synchronized with host program changes.
+- **Bi-Directional APVTS Parameter Synchronization**:
+  - Selecting a preset updates all APVTS sliders, toggles, and combo attachments smoothly via `setValueNotifyingHost()` without audio thread locks.
+- **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, peak load 26.53%).
+- **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+
 ### v58.f
 - **DAW Legato Cross-Boundary Fretting Reach**:
   - Resolved string-allocation boundary conflict in `SynthEngine`: previously, `assignStringForNote()` routed adjacent notes across string boundaries (e.g., $C_4 \to D_4$, $F \to G$, $A \to B$) to new open strings, causing overlapping notes to play as two-note chords rather than legato transitions.
@@ -131,8 +158,8 @@ This document records all version increments, DSP milestones, acoustic breakthro
 - [ ] **Electric Guitar Mode (Electromagnetic Pickups & Solid Body)**:
   - Electromagnetic pickup induction model sensing string transverse velocity ($\frac{\partial u}{\partial t}$) at physical positions $x_\text{pickup}$ (Neck, Middle, Bridge).
   - Single-coil vs. Humbucker aperture comb filtering, tone pot load, and solid body low-damping sustained vibration.
-- [ ] **Preset Management System**:
-  - Implement a JSON-based factory preset loader (e.g. "Dreadnought Acoustic", "Nylon Classical", "Strat Neck Single-Coil", "Flamenco Hard Attack", "12-String Shimmer").
+- [x] **Preset Management System**:
+  - Implemented 8 distinct physical modeling factory presets accessible via DAW program selector and plugin header dropdown.
 - [ ] **Micro-Tuning & Alternate Tuning Support**:
   - Add support for Scala (`.scl`) files and standard alternate guitar tunings (Drop D, DADGAD, Open G, Open D).
 - [ ] **MPE & Polyphonic Aftertouch Expression**:

@@ -95,3 +95,29 @@ High-frequency plectrum snap and finger release cavitation ($4\text{--}16\text{ 
 - `Voice::tickPickClick()` runs synchronously in audio thread scratch buffers.
 - Summed directly into stereo channels **after** `BodyResonance::processBlock()`, preserving full master saturation and DC blocking protection.
 
+---
+
+## 6. Factory Preset & Program Management Architecture (v59.f)
+
+To allow fast auditioning and seamless DAW session recall without manual 14-parameter dialing:
+1. **Host Program Protocol**:
+   - `HybridSynthProcessor` overrides `getNumPrograms()`, `getCurrentProgram()`, `setCurrentProgram(int index)`, and `getProgramName(int index)`.
+   - DAW host wrappers (such as FL Studio's top preset bar, Logic Pro's preset manager, Cubase VST3 selector) automatically expose the 8 factory programs.
+2. **Bi-Directional APVTS Parameter Notification**:
+   - Program changes execute `param->setValueNotifyingHost(param->convertTo0to1(val))` across all APVTS parameters.
+   - This atomically moves all attached rotary sliders, toggle buttons, and combo boxes in the custom GUI (`PluginEditor`) without thread contention or audio dropouts.
+3. **Curated Physical Modeling Factory Presets**:
+   - *Dreadnought Acoustic*: Steel, Gibson IR, full sustain, Bilbao FDTD.
+   - *Nylon Concert Classical*: Nylon, Classical IR, soft plectrum contact, Bilbao FDTD.
+   - *Flamenco Rasgueado*: Nylon, Classical IR, fast snappy attack, wide stereo.
+   - *Fingerstyle Auditorium*: Steel, Gibson IR, high sustain, Digital Waveguide.
+   - *Vintage Parlor Blues*: Steel, 32-mode Modal Bank, woody grit, Bilbao FDTD.
+   - *12-String Shimmer*: Steel, Modal Bank, jumbo body, maximum stereo width, DWG.
+   - *Percussive Palm Chops*: Steel, Gibson IR, palm mute active, tight acoustic chug.
+   - *Warm Jazz Archtop*: Nylon, Modal Bank, deep warmth, gentle soundhole position.
+4. **First-Launch Initialization Parity**:
+   - The processor constructor explicitly executes `setCurrentProgram(0)` and sets APVTS layout defaults to match Preset 0 (*Dreadnought Acoustic*), guaranteeing that when the plugin is opened for the first time, all physical modeling DSP parameters match the displayed preset immediately.
+5. **Session State Persistence**:
+   - `currentProgram` is serialized to XML alongside the APVTS value tree in `getStateInformation()` and restored in `setStateInformation()`, ensuring host project recalls faithfully restore both the audio parameters and the active preset name.
+
+

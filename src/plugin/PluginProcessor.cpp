@@ -11,6 +11,7 @@ HybridSynthProcessor::HybridSynthProcessor()
               .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "HybridSynthState", createParameterLayout())
 {
+    setCurrentProgram(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -27,70 +28,70 @@ HybridSynthProcessor::createParameterLayout()
         juce::ParameterID{ "decay", 1 },
         "Decay",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.70f));
+        0.78f));
 
     // Brightness: spectral content of exciter burst / fingernail polish
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "brightness", 1 },
         "Brightness",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.60f));
+        0.72f));
 
-    // Pick Position: fractional position of plectrum/finger along string (0.23 = acoustic soundhole)
+    // Pick Position: fractional position of plectrum/finger along string (0.22 = acoustic soundhole)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "pickPosition", 1 },
         "Pick Position",
         juce::NormalisableRange<float>(0.05f, 0.50f),
-        0.23f));
+        0.22f));
 
     // Stiffness: string inharmonicity / dispersion (0 = pure harmonic, 1 = metallic steel)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "stiffness", 1 },
         "Stiffness",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.05f));
+        0.28f));
 
     // Body Size: modal scaling factor (0.6 = small parlor, 1.6 = jumbo)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "bodySize", 1 },
         "Body Size",
         juce::NormalisableRange<float>(0.6f, 1.6f),
-        1.00f));
+        1.15f));
 
     // Body Coupling: 0 = solid body electric (max sustain), 1 = full acoustic soundboard
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "bodyMix", 1 },
         "Body Coupling",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.70f));
+        0.80f));
 
     // Engine Model: 0 = Digital Waveguide (DWG), 1 = Bilbao FDTD (DAFx24)
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "engineModel", 1 },
         "Engine Model",
         juce::StringArray{ "Digital Waveguide (DWG)", "Bilbao FDTD (DAFx24)" },
-        0));
+        1));
 
     // String Material: 0 = Nylon Classical, 1 = Steel Acoustic
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "stringMaterial", 1 },
         "String Material",
         juce::StringArray{ "Nylon Classical", "Steel Acoustic" },
-        0));
+        1));
 
     // Body Model: 0 = Classical Nylon (IR), 1 = Gibson Acoustic (IR), 2 = Modal Bank (32-Mode)
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "bodyModel", 1 },
         "Body Model",
         juce::StringArray{ "Classical Nylon (IR)", "Gibson Acoustic (IR)", "Modal Bank (32-Mode)" },
-        0));
+        1));
 
     // Stereo Width: acoustic soundboard & string stereo field (0 = mono, 0.7 = natural, 1.0 = wide studio)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "stereoWidth", 1 },
         "Stereo Width",
         juce::NormalisableRange<float>(0.f, 1.f),
-        0.70f));
+        0.75f));
 
     // Master Gain: output level
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -200,6 +201,78 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 }
 
 // ---------------------------------------------------------------------------
+// Factory Presets & DAW Program Management
+// ---------------------------------------------------------------------------
+
+const std::vector<HybridSynthProcessor::FactoryPreset>& HybridSynthProcessor::getFactoryPresets() noexcept
+{
+    static const std::vector<FactoryPreset> presets = {
+        // Name,                      decay, brt,   pick,  stiff, size,  mix,   eng, mat, body, width, gain,  palm,  full,  strum
+        { "Dreadnought Acoustic",     0.78f, 0.72f, 0.22f, 0.28f, 1.15f, 0.80f, 1,   1,   1,    0.75f, 0.80f, false, false, false },
+        { "Nylon Concert Classical",   0.75f, 0.48f, 0.28f, 0.04f, 1.00f, 0.75f, 1,   0,   0,    0.65f, 0.85f, false, false, false },
+        { "Flamenco Rasgueado",       0.55f, 0.82f, 0.14f, 0.06f, 0.85f, 0.65f, 1,   0,   0,    0.80f, 0.85f, false, false, false },
+        { "Fingerstyle Auditorium",   0.85f, 0.65f, 0.25f, 0.18f, 1.05f, 0.72f, 0,   1,   1,    0.70f, 0.80f, false, false, false },
+        { "Vintage Parlor Blues",     0.62f, 0.75f, 0.18f, 0.35f, 0.75f, 0.60f, 1,   1,   2,    0.50f, 0.82f, false, false, false },
+        { "12-String Shimmer",        0.90f, 0.85f, 0.20f, 0.30f, 1.45f, 0.85f, 0,   1,   2,    1.00f, 0.78f, false, false, false },
+        { "Percussive Palm Chops",    0.40f, 0.70f, 0.20f, 0.20f, 1.00f, 0.85f, 1,   1,   1,    0.70f, 0.85f, true,  false, false },
+        { "Warm Jazz Archtop",        0.70f, 0.32f, 0.35f, 0.08f, 1.25f, 0.55f, 0,   0,   2,    0.60f, 0.85f, false, false, false }
+    };
+    return presets;
+}
+
+int HybridSynthProcessor::getNumPrograms()
+{
+    return static_cast<int>(getFactoryPresets().size());
+}
+
+int HybridSynthProcessor::getCurrentProgram()
+{
+    return currentProgram;
+}
+
+void HybridSynthProcessor::setCurrentProgram(int index)
+{
+    const auto& presets = getFactoryPresets();
+    if (index < 0 || index >= static_cast<int>(presets.size()))
+        return;
+
+    currentProgram = index;
+    const auto& p = presets[static_cast<size_t>(index)];
+
+    auto setParam = [this](const char* id, float val) {
+        if (auto* param = apvts.getParameter(id))
+            param->setValueNotifyingHost(param->convertTo0to1(val));
+    };
+
+    setParam("decay",          p.decay);
+    setParam("brightness",     p.brightness);
+    setParam("pickPosition",   p.pickPos);
+    setParam("stiffness",      p.stiffness);
+    setParam("bodySize",       p.bodySize);
+    setParam("bodyMix",        p.bodyMix);
+    setParam("engineModel",    static_cast<float>(p.engineModel));
+    setParam("stringMaterial", static_cast<float>(p.stringMaterial));
+    setParam("bodyModel",      static_cast<float>(p.bodyModel));
+    setParam("stereoWidth",    p.stereoWidth);
+    setParam("masterGain",     p.masterGain);
+    setParam("palmMute",       p.palmMute ? 1.0f : 0.0f);
+    setParam("fullMute",       p.fullMute ? 1.0f : 0.0f);
+    setParam("strumPattern",   p.strumPattern ? 1.0f : 0.0f);
+}
+
+const juce::String HybridSynthProcessor::getProgramName(int index)
+{
+    const auto& presets = getFactoryPresets();
+    if (index >= 0 && index < static_cast<int>(presets.size()))
+        return presets[static_cast<size_t>(index)].name;
+    return {};
+}
+
+void HybridSynthProcessor::changeProgramName(int, const juce::String&)
+{
+}
+
+// ---------------------------------------------------------------------------
 // Editor
 // ---------------------------------------------------------------------------
 
@@ -215,6 +288,7 @@ juce::AudioProcessorEditor* HybridSynthProcessor::createEditor()
 void HybridSynthProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
+    state.setProperty("currentProgram", currentProgram, nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -223,7 +297,12 @@ void HybridSynthProcessor::setStateInformation(const void* data, int sizeInBytes
 {
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     if (xmlState != nullptr && xmlState->hasTagName(apvts.state.getType()))
-        apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
+    {
+        auto vt = juce::ValueTree::fromXml(*xmlState);
+        if (vt.hasProperty("currentProgram"))
+            currentProgram = static_cast<int>(vt.getProperty("currentProgram"));
+        apvts.replaceState(vt);
+    }
 }
 
 // ---------------------------------------------------------------------------

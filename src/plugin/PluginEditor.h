@@ -21,6 +21,10 @@ private:
 
     HybridSynthProcessor& processorRef;
 
+    // Preset Selection
+    juce::ComboBox presetBox;
+    juce::Label    presetLabel;
+
     // Engine Model Selection ComboBox
     juce::ComboBox engineModelBox;
     juce::Label    engineModelLabel;

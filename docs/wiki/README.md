@@ -16,7 +16,7 @@ This wiki serves as the persistent technical truth for both human engineers and 
 | **[`04_body_and_bridge_acoustics.md`](04_body_and_bridge_acoustics.md)** | Dual-axis bridge saddle force extraction, 6-string sympathetic cross-coupling matrix, partitioned stereo body IR convolution & 32-mode IRCAM Modalys bank. |
 | **[`05_articulations_and_keyswitches.md`](05_articulations_and_keyswitches.md)** | Articulations: Open sustain, selective palm muting, unpitched acoustic dead-notes, choke slap, acoustic legato (hammer-ons/pull-offs), MIDI keyswitches. |
 | **[`06_realtime_safety_and_qa.md`](06_realtime_safety_and_qa.md)** | Audio thread zero-allocation invariants, `bench_synth` real-time harness, `pluginval` strictness level 8 verification, CI matrix. |
-| **[`07_release_and_milestones.md`](07_release_and_milestones.md)** | Complete version history and roadmap milestones from `v36.f` to current `v58.f`. |
+| **[`07_release_and_milestones.md`](07_release_and_milestones.md)** | Complete version history and roadmap milestones from `v36.f` to current `v60.f`. |
 
 ---
 

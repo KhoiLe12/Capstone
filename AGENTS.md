@@ -111,15 +111,19 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v58.f**
+### Current Version Status: **v60.f**
+- **Factory Preset Management & First-Launch DAW Synchronization**: Implemented 8 curated physical modeling presets ("Dreadnought Acoustic", "Nylon Concert Classical", "Flamenco Rasgueado", "Fingerstyle Auditorium", "Vintage Parlor Blues", "12-String Shimmer", "Percussive Palm Chops", "Warm Jazz Archtop") integrated natively into host DAW program dropdowns (FL Studio, Logic, Cubase) and plugin header GUI.
+- **First-Launch Initialization & Session Persistence**: Resolved initial instantiation mismatch by invoking `setCurrentProgram(0)` in processor constructor and matching APVTS layout defaults with Preset 0 (*Dreadnought Acoustic*); serialized `currentProgram` to XML in `getStateInformation`/`setStateInformation`.
+- **Bi-Directional APVTS Parameter Synchronization**: Selecting a preset updates all APVTS sliders, toggles, and combo attachments smoothly via `setValueNotifyingHost()` without audio thread locks.
 - **DAW Legato Cross-Boundary Fretting Reach**: Resolved string-allocation boundary bug where overlapping whole-step / half-step notes (such as $C_4 \to D_4$, $F \to G$, $A \to B$) on the DAW piano roll were mistakenly routed to different strings instead of hammering on the actively held vibrating string.
 - **Simultaneous Chord Protection via Voice Onset Age**: Added minimum voice onset threshold (`samplesSinceNoteOn >= 160`, ~4ms) preventing simultaneous chord voicings or near-simultaneous MIDI attacks from collapsing or misfiring legato transitions.
-- **Zero-Allocation FDTD Legato Scratch**: Pre-reserved scratch buffers (`saved_curr`, `saved_prev`) in `FdtdString` eliminating heap allocations during runtime legato retuning.
 - **Real-Time Zero-Allocation Safety**: `bench_synth: RTCheck PASS (0)` on all block sizes (32..512) and multi-track sweeps.
 
 ### In Progress / Next Priorities
 - [x] **GitHub Actions Cross-Platform CI**:
   - Added `.github/workflows/build_and_validate.yml` to automatically build Standalone/VST3/LV2 on Windows, macOS, and Linux runners and run `bench_synth` on every push/PR.
+- [x] **Preset Management System**:
+  - Implemented 8 distinct physical modeling factory presets accessible via DAW program selector and plugin header dropdown.
 - [ ] **Physical String Bending & MIDI Pitch Wheel Expression**:
   - Implement real-time physical string elongation & dynamic tension modulation $T(t) = T_0 + \Delta T(t)$ across vibrating strings in response to MIDI Pitch Wheel (configurable $\pm 2$ to $\pm 12$ semitones) and DAW pitch slides/vibrato.
 - [ ] **Harmonics Engine (Natural & Pinch Harmonics)**:
@@ -128,8 +132,6 @@ For comprehensive mathematical derivations, code architectures, and implementati
 - [ ] **Electric Guitar Mode (Electromagnetic Pickups & Solid Body)**:
   - Electromagnetic pickup induction model sensing string transverse velocity ($\frac{\partial u}{\partial t}$) at physical positions $x_\text{pickup}$ (Neck, Middle, Bridge).
   - Single-coil vs. Humbucker aperture comb filtering, tone pot load, and solid body low-damping sustained vibration.
-- [ ] **Preset Management System**:
-  - Implement a JSON-based factory preset loader (e.g. "Dreadnought Acoustic", "Nylon Classical", "Strat Neck Single-Coil", "Flamenco Hard Attack", "12-String Shimmer").
 - [ ] **Micro-Tuning & Alternate Tuning Support**:
   - Add support for Scala (`.scl`) files and standard alternate guitar tunings (Drop D, DADGAD, Open G, Open D).
 - [ ] **MPE & Polyphonic Aftertouch Expression**:

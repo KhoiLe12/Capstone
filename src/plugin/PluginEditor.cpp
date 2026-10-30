@@ -17,6 +17,25 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
       widthAttach     (p.apvts, "stereoWidth",  widthKnob),
       gainAttach      (p.apvts, "masterGain",   gainKnob)
 {
+    // Preset Selection Dropdown
+    const auto& presets = HybridSynthProcessor::getFactoryPresets();
+    for (size_t i = 0; i < presets.size(); ++i)
+        presetBox.addItem(presets[i].name, static_cast<int>(i + 1));
+
+    presetBox.setSelectedItemIndex(p.getCurrentProgram(), juce::dontSendNotification);
+    presetBox.onChange = [this]() {
+        const int idx = presetBox.getSelectedItemIndex();
+        if (idx >= 0 && idx != processorRef.getCurrentProgram())
+            processorRef.setCurrentProgram(idx);
+    };
+    addAndMakeVisible(presetBox);
+
+    presetLabel.setText("Preset:", juce::dontSendNotification);
+    presetLabel.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+    presetLabel.setColour(juce::Label::textColourId, juce::Colour(0xfff1faee));
+    presetLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(presetLabel);
+
     // Engine Model Selection ComboBox
     engineModelBox.addItem("Digital Waveguide (DWG)", 1);
     engineModelBox.addItem("Bilbao FDTD (DAFx24)", 2);
@@ -121,6 +140,9 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
 
 void HybridSynthEditor::timerCallback()
 {
+    if (processorRef.getCurrentProgram() != presetBox.getSelectedItemIndex())
+        presetBox.setSelectedItemIndex(processorRef.getCurrentProgram(), juce::dontSendNotification);
+
     const bool currentPalm = processorRef.getSynth().isPalmMuteActive()
                           || (processorRef.apvts.getRawParameterValue("palmMute")->load() > 0.5f);
     const bool currentFull = processorRef.getSynth().isFullMuteActive()
@@ -175,7 +197,7 @@ void HybridSynthEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xfff0f0f0));
     g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
     g.drawText("Hybrid Physical Modeling Synthesizer — Acoustic IR & Modal Engine",
-               juce::Rectangle<int>(14, 0, getWidth() - 145, 36),
+               juce::Rectangle<int>(14, 0, getWidth() - 410, 36),
                juce::Justification::centredLeft);
 
     // Prominent Version Badge in top-right
@@ -245,6 +267,9 @@ void HybridSynthEditor::paint(juce::Graphics& g)
 
 void HybridSynthEditor::resized()
 {
+    presetLabel.setBounds(getWidth() - 395, 6, 52, 24);
+    presetBox.setBounds(getWidth() - 340, 6, 210, 24);
+
     auto area = getLocalBounds();
     area.removeFromTop(38); // title bar
 

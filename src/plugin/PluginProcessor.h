@@ -35,12 +35,32 @@ public:
     bool  isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 8.0; }
 
-    // Programs (not used — single preset)
-    int  getNumPrograms()   override { return 1; }
-    int  getCurrentProgram() override { return 0; }
-    void setCurrentProgram(int) override {}
-    const juce::String getProgramName(int) override { return "Default"; }
-    void changeProgramName(int, const juce::String&) override {}
+    // Presets & Programs
+    struct FactoryPreset {
+        const char* name;
+        float decay;
+        float brightness;
+        float pickPos;
+        float stiffness;
+        float bodySize;
+        float bodyMix;
+        int   engineModel;    // 0 = DWG, 1 = FDTD
+        int   stringMaterial; // 0 = Nylon, 1 = Steel
+        int   bodyModel;      // 0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank
+        float stereoWidth;
+        float masterGain;
+        bool  palmMute;
+        bool  fullMute;
+        bool  strumPattern;
+    };
+
+    static const std::vector<FactoryPreset>& getFactoryPresets() noexcept;
+
+    int  getNumPrograms()   override;
+    int  getCurrentProgram() override;
+    void setCurrentProgram(int index) override;
+    const juce::String getProgramName(int index) override;
+    void changeProgramName(int index, const juce::String& newName) override;
 
     // Editor
     juce::AudioProcessorEditor* createEditor() override;
@@ -60,6 +80,7 @@ public:
 
 private:
     SynthEngine synth;
+    int currentProgram = 0;
 
     /** Build the parameter layout used to construct the APVTS. */
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
