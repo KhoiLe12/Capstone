@@ -123,6 +123,14 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 2. In Progress & Living Roadmap
 
+- [ ] **Physical String Bending & MIDI Pitch Wheel Expression**:
+  - Implement real-time physical string elongation & dynamic tension modulation $T(t) = T_0 + \Delta T(t)$ across vibrating strings in response to MIDI Pitch Wheel (configurable $\pm 2$ to $\pm 12$ semitones) and DAW pitch slides/vibrato.
+- [ ] **Harmonics Engine (Natural & Pinch Harmonics)**:
+  - Natural nodal touch damping (12th fret $1/2$ octave, 7th fret $1/3$ octave+5th, 5th fret $1/4$ 2 octaves) damping non-nodal modes into crystalline chimes.
+  - Pinch / artificial harmonics with thumb-flesh damping for high-register harmonic squeals, triggered via keyswitch or articulation control.
+- [ ] **Electric Guitar Mode (Electromagnetic Pickups & Solid Body)**:
+  - Electromagnetic pickup induction model sensing string transverse velocity ($\frac{\partial u}{\partial t}$) at physical positions $x_\text{pickup}$ (Neck, Middle, Bridge).
+  - Single-coil vs. Humbucker aperture comb filtering, tone pot load, and solid body low-damping sustained vibration.
 - [ ] **Preset Management System**:
   - Implement a JSON-based factory preset loader (e.g. "Dreadnought Acoustic", "Nylon Classical", "Strat Neck Single-Coil", "Flamenco Hard Attack", "12-String Shimmer").
 - [ ] **Micro-Tuning & Alternate Tuning Support**:
