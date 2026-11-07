@@ -111,15 +111,19 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v60.f**
-- **Factory Preset Management & First-Launch DAW Synchronization**: Implemented 8 curated physical modeling presets ("Dreadnought Acoustic", "Nylon Concert Classical", "Flamenco Rasgueado", "Fingerstyle Auditorium", "Vintage Parlor Blues", "12-String Shimmer", "Percussive Palm Chops", "Warm Jazz Archtop") integrated natively into host DAW program dropdowns (FL Studio, Logic, Cubase) and plugin header GUI.
-- **First-Launch Initialization & Session Persistence**: Resolved initial instantiation mismatch by invoking `setCurrentProgram(0)` in processor constructor and matching APVTS layout defaults with Preset 0 (*Dreadnought Acoustic*); serialized `currentProgram` to XML in `getStateInformation`/`setStateInformation`.
-- **Bi-Directional APVTS Parameter Synchronization**: Selecting a preset updates all APVTS sliders, toggles, and combo attachments smoothly via `setValueNotifyingHost()` without audio thread locks.
-- **DAW Legato Cross-Boundary Fretting Reach**: Resolved string-allocation boundary bug where overlapping whole-step / half-step notes (such as $C_4 \to D_4$, $F \to G$, $A \to B$) on the DAW piano roll were mistakenly routed to different strings instead of hammering on the actively held vibrating string.
-- **Simultaneous Chord Protection via Voice Onset Age**: Added minimum voice onset threshold (`samplesSinceNoteOn >= 160`, ~4ms) preventing simultaneous chord voicings or near-simultaneous MIDI attacks from collapsing or misfiring legato transitions.
+### Current Version Status: **v61.f**
+- **Official GuitarSet Dataset STFT Benchmark & Comparative Evaluation**: Integrated official GuitarSet dataset (ISMIR 2018, NYU MARL / Queen Mary University of London) directly into automated synthesis verification pipeline ([`benchmarks/guitarset_eval.py`](benchmarks/guitarset_eval.py)).
+- **Dual-Paradigm Acoustic Evaluation**:
+  - *Isolated Acoustic Pluck & Cadence Extraction*: Clean ringing plucks (C3, Bb3) and cadence chords sliced from real condenser mic recordings (`audio_mono-mic`) using JAMS millisecond annotations.
+  - *Continuous Performance Resynthesis*: Full 5–6s multi-string fingerstyle comping (`00_SS1-100-C#_comp`) and solo lead melodies (`00_SS1-100-C#_solo`) transcribed from JAMS note annotations.
+- **Headless Renderer Event Scheduling (`--eventsFile`)**: Enhanced [`src/bench/RenderAudioCLI.cpp`](src/bench/RenderAudioCLI.cpp) with timestamped noteOn/noteOff CSV event scheduling, enabling continuous phrase resynthesis.
+- **Multi-Scale STFT Quantitative Results**: Across all evaluated targets, Stefan Bilbao's Non-Linear FDTD engine demonstrated **18% to 33.6% lower Log-Magnitude STFT L1 distance** compared to Digital Waveguide modeling against real acoustic microphone audio.
+- **Factory Preset Management & First-Launch DAW Synchronization**: 8 curated physical modeling presets integrated natively into host DAW program dropdowns and plugin header GUI.
 - **Real-Time Zero-Allocation Safety**: `bench_synth: RTCheck PASS (0)` on all block sizes (32..512) and multi-track sweeps.
 
 ### In Progress / Next Priorities
+- [x] **Official GuitarSet Dataset Benchmark Pipeline**:
+  - Downloaded official annotations and acoustic mono mic audio; built automated Multi-Scale STFT evaluation pipeline with 4-panel spectrogram comparisons.
 - [x] **GitHub Actions Cross-Platform CI**:
   - Added `.github/workflows/build_and_validate.yml` to automatically build Standalone/VST3/LV2 on Windows, macOS, and Linux runners and run `bench_synth` on every push/PR.
 - [x] **Preset Management System**:

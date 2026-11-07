@@ -6,6 +6,19 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v61.f
+- **Official GuitarSet Dataset STFT Benchmark & Comparative Evaluation**:
+  - Integrated the **official GuitarSet dataset** (ISMIR 2018, NYU MARL / Queen Mary University of London) directly into the synthesis verification pipeline.
+  - Downloaded and extracted official JAMS 6-string annotations and acoustic condenser microphone recordings (`audio_mono-mic`).
+  - Implemented automated evaluation harness [`benchmarks/guitarset_eval.py`](../../benchmarks/guitarset_eval.py) supporting dual-paradigm evaluation:
+    1. *Isolated Acoustic Event Extraction*: clean ringing plucks (C3, Bb3) and cadence chords sliced from acoustic mic takes.
+    2. *Continuous Performance Resynthesis*: full 5–6s multi-string fingerstyle comping (`00_SS1-100-C#_comp`) and solo lead melodies (`00_SS1-100-C#_solo`) transcribed from JAMS note annotations.
+  - Enhanced headless C++ CLI renderer [`src/bench/RenderAudioCLI.cpp`](../../src/bench/RenderAudioCLI.cpp) with `--eventsFile` timestamped scheduling, supporting noteOn, noteOff, and continuous multi-voice phrase synthesis.
+  - Evaluated Multi-Scale STFT Convergence and Log-Magnitude L1 loss across 5 scales ($N_\text{fft} \in \{2048, 1024, 512, 256, 128\}$): Bilbao Non-Linear FDTD demonstrated **$18\%$ to $33.6\%$ lower Log-Magnitude L1 spectral distance** compared to Digital Waveguide modeling against real acoustic microphone audio.
+  - Generated high-resolution 4-panel spectral comparison charts (`guitarset_pluck_C3.png`, `guitarset_pluck_Bb3.png`, `guitarset_chord_B.png`, `guitarset_phrase_SS1_comp.png`, `guitarset_phrase_SS1_solo.png`).
+- **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, peak load 26.28%).
+- **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
+
 ### v60.f
 - **First-Launch Preset Parity & Host Session Persistence**:
   - Resolved initial instantiation mismatch where reopening the plugin defaulted to fallback values rather than the displayed preset:
