@@ -6,6 +6,14 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v66.f
+- **pluginval running again** (macOS, v1.0.4 in `tools/pluginval/`, gitignored). CMake now also finds the binary inside `pluginval.app/Contents/MacOS`. It had not been run since about v47.f.
+- **State restoration fix**: discrete parameters (bools, choices) are snapped to their exact value after `replaceState()`. Before, an unquantised host value (e.g. 0.18 on Palm Mute) survived a state / project load because APVTS compares quantised values. pluginval failed this test depending on the seed.
+- **Program change notification**: `setCurrentProgram()` now calls `updateHostDisplay(programChanged)`, so DAW preset displays follow selections in the plugin's own dropdown.
+- **Quality Gates**:
+  - pluginval strictness 8: VST3 `SUCCESS` (0 warnings; 4 seeds + the `validate` target); AU `SUCCESS` (1 known JUCE-wrapper warning, wiki 06 §3).
+  - `bench_synth`: RTCheck PASS (0), Timing PASS.
+
 ### v65.f
 - **FDTD sustain across the neck**:
   - *Damping shape*: $\sigma_0$ is now frequency-independent (standard Bilbao model), replacing the $(f/82.4)^{0.65/0.80}$ register multiplier. Calibrated on 87 GuitarSet notes with the new `benchmarks/decay_calibration.py`: the fitted pitch exponent of fundamental decay went from 0.84 to 0.34; the real data gives 0.21, 90% CI [−0.14, 0.36]. Anchored at E2, so bass sustain per Decay setting is unchanged.

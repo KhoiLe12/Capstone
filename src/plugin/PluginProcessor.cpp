@@ -295,6 +295,10 @@ void HybridSynthProcessor::setCurrentProgram(int index)
     setParam("palmMute",       p.palmMute ? 1.0f : 0.0f);
     setParam("fullMute",       p.fullMute ? 1.0f : 0.0f);
     setParam("strumPattern",   p.strumPattern ? 1.0f : 0.0f);
+
+    // Tell the host the program changed, so its preset display (and the AU's present-preset
+    // property) follows selections made in the plugin's own preset dropdown.
+    updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withProgramChanged(true));
 }
 
 const juce::String HybridSynthProcessor::getProgramName(int index)
@@ -339,6 +343,22 @@ void HybridSynthProcessor::setStateInformation(const void* data, int sizeInBytes
         if (vt.hasProperty("currentProgram"))
             currentProgram = static_cast<int>(vt.getProperty("currentProgram"));
         apvts.replaceState(vt);
+
+        // Snap discrete parameters (bools, choices) to their exact restored value. A host may have
+        // set an unquantised normalised value (e.g. 0.18 on a bool, which reads as "off");
+        // replaceState() compares quantised values, sees "off" == "off" and skips the update, so the
+        // raw 0.18 would survive the state load and be reported back to the host (pluginval
+        // "Plugin state restoration"). Snapping makes a loaded state hold exactly what was saved.
+        for (auto* p : apvts.processor.getParameters())
+        {
+            auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(p);
+            if (ranged == nullptr || ! (ranged->isDiscrete() || ranged->isBoolean()))
+                continue;
+            const float raw = ranged->getValue();
+            const float snapped = ranged->convertTo0to1(ranged->convertFrom0to1(raw));
+            if (! juce::exactlyEqual(raw, snapped))
+                ranged->setValueNotifyingHost(snapped);
+        }
     }
 }
 

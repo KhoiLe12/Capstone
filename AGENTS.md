@@ -27,7 +27,7 @@ Whenever a bug is fixed, an optimization is applied, or a new feature is impleme
 
 ### B. Validation & Quality Gates (pluginval & RTCheck)
 Before declaring any task complete or committing code:
-1. **Automated VST3 Conformance (`pluginval`)**:
+1. **Automated VST3 Conformance (`pluginval`)** (not committed; each machine needs it in `tools/pluginval/` or on `PATH`, see wiki 06 §3):
    Run the CMake validation target to verify all parameter accessors, audio processing rates (44.1k, 48k, 96k), automation, and bus configurations:
    ```powershell
    cmake --build build --config Release --target validate
@@ -111,7 +111,13 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v65.f**
+### Current Version Status: **v66.f**
+- **v66.f**:
+  - pluginval set up on macOS (`tools/pluginval/pluginval.app`, gitignored; CMake finds it).
+  - Fixed state restoration of discrete parameters (pluginval failure) and host program-change notification.
+  - VST3 strictness 8 SUCCESS; AU SUCCESS with one known JUCE warning (wiki 06 §3).
+
+**v65.f:**
 - **v65.f**:
   - FDTD damping calibrated against GuitarSet decay rates (frequency-independent $\sigma_0$; `benchmarks/decay_calibration.py`).
   - Ring-out detection now uses total string energy relative to the note's peak, so high notes are no longer cut off early. See wiki 02 §7.

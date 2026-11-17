@@ -66,7 +66,13 @@ Quick check (seconds): `./build/bench_synth --events-only` runs the event-stress
 
 ---
 
-## 3. Automated VST3 Conformance (`pluginval`)
+## 3. Automated Plugin Conformance (`pluginval`)
+
+**Setup**: pluginval is **not** in the repository (`tools/` is gitignored), so each machine needs its own copy. Download the release for your OS from <https://github.com/Tracktion/pluginval/releases> into `tools/pluginval/` (macOS: the whole `pluginval.app`; CMake also searches `pluginval.app/Contents/MacOS` since v66.f), or put it on `PATH`. If CMake reports `PLUGINVAL_EXE-NOTFOUND`, the `validate` target does not exist.
+
+**History**: pluginval was last recorded passing at v47.f, most likely on the Windows machine whose `tools/pluginval/` was never synced. From v52.f to v65.f only `bench_synth` was run. v66.f set it up on macOS (pluginval v1.0.4) and fixed the state-restoration failure below.
+
+**Seeds**: pluginval randomises parameter values with a new seed each run (printed as `Random seed: 0x...`). Re-run a failure with `--seed <value>` to reproduce it exactly.
 
 Before finalizing any release, the plugin must pass Steinberg VST3 automated conformance testing via `pluginval`:
 ```bash
@@ -75,6 +81,12 @@ cmake --build build --config Release --target validate
 - **Strictness Level**: Configured to **Level 8** in [`CMakeLists.txt`](../../CMakeLists.txt).
 - Tests parameter thread safety, parameter fuzzing, automation ramps, sample rate switches ($44.1\text{k}, 48\text{k}, 96\text{k}$), and bus configurations.
 - **Requirement**: Must return **`SUCCESS`** with 0 errors.
+- **v66.f results (macOS, pluginval 1.0.4, strictness 8)**:
+  - VST3: `SUCCESS` with 0 warnings, on seeds 0x7c8e781, 0x1234, 0xbeef and 0x51a7e, and via the `validate` target.
+  - AU: `SUCCESS`, with one known warning ("Current program is -1"). JUCE's AU wrapper starts its present-preset property at −1 and only refreshes it on a program-change notification, which cannot reach it from the plugin constructor. Program changes themselves work.
+- **Fixed in v66.f, state restoration**: pluginval failed "Plugin state restoration" for Palm Mute / Strum 8th / Full Mute, depending on the seed.
+  - Cause: a host can set an unquantised value on a bool (e.g. 0.18, which reads as off). `apvts.replaceState()` compares quantised values, so restoring "off" over "off" skipped the update, and the raw 0.18 survived the load.
+  - Fix: `setStateInformation` now snaps every discrete parameter to its exact value after `replaceState()`.
 
 ---
 

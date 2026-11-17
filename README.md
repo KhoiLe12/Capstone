@@ -4,7 +4,7 @@ A physically modeled acoustic guitar synthesizer built with **JUCE** (C++17) and
 
 All sound is computed in real time from a simulation of the strings, bridge, and guitar body — **no samples or wavetables**.
 
-> **Current version:** v65.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
+> **Current version:** v66.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
 
 ---
 
@@ -164,7 +164,7 @@ Then rescan plugins in your DAW. The standalone app can be launched with
 | Check | Command | Pass criterion |
 |---|---|---|
 | Real-time safety & latency | `./build/bench_synth` (`--events-only` for the quick checks) | `[RTCheck Result] PASS (0)`: zero heap allocations on the audio thread, in steady-state sweeps and in an event stress test (note-ons, legato, keyswitches, engine/body switches) at 44.1–192 kHz. `[Timing Result] PASS`: sample-accurate MIDI and chord-vs-legato detection. 1/4/6-voice loads within deadline at 32–512 sample blocks. |
-| Plugin conformance | `cmake --build build --config Release --target validate` | `pluginval` strictness 8 returns `SUCCESS` (requires `pluginval` on `PATH` or in `tools/pluginval/`) |
+| Plugin conformance | `cmake --build build --config Release --target validate` | `pluginval` strictness 8 returns `SUCCESS`. pluginval is not committed: download it from [Tracktion's releases](https://github.com/Tracktion/pluginval/releases) into `tools/pluginval/` (macOS: `tools/pluginval/pluginval.app`) or put it on `PATH`. |
 | Spectral comparison | `.venv/bin/python benchmarks/guitarset_eval.py [--plots]` | Multi-scale STFT distance vs. GuitarSet recordings, with real-take and naive-tone reference points. Not a realism score; see [wiki 06 §5](docs/wiki/06_realtime_safety_and_qa.md) |
 
 Offline rendering example:

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 65.0.0)
+project(HybridSynth VERSION 66.0.0)
 
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
 
@@ -173,8 +173,12 @@ endif()
 # ---------------------------------------------------------------------------
 # Automated Plugin Validation Target (pluginval)
 # ---------------------------------------------------------------------------
+# pluginval is not committed (tools/ is gitignored): download the release for your OS from
+# https://github.com/Tracktion/pluginval/releases into tools/pluginval/ or put it on PATH.
+# On macOS the binary lives inside pluginval.app/Contents/MacOS.
 find_program(PLUGINVAL_EXE NAMES pluginval pluginval.exe
     PATHS "${CMAKE_CURRENT_SOURCE_DIR}/tools/pluginval"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/pluginval/pluginval.app/Contents/MacOS"
 )
 
 if (PLUGINVAL_EXE)

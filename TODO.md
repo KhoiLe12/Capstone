@@ -76,6 +76,6 @@ This document tracks all planned, ongoing, and completed features across physica
 - [x] **FDTD upper-register sustain too short** (fixed v65.f): calibrated $\sigma_0$ against GuitarSet decay rates, and replaced the ring-out detector that cut high notes while loud (wiki 02 §7).
 - [ ] **IR notch at ~981 Hz**: both embedded body IRs dip 8–11 dB there, so B5 is ~10 dB quieter than its neighbours through the IR bodies (wiki 04).
 - [x] **High chords dropping notes** (fixed v65.f): joint chord string assignment, 22-fret neck, Strict Fretboard toggle (wiki 01).
-- [ ] **`pluginval` in CI**: the CMake `validate` target exists, but CI does not run it.
+- [ ] **`pluginval` in CI**: the CMake `validate` target exists, but CI does not download or run pluginval. It runs locally on macOS since v66.f (wiki 06 §3).
 - [ ] **Unit tests**: only `bench_synth` checks (allocation, timing, chord-vs-legato); no pitch/decay regression tests yet.
 
