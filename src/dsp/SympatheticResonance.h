@@ -186,7 +186,14 @@ public:
             stringDamping[s] += 0.008f * (targetDamping[s] - stringDamping[s]);
 
             if (stringDamping[s] < 0.001f)
+            {
+                // Fully damped (string is being played): clear the resonator state instead of
+                // freezing it. Frozen energy would otherwise ring out as a ghost tone of the open
+                // string when the voice ends and the damping fades back up.
+                for (int k = 0; k < NUM_HARMONICS; ++k)
+                    resonators[s][k].reset();
                 continue;
+            }
 
             float stringOut = 0.0f;
             for (int k = 0; k < NUM_HARMONICS; ++k)

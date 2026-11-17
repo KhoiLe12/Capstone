@@ -111,7 +111,14 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v62.f**
+### Current Version Status: **v63.f**
+- **v63.f**:
+  - GuitarSet benchmark rebuilt: automatic clean-note selection, annotation-driven re-synthesis, alignment + RMS normalisation, and real-take / naive-tone reference points.
+  - FDTD beats the waveguide on log-L1 in 16/16 tests. The metric does not measure realism (a second real take scores no better), so do not claim realism from it. The v61.f "18–33.6%" figure is withdrawn.
+  - Fixed the sympathetic-resonance ghost tone on note release.
+  - See wiki 06 §5 and wiki 07.
+
+**v62.f:**
 - **v62.f DSP correctness & real-time safety pass**:
   - FDTD H-polarization now reaches the output.
   - Body model switching and high-sample-rate FDTD grids no longer allocate on the audio thread.
@@ -124,7 +131,7 @@ For comprehensive mathematical derivations, code architectures, and implementati
   - *Isolated Acoustic Pluck & Cadence Extraction*: Clean ringing plucks (C3, Bb3) and cadence chords sliced from real condenser mic recordings (`audio_mono-mic`) using JAMS millisecond annotations.
   - *Continuous Performance Resynthesis*: Full 5–6s multi-string fingerstyle comping (`00_SS1-100-C#_comp`) and solo lead melodies (`00_SS1-100-C#_solo`) transcribed from JAMS note annotations.
 - **Headless Renderer Event Scheduling (`--eventsFile`)**: Enhanced [`src/bench/RenderAudioCLI.cpp`](src/bench/RenderAudioCLI.cpp) with timestamped noteOn/noteOff CSV event scheduling, enabling continuous phrase resynthesis.
-- **Multi-Scale STFT Quantitative Results**: Across all evaluated targets, Stefan Bilbao's Non-Linear FDTD engine demonstrated **18% to 33.6% lower Log-Magnitude STFT L1 distance** compared to Digital Waveguide modeling against real acoustic microphone audio.
+- ~~Multi-Scale STFT "18% to 33.6% lower" result~~: withdrawn in v63.f (flawed test cases and normalisation). Current results are in wiki 06 §5.
 - **Factory Preset Management & First-Launch DAW Synchronization**: 8 curated physical modeling presets integrated natively into host DAW program dropdowns and plugin header GUI.
 - **Real-Time Zero-Allocation Safety**: `bench_synth: RTCheck PASS (0)` on all block sizes (32..512) and multi-track sweeps.
 

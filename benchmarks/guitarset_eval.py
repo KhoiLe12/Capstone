@@ -2,475 +2,378 @@
 """
 benchmarks/guitarset_eval.py
 
-Official GuitarSet Dataset STFT Comparative Benchmark & Inharmonicity Evaluation
-Evaluates Hybrid Synth physical modeling engine against real acoustic studio recordings from GuitarSet.
+GuitarSet multi-scale STFT comparison of the Hybrid Synth string engines against real
+acoustic guitar recordings (GuitarSet, ISMIR 2018: audio_mono-mic + JAMS note annotations).
 
-Mathematical Metrics:
-  1. Spectral Convergence (SC):
-     || |S_ref| - |S_syn| ||_F / || |S_ref| ||_F
-  2. Log-Magnitude STFT Distance (L1):
-     (1 / N) * || log(|S_ref| + eps) - log(|S_syn| + eps) ||_1
-  3. Multi-Scale STFT Objective Loss:
-     L_total = (1 / M) * sum_m (SC_m + alpha * L1_m) across window scales {2048, 1024, 512, 256, 128}
+Metrics (averaged over STFT sizes {2048, 1024, 512, 256, 128}, 75% overlap):
+  SC  (spectral convergence)  = || |S_ref| - |S_syn| ||_F / || |S_ref| ||_F      (linear magnitude)
+  L1  (log-magnitude distance) = mean | log|S_ref| - log|S_syn| |                 (floor -80 dB re. ref peak)
+  Combined = SC + L1. Lower is better for all three.
 
-Modes:
-  1. Isolated Acoustic Events (Single Plucks & Ringing Chords):
-     Extracts clean ringing events from GuitarSet and renders matching notes on HybridSynth.
-  2. Continuous Performance Resynthesis:
-     Transcribes complete 6-string JAMS note sequences into timestamped events, invokes `./build/render_audio`,
-     and performs time-frequency spectrogram alignment and metric sweeps.
+Method:
+  * Every test is re-synthesised from the JAMS note annotations of its window (onsets, durations,
+    simultaneous chord notes), via `render_audio --eventsFile`. Velocity is not annotated in
+    GuitarSet, so all notes use the same velocity.
+  * Synth output is aligned to the reference by envelope cross-correlation and loudness-matched by
+    RMS before scoring, so the metrics compare spectro-temporal shape, not level or latency.
+  * Isolated notes are selected automatically from all 360 takes: within +/-15 cents of an
+    equal-tempered MIDI pitch (the synth has no fine-tune or pitch bend), held >= 1.0 s, no other
+    note starting 0.3 s before or inside the 1.5 s window and none still sounding at the onset.
+    Only pitches with a clean note in at least two different takes are tested, so every isolated
+    test has a real-vs-real reference score.
+  * Two reference points put the synth numbers in context:
+      - "Real (other take)": a different GuitarSet recording of the same pitch scored against the
+        reference. This is roughly the best score achievable given player/take variation.
+      - "Naive tone": a decaying additive harmonic tone with the same events. A physical model
+        that does not clearly beat this is not being distinguished by the metric.
+
+Usage:
+  .venv/bin/python benchmarks/guitarset_eval.py [--plots]
+Requires ./build/render_audio and the dataset in benchmarks/data/guitarset/.
 """
 
 import os
 import sys
-import glob
 import json
 import wave
+import tempfile
 import subprocess
 import numpy as np
 import scipy.signal
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
-os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data', 'guitarset')
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+DATA_DIR = os.path.join(HERE, 'data', 'guitarset')
 AUDIO_DIR = os.path.join(DATA_DIR, 'audio_mono-mic')
 ANNO_DIR = os.path.join(DATA_DIR, 'annotation')
-PLOTS_DIR = os.path.join(os.path.dirname(__file__), 'plots')
+PLOTS_DIR = os.path.join(HERE, 'plots')
+RENDERER = os.path.join(ROOT, 'build', 'render_audio')
+RESULTS_JSON = os.path.join(HERE, 'guitarset_results.json')
 
-STFT_SCALES = [
-    {'n_fft': 2048, 'hop_size': 512, 'win_size': 2048}, # Scale 1: Deep fundamental & inharmonicity
-    {'n_fft': 1024, 'hop_size': 256, 'win_size': 1024}, # Scale 2: Lower-mid soundboard resonance
-    {'n_fft': 512,  'hop_size': 128, 'win_size': 512},  # Scale 3: Upper-body sheen
-    {'n_fft': 256,  'hop_size': 64,  'win_size': 256},  # Scale 4: Attack transient / scrape
-    {'n_fft': 128,  'hop_size': 32,  'win_size': 128},  # Scale 5: P-wave snap micro-transient
+SR = 44100
+STFT_SIZES = [2048, 1024, 512, 256, 128]
+SYNTH_MIN_NOTE, SYNTH_MAX_NOTE = 40, 86
+
+ISOLATED_WINDOW_SEC = 1.5
+ISOLATED_MAX_CENTS = 15.0
+ISOLATED_MIN_DUR_SEC = 1.0
+ISOLATED_GUARD_SEC = 0.3
+
+PHRASES = [
+    ('00_SS1-100-C#_comp', 5.0, 'Singer-songwriter comping'),
+    ('00_SS1-100-C#_solo', 6.0, 'Singer-songwriter solo'),
+    ('00_BN1-129-Eb_comp', 5.0, 'Bossa nova comping'),
+    ('00_Rock1-90-C#_comp', 5.0, 'Rock comping'),
 ]
 
+ENGINES = [('waveguide', 0), ('fdtd', 1)]
 
-def load_wav_slice(path, start_sec, dur_sec, target_sr=44100):
+
+# ---------------------------------------------------------------------------
+# Audio I/O
+# ---------------------------------------------------------------------------
+
+def load_wav(path, start_sec=0.0, dur_sec=None):
     with wave.open(path, 'rb') as w:
-        sr = w.getframerate()
-        n_channels = w.getnchannels()
-        sampwidth = w.getsampwidth()
-        total_frames = w.getnframes()
-
-        start_frame = int(start_sec * sr)
-        num_frames = int(dur_sec * sr)
-
-        w.setpos(min(start_frame, total_frames - 1))
-        raw = w.readframes(min(num_frames, total_frames - start_frame))
-
-        if sampwidth == 2:
-            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sampwidth == 3:
-            a = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3)
-            b = np.pad(a, ((0, 0), (1, 0)), mode='constant', constant_values=0)
-            samples = b.view('<i4').flatten().astype(np.float32) / (2**31)
-        elif sampwidth == 4:
-            samples = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-        else:
-            raise ValueError(f"Unsupported sample width: {sampwidth}")
-
-        if n_channels > 1:
-            samples = samples.reshape(-1, n_channels).mean(axis=1)
-
-        if sr != target_sr:
-            num_target = int(len(samples) * target_sr / sr)
-            samples = scipy.signal.resample(samples, num_target)
-
-        # Pad to requested duration if needed
-        req_samples = int(dur_sec * target_sr)
-        if len(samples) < req_samples:
-            samples = np.pad(samples, (0, req_samples - len(samples)), mode='constant')
-        else:
-            samples = samples[:req_samples]
-
-        return samples, target_sr
-
-
-def parse_jams_notes(jams_path, max_time_sec=None):
-    with open(jams_path, 'r') as f:
-        data = json.load(f)
-
-    events = []
-    duration = data.get('file_metadata', {}).get('duration', 0.0)
-
-    for anno in data.get('annotations', []):
-        if anno.get('namespace') == 'note_midi':
-            for d in anno.get('data', []):
-                t = float(d['time'])
-                dur = float(d['duration'])
-                midi_val = round(float(d['value']))
-                if max_time_sec is not None and t > max_time_sec:
-                    continue
-                events.append({
-                    'time': t,
-                    'note': midi_val,
-                    'duration': dur,
-                    'vel': 0.82
-                })
-
-    events.sort(key=lambda x: x['time'])
-    return events, duration
-
-
-def compute_stft(x, n_fft, hop_size, win_size):
-    f, t, Zxx = scipy.signal.stft(x, nperseg=win_size, noverlap=win_size - hop_size, nfft=n_fft, boundary=None)
-    return np.abs(Zxx)
-
-
-def multi_scale_stft_loss(x_ref, x_syn, scales=STFT_SCALES, eps=1e-7, floor_db=-75.0):
-    min_len = min(len(x_ref), len(x_syn))
-    x_ref = x_ref[:min_len]
-    x_syn = x_syn[:min_len]
-
-    peak_ref = np.max(np.abs(x_ref)) + eps
-    peak_syn = np.max(np.abs(x_syn)) + eps
-    x_ref = x_ref / peak_ref
-    x_syn = x_syn / peak_syn
-
-    floor_eps = 10.0 ** (floor_db / 20.0) if floor_db is not None else eps
-    total_sc = 0.0
-    total_log = 0.0
-
-    for s in scales:
-        S_ref = compute_stft(x_ref, s['n_fft'], s['hop_size'], s['win_size'])
-        S_syn = compute_stft(x_syn, s['n_fft'], s['hop_size'], s['win_size'])
-
-        min_frames = min(S_ref.shape[1], S_syn.shape[1])
-        S_ref = S_ref[:, :min_frames]
-        S_syn = S_syn[:, :min_frames]
-
-        sc = np.linalg.norm(S_ref - S_syn, ord='fro') / (np.linalg.norm(S_ref, ord='fro') + eps)
-        log_l1 = np.mean(np.abs(np.log(np.maximum(S_ref, floor_eps)) - np.log(np.maximum(S_syn, floor_eps))))
-
-        total_sc += sc
-        total_log += log_l1
-
-    M = len(scales)
-    avg_sc = total_sc / M
-    avg_log = total_log / M
-    combined = avg_sc + avg_log
-    return avg_sc, avg_log, combined
-
-
-def render_with_events(events, engine_type, dur_sec, out_path, renderer_bin="./build/render_audio"):
-    events_csv = "/tmp/guitarset_events.csv"
-    with open(events_csv, 'w') as f:
-        for ev in events:
-            f.write(f"{ev['time']:.4f},{ev['note']},{ev['vel']:.2f},{ev['duration']:.4f}\n")
-
-    cmd = [
-        renderer_bin,
-        "--engine", str(engine_type),
-        "--eventsFile", events_csv,
-        "--material", "1.0", # Steel acoustic
-        "--bodyType", "1.0", # Acoustic body IR
-        "--bodyMix", "0.75",
-        "--dur", str(dur_sec),
-        "--out", out_path
-    ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if res.returncode != 0:
-        raise RuntimeError(f"render_audio failed: {res.stderr}")
-
-
-def render_isolated_chord(midi_notes, engine_type, dur_sec, out_path, renderer_bin="./build/render_audio"):
-    chord_str = ",".join(map(str, midi_notes))
-    cmd = [
-        renderer_bin,
-        "--engine", str(engine_type),
-        "--chord", chord_str,
-        "--material", "1.0",
-        "--bodyType", "1.0",
-        "--bodyMix", "0.75",
-        "--dur", str(dur_sec),
-        "--strum", "18.0",
-        "--strumMode", "1",
-        "--vel", "0.85",
-        "--out", out_path
-    ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if res.returncode != 0:
-        raise RuntimeError(f"render_audio failed: {res.stderr}")
-
-
-def plot_guitarset_comparison(ref_audio, ks_audio, fdtd_audio, title, out_path, sr=44100, dur_sec=3.0):
-    min_len = min(len(ref_audio), len(ks_audio), len(fdtd_audio), int(sr * dur_sec))
-    ref  = ref_audio[:min_len] / (np.max(np.abs(ref_audio[:min_len])) + 1e-7)
-    ks   = ks_audio[:min_len] / (np.max(np.abs(ks_audio[:min_len])) + 1e-7)
-    fdtd = fdtd_audio[:min_len] / (np.max(np.abs(fdtd_audio[:min_len])) + 1e-7)
-
-    n_fft = 1024
-    hop_size = 256
-
-    _, _, S_ref  = scipy.signal.stft(ref, nperseg=n_fft, noverlap=n_fft - hop_size, nfft=n_fft)
-    _, _, S_ks   = scipy.signal.stft(ks, nperseg=n_fft, noverlap=n_fft - hop_size, nfft=n_fft)
-    _, _, S_fdtd = scipy.signal.stft(fdtd, nperseg=n_fft, noverlap=n_fft - hop_size, nfft=n_fft)
-
-    min_frames = min(S_ref.shape[1], S_ks.shape[1], S_fdtd.shape[1])
-    S_ref_db  = 20 * np.log10(np.abs(S_ref[:, :min_frames]) + 1e-5)
-    S_ks_db   = 20 * np.log10(np.abs(S_ks[:, :min_frames]) + 1e-5)
-    S_fdtd_db = 20 * np.log10(np.abs(S_fdtd[:, :min_frames]) + 1e-5)
-    diff_fdtd_db = np.abs(S_ref_db - S_fdtd_db)
-
-    fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True, sharey=True)
-
-    axes[0].imshow(S_ref_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
-    axes[0].set_title(f"1. Real GuitarSet Studio Recording ({title})", fontsize=11, fontweight='bold')
-    axes[0].set_ylabel("Freq (Hz)")
-    axes[0].set_ylim(0, 10000)
-
-    axes[1].imshow(S_ks_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
-    axes[1].set_title(f"2. Hybrid Synth: Digital Waveguide / Karplus-Strong", fontsize=11, fontweight='bold')
-    axes[1].set_ylabel("Freq (Hz)")
-    axes[1].set_ylim(0, 10000)
-
-    axes[2].imshow(S_fdtd_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=-80, vmax=0, cmap='inferno')
-    axes[2].set_title(f"3. Hybrid Synth: Stefan Bilbao Non-Linear FDTD", fontsize=11, fontweight='bold')
-    axes[2].set_ylabel("Freq (Hz)")
-    axes[2].set_ylim(0, 10000)
-
-    axes[3].imshow(diff_fdtd_db, aspect='auto', origin='lower', extent=[0, float(min_len) / sr, 0, sr // 2], vmin=0, vmax=40, cmap='magma')
-    axes[3].set_title(f"4. Bilbao FDTD Absolute Residual Spectral Error (|GuitarSet - FDTD|)", fontsize=11, fontweight='bold')
-    axes[3].set_xlabel("Time (seconds)")
-    axes[3].set_ylabel("Freq (Hz)")
-    axes[3].set_ylim(0, 10000)
-
-    fig.tight_layout()
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.savefig(out_path, dpi=300)
-    plt.close(fig)
-    print(f"  [Plot Saved] -> {out_path}")
-
-
-def align_signals(ref, syn, max_shift_samples=4410):
-    """Aligns syn to ref by cross-correlation of envelopes within a search window."""
-    env_ref = np.abs(scipy.signal.hilbert(ref[:min(len(ref), 44100)]))
-    env_syn = np.abs(scipy.signal.hilbert(syn[:min(len(syn), 44100)]))
-    
-    corr = scipy.signal.correlate(env_ref, env_syn, mode='full')
-    lags = scipy.signal.correlation_lags(len(env_ref), len(env_syn), mode='full')
-    
-    # Restrict to search window
-    valid = np.abs(lags) <= max_shift_samples
-    best_lag = lags[valid][np.argmax(corr[valid])]
-    
-    if best_lag > 0:
-        syn_aligned = np.pad(syn, (best_lag, 0), mode='constant')[:len(ref)]
-    elif best_lag < 0:
-        syn_aligned = np.pad(syn[-best_lag:], (0, -best_lag), mode='constant')[:len(ref)]
+        sr, ch, sw, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
+        start = min(int(start_sec * sr), n)
+        count = n - start if dur_sec is None else min(int(dur_sec * sr), n - start)
+        w.setpos(start)
+        raw = w.readframes(count)
+    if sw == 2:
+        x = np.frombuffer(raw, np.int16).astype(np.float64) / 32768.0
+    elif sw == 3:
+        a = np.frombuffer(raw, np.uint8).reshape(-1, 3)
+        x = np.pad(a, ((0, 0), (1, 0))).view('<i4').ravel().astype(np.float64) / 2**31
+    elif sw == 4:
+        x = np.frombuffer(raw, np.int32).astype(np.float64) / 2**31
     else:
-        syn_aligned = syn
-    return syn_aligned
+        raise ValueError(f'Unsupported sample width {sw}')
+    x = x.reshape(-1, ch).mean(axis=1)
+    if sr != SR:
+        x = scipy.signal.resample_poly(x, SR, sr)
+    if dur_sec is not None:
+        need = int(dur_sec * SR)
+        x = np.pad(x, (0, max(0, need - len(x))))[:need]
+    return x
 
 
-def run_benchmarks():
-    print("=" * 80)
-    print("HYBRID SYNTH: OFFICIAL GUITARSET MULTI-SCALE STFT BENCHMARK")
-    print("Dataset: GuitarSet (ISMIR 2018, NYU MARL / Queen Mary University of London)")
-    print("Audio Source: Real Acoustic Condenser Microphone (audio_mono-mic)")
-    print("=" * 80)
+# ---------------------------------------------------------------------------
+# Annotations
+# ---------------------------------------------------------------------------
 
-    results = []
+def load_notes(name):
+    """All annotated notes of a take as dicts (time, pitch [fractional MIDI], dur, string)."""
+    with open(os.path.join(ANNO_DIR, name + '.jams')) as f:
+        jams = json.load(f)
+    notes = []
+    for anno in jams['annotations']:
+        if anno.get('namespace') != 'note_midi':
+            continue
+        string = anno.get('annotation_metadata', {}).get('data_source')
+        for d in anno['data']:
+            notes.append({'time': float(d['time']), 'pitch': float(d['value']),
+                          'dur': float(d['duration']), 'string': string})
+    notes.sort(key=lambda n: n['time'])
+    return notes
 
-    # ------------------------------------------------------------------------
-    # Benchmark Test 1: Isolated Single Pluck C3 (MIDI 48)
-    # File: 00_Funk1-97-C_solo_mic.wav at t=7.431s, ring-out duration 2.5s
-    # ------------------------------------------------------------------------
-    print("\n[Test 1] Isolated Acoustic Pluck C3 (MIDI 48) - 00_Funk1-97-C_solo")
-    audio_path = os.path.join(AUDIO_DIR, "00_Funk1-97-C_solo_mic.wav")
-    ref_audio, sr = load_wav_slice(audio_path, start_sec=7.431, dur_sec=2.5)
 
-    tmp_ks = "/tmp/syn_gs_pluck_c3_ks.wav"
-    tmp_fdtd = "/tmp/syn_gs_pluck_c3_fdtd.wav"
-    render_isolated_chord([48], 0.0, 2.5, tmp_ks)
-    render_isolated_chord([48], 1.0, 2.5, tmp_fdtd)
+def window_events(notes, t0, dur):
+    """Notes starting inside [t0, t0 + dur), re-timed to the window and rounded to MIDI."""
+    events = []
+    for n in notes:
+        if t0 - 1e-3 <= n['time'] < t0 + dur:
+            events.append({'time': max(0.0, n['time'] - t0), 'note': int(round(n['pitch'])),
+                           'dur': n['dur'], 'pitch': n['pitch']})
+    return events
 
-    ks_audio, _ = load_wav_slice(tmp_ks, start_sec=0.0, dur_sec=2.5)
-    fdtd_audio, _ = load_wav_slice(tmp_fdtd, start_sec=0.0, dur_sec=2.5)
 
-    # Multi-scale loss
-    sc_ks, log_ks, total_ks = multi_scale_stft_loss(ref_audio, ks_audio)
-    sc_fdtd, log_fdtd, total_fdtd = multi_scale_stft_loss(ref_audio, fdtd_audio)
+def find_isolated_notes():
+    """Clean single notes across all takes, one per MIDI pitch (spread across the register)."""
+    candidates = []
+    for fname in sorted(os.listdir(ANNO_DIR)):
+        if not fname.endswith('.jams'):
+            continue
+        name = fname[:-5]
+        if not os.path.exists(os.path.join(AUDIO_DIR, name + '_mic.wav')):
+            continue
+        notes = load_notes(name)
+        for i, n in enumerate(notes):
+            midi = round(n['pitch'])
+            cents = 100.0 * (n['pitch'] - midi)
+            if not (SYNTH_MIN_NOTE <= midi <= SYNTH_MAX_NOTE):
+                continue
+            if abs(cents) > ISOLATED_MAX_CENTS or n['dur'] < ISOLATED_MIN_DUR_SEC:
+                continue
+            t = n['time']
+            clash = False
+            for j, o in enumerate(notes):
+                if j == i:
+                    continue
+                # Another note starting near/inside the window, or still sounding at the onset
+                if t - ISOLATED_GUARD_SEC <= o['time'] <= t + ISOLATED_WINDOW_SEC:
+                    clash = True
+                    break
+                if o['time'] < t and o['time'] + o['dur'] > t - 0.05:
+                    clash = True
+                    break
+            if not clash:
+                candidates.append({'take': name, 'time': t, 'midi': midi, 'cents': cents,
+                                   'dur': n['dur'], 'pitch': n['pitch']})
+    return candidates
 
-    plot_path = os.path.join(PLOTS_DIR, "guitarset_pluck_C3.png")
-    plot_guitarset_comparison(ref_audio, ks_audio, fdtd_audio, "Pluck C3 (MIDI 48)", plot_path, dur_sec=2.5)
 
-    results.append({
-        'test': 'Pluck C3 (MIDI 48)',
-        'source': '00_Funk1-97-C_solo',
-        'sc_ks': float(sc_ks), 'log_ks': float(log_ks), 'total_ks': float(total_ks),
-        'sc_fdtd': float(sc_fdtd), 'log_fdtd': float(log_fdtd), 'total_fdtd': float(total_fdtd),
-        'diff': float(total_ks - total_fdtd)
-    })
+# ---------------------------------------------------------------------------
+# Synthesis
+# ---------------------------------------------------------------------------
 
-    # ------------------------------------------------------------------------
-    # Benchmark Test 2: Isolated High-Register Acoustic Pluck Bb3 (MIDI 58)
-    # File: 00_Funk2-108-Eb_solo_mic.wav at t=13.367s, ring-out duration 2.5s
-    # ------------------------------------------------------------------------
-    print("\n[Test 2] Isolated Acoustic Pluck Bb3 (MIDI 58) - 00_Funk2-108-Eb_solo")
-    audio_path = os.path.join(AUDIO_DIR, "00_Funk2-108-Eb_solo_mic.wav")
-    ref_audio, sr = load_wav_slice(audio_path, start_sec=13.367, dur_sec=2.5)
+def render(events, engine, dur, tmpdir, tag):
+    csv_path = os.path.join(tmpdir, f'{tag}.csv')
+    out_path = os.path.join(tmpdir, f'{tag}.wav')
+    with open(csv_path, 'w') as f:
+        for ev in events:
+            f.write(f"{ev['time']:.4f},{ev['note']},0.80,{ev['dur']:.4f}\n")
+    cmd = [RENDERER, '--engine', str(engine), '--eventsFile', csv_path,
+           '--material', '1', '--bodyType', '1', '--bodyMix', '0.75',
+           '--dur', f'{dur:.3f}', '--out', out_path]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f'render_audio failed: {res.stderr}')
+    return load_wav(out_path, 0.0, dur)
 
-    tmp_ks = "/tmp/syn_gs_pluck_bb3_ks.wav"
-    tmp_fdtd = "/tmp/syn_gs_pluck_bb3_fdtd.wav"
-    render_isolated_chord([58], 0.0, 2.5, tmp_ks)
-    render_isolated_chord([58], 1.0, 2.5, tmp_fdtd)
 
-    ks_audio, _ = load_wav_slice(tmp_ks, start_sec=0.0, dur_sec=2.5)
-    fdtd_audio, _ = load_wav_slice(tmp_fdtd, start_sec=0.0, dur_sec=2.5)
-
-    sc_ks, log_ks, total_ks = multi_scale_stft_loss(ref_audio, ks_audio)
-    sc_fdtd, log_fdtd, total_fdtd = multi_scale_stft_loss(ref_audio, fdtd_audio)
-
-    plot_path = os.path.join(PLOTS_DIR, "guitarset_pluck_Bb3.png")
-    plot_guitarset_comparison(ref_audio, ks_audio, fdtd_audio, "Pluck Bb3 (MIDI 58)", plot_path, dur_sec=2.5)
-
-    results.append({
-        'test': 'Pluck Bb3 (MIDI 58)',
-        'source': '00_Funk2-108-Eb_solo',
-        'sc_ks': float(sc_ks), 'log_ks': float(log_ks), 'total_ks': float(total_ks),
-        'sc_fdtd': float(sc_fdtd), 'log_fdtd': float(log_fdtd), 'total_fdtd': float(total_fdtd),
-        'diff': float(total_ks - total_fdtd)
-    })
-
-    # ------------------------------------------------------------------------
-    # Benchmark Test 3: Sustained Acoustic Chord (B / F#, MIDI [47, 54, 59])
-    # File: 00_BN2-131-B_comp_mic.wav at t=28.012s, ring-out duration 2.2s
-    # ------------------------------------------------------------------------
-    print("\n[Test 3] Sustained Acoustic Chord (MIDI [47, 54, 59]) - 00_BN2-131-B_comp")
-    audio_path = os.path.join(AUDIO_DIR, "00_BN2-131-B_comp_mic.wav")
-    ref_audio, sr = load_wav_slice(audio_path, start_sec=28.012, dur_sec=2.2)
-
-    tmp_ks = "/tmp/syn_gs_chord_b_ks.wav"
-    tmp_fdtd = "/tmp/syn_gs_chord_b_fdtd.wav"
-    render_isolated_chord([47, 54, 59], 0.0, 2.2, tmp_ks)
-    render_isolated_chord([47, 54, 59], 1.0, 2.2, tmp_fdtd)
-
-    ks_audio, _ = load_wav_slice(tmp_ks, start_sec=0.0, dur_sec=2.2)
-    fdtd_audio, _ = load_wav_slice(tmp_fdtd, start_sec=0.0, dur_sec=2.2)
-
-    sc_ks, log_ks, total_ks = multi_scale_stft_loss(ref_audio, ks_audio)
-    sc_fdtd, log_fdtd, total_fdtd = multi_scale_stft_loss(ref_audio, fdtd_audio)
-
-    plot_path = os.path.join(PLOTS_DIR, "guitarset_chord_B.png")
-    plot_guitarset_comparison(ref_audio, ks_audio, fdtd_audio, "Acoustic Chord B (47,54,59)", plot_path, dur_sec=2.2)
-
-    results.append({
-        'test': 'Acoustic Chord B [47,54,59]',
-        'source': '00_BN2-131-B_comp',
-        'sc_ks': float(sc_ks), 'log_ks': float(log_ks), 'total_ks': float(total_ks),
-        'sc_fdtd': float(sc_fdtd), 'log_fdtd': float(log_fdtd), 'total_fdtd': float(total_fdtd),
-        'diff': float(total_ks - total_fdtd)
-    })
-
-    # ------------------------------------------------------------------------
-    # Benchmark Test 4: Continuous Performance Resynthesis (Singer-Songwriter Comping)
-    # File: 00_SS1-100-C#_comp, first 5.0 seconds
-    # ------------------------------------------------------------------------
-    print("\n[Test 4] Continuous Acoustic Comping Resynthesis (00_SS1-100-C#_comp, 5.0s)")
-    jams_path = os.path.join(ANNO_DIR, "00_SS1-100-C#_comp.jams")
-    audio_path = os.path.join(AUDIO_DIR, "00_SS1-100-C#_comp_mic.wav")
-    events, total_dur = parse_jams_notes(jams_path, max_time_sec=5.0)
-
-    # Shift events to start at t=0.0
-    t0 = events[0]['time']
+def naive_tone(events, dur):
+    """Decaying additive harmonic tone (1/n partials, faster decay for higher partials)."""
+    n = int(dur * SR)
+    y = np.zeros(n)
+    t_all = np.arange(n) / SR
     for ev in events:
-        ev['time'] -= t0
-    phrase_dur = 5.0
+        f0 = 440.0 * 2 ** ((ev['note'] - 69) / 12)
+        start = int(ev['time'] * SR)
+        t = t_all[: n - start]
+        env_off = np.where(t < ev['dur'], 1.0, np.exp(-(t - ev['dur']) / 0.05))
+        note = np.zeros_like(t)
+        for k in range(1, 30):
+            fk = k * f0
+            if fk > 0.45 * SR:
+                break
+            note += (1.0 / k) * np.exp(-t / (1.2 / np.sqrt(k))) * np.sin(2 * np.pi * fk * t)
+        y[start:] += note * env_off
+    return y
 
-    ref_audio, sr = load_wav_slice(audio_path, start_sec=t0, dur_sec=phrase_dur)
 
-    tmp_ks = "/tmp/syn_gs_phrase_ss1_ks.wav"
-    tmp_fdtd = "/tmp/syn_gs_phrase_ss1_fdtd.wav"
-    render_with_events(events, 0.0, phrase_dur, tmp_ks)
-    render_with_events(events, 1.0, phrase_dur, tmp_fdtd)
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
 
-    ks_audio, _ = load_wav_slice(tmp_ks, start_sec=0.0, dur_sec=phrase_dur)
-    fdtd_audio, _ = load_wav_slice(tmp_fdtd, start_sec=0.0, dur_sec=phrase_dur)
+def align(ref, syn, max_shift_sec):
+    """Shift syn to best match ref's amplitude envelope (cross-correlation)."""
+    win = int(0.005 * SR)
+    kernel = np.ones(win) / win
+    env_ref = np.convolve(np.abs(ref), kernel, 'same')
+    env_syn = np.convolve(np.abs(syn), kernel, 'same')
+    corr = scipy.signal.correlate(env_ref, env_syn, mode='full', method='fft')
+    lags = scipy.signal.correlation_lags(len(env_ref), len(env_syn), mode='full')
+    ok = np.abs(lags) <= int(max_shift_sec * SR)
+    lag = int(lags[ok][np.argmax(corr[ok])])
+    if lag > 0:
+        return np.pad(syn, (lag, 0))[:len(ref)]
+    if lag < 0:
+        return np.pad(syn[-lag:], (0, -lag))[:len(ref)]
+    return syn[:len(ref)]
 
-    ks_aligned = align_signals(ref_audio, ks_audio)
-    fdtd_aligned = align_signals(ref_audio, fdtd_audio)
 
-    sc_ks, log_ks, total_ks = multi_scale_stft_loss(ref_audio, ks_aligned)
-    sc_fdtd, log_fdtd, total_fdtd = multi_scale_stft_loss(ref_audio, fdtd_aligned)
+def rms_normalise(x):
+    return x / (np.sqrt(np.mean(x ** 2)) + 1e-12)
 
-    plot_path = os.path.join(PLOTS_DIR, "guitarset_phrase_SS1_comp.png")
-    plot_guitarset_comparison(ref_audio, ks_aligned, fdtd_aligned, "Singer-Songwriter Comping (5.0s)", plot_path, dur_sec=phrase_dur)
 
-    results.append({
-        'test': 'SS1 Comping Phrase (5.0s)',
-        'source': '00_SS1-100-C#_comp',
-        'sc_ks': float(sc_ks), 'log_ks': float(log_ks), 'total_ks': float(total_ks),
-        'sc_fdtd': float(sc_fdtd), 'log_fdtd': float(log_fdtd), 'total_fdtd': float(total_fdtd),
-        'diff': float(total_ks - total_fdtd)
-    })
+def multi_scale_stft(ref, syn):
+    n = min(len(ref), len(syn))
+    ref, syn = rms_normalise(ref[:n]), rms_normalise(syn[:n])
+    sc_sum = l1_sum = 0.0
+    for size in STFT_SIZES:
+        hop = size // 4
+        _, _, Zr = scipy.signal.stft(ref, nperseg=size, noverlap=size - hop, boundary=None)
+        _, _, Zs = scipy.signal.stft(syn, nperseg=size, noverlap=size - hop, boundary=None)
+        Sr, Ss = np.abs(Zr), np.abs(Zs)
+        floor = Sr.max() * 10 ** (-80 / 20)
+        sc_sum += np.linalg.norm(Sr - Ss) / (np.linalg.norm(Sr) + 1e-12)
+        l1_sum += np.mean(np.abs(np.log(np.maximum(Sr, floor)) - np.log(np.maximum(Ss, floor))))
+    m = len(STFT_SIZES)
+    return {'sc': sc_sum / m, 'l1': l1_sum / m, 'combined': (sc_sum + l1_sum) / m}
 
-    # ------------------------------------------------------------------------
-    # Benchmark Test 5: Continuous Melodic Solo Line Resynthesis
-    # File: 00_SS1-100-C#_solo, first 6.0 seconds
-    # ------------------------------------------------------------------------
-    print("\n[Test 5] Continuous Melodic Solo Line Resynthesis (00_SS1-100-C#_solo, 6.0s)")
-    jams_path = os.path.join(ANNO_DIR, "00_SS1-100-C#_solo.jams")
-    audio_path = os.path.join(AUDIO_DIR, "00_SS1-100-C#_solo_mic.wav")
-    events, total_dur = parse_jams_notes(jams_path, max_time_sec=6.0)
 
-    t0 = events[0]['time']
-    for ev in events:
-        ev['time'] -= t0
-    phrase_dur = 6.0
+def score_all(ref, events, dur, tmpdir, tag, max_shift_sec):
+    scores = {}
+    for label, engine in ENGINES:
+        syn = render(events, engine, dur, tmpdir, f'{tag}_{label}')
+        scores[label] = multi_scale_stft(ref, align(ref, syn, max_shift_sec))
+    scores['naive_tone'] = multi_scale_stft(ref, align(ref, naive_tone(events, dur), max_shift_sec))
+    return scores
 
-    ref_audio, sr = load_wav_slice(audio_path, start_sec=t0, dur_sec=phrase_dur)
 
-    tmp_ks = "/tmp/syn_gs_phrase_ss1_solo_ks.wav"
-    tmp_fdtd = "/tmp/syn_gs_phrase_ss1_solo_fdtd.wav"
-    render_with_events(events, 0.0, phrase_dur, tmp_ks)
-    render_with_events(events, 1.0, phrase_dur, tmp_fdtd)
+# ---------------------------------------------------------------------------
+# Optional plot
+# ---------------------------------------------------------------------------
 
-    ks_audio, _ = load_wav_slice(tmp_ks, start_sec=0.0, dur_sec=phrase_dur)
-    fdtd_audio, _ = load_wav_slice(tmp_fdtd, start_sec=0.0, dur_sec=phrase_dur)
+def plot(ref, tracks, title, path):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(len(tracks) + 1, 1, figsize=(10, 2.4 * (len(tracks) + 1)), sharex=True)
+    for ax, (label, x) in zip(axes, [('GuitarSet reference', ref)] + tracks):
+        _, _, Z = scipy.signal.stft(rms_normalise(x), nperseg=1024, noverlap=768)
+        ax.imshow(20 * np.log10(np.abs(Z) + 1e-6), aspect='auto', origin='lower',
+                  extent=[0, len(x) / SR, 0, SR / 2], vmin=-90, vmax=0, cmap='inferno')
+        ax.set_ylim(0, 8000)
+        ax.set_title(label, fontsize=10)
+        ax.set_ylabel('Hz')
+    axes[-1].set_xlabel('s')
+    fig.suptitle(title)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
 
-    ks_aligned = align_signals(ref_audio, ks_audio)
-    fdtd_aligned = align_signals(ref_audio, fdtd_audio)
 
-    sc_ks, log_ks, total_ks = multi_scale_stft_loss(ref_audio, ks_aligned)
-    sc_fdtd, log_fdtd, total_fdtd = multi_scale_stft_loss(ref_audio, fdtd_aligned)
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
-    plot_path = os.path.join(PLOTS_DIR, "guitarset_phrase_SS1_solo.png")
-    plot_guitarset_comparison(ref_audio, ks_aligned, fdtd_aligned, "Acoustic Solo Melody (6.0s)", plot_path, dur_sec=phrase_dur)
+def main():
+    make_plots = '--plots' in sys.argv
+    if not os.path.exists(RENDERER):
+        sys.exit(f'Missing {RENDERER}; build the render_audio target first.')
+    results = {'isolated': [], 'phrases': []}
 
-    results.append({
-        'test': 'SS1 Solo Phrase (6.0s)',
-        'source': '00_SS1-100-C#_solo',
-        'sc_ks': float(sc_ks), 'log_ks': float(log_ks), 'total_ks': float(total_ks),
-        'sc_fdtd': float(sc_fdtd), 'log_fdtd': float(log_fdtd), 'total_fdtd': float(total_fdtd),
-        'diff': float(total_ks - total_fdtd)
-    })
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # ---- Isolated notes ------------------------------------------------
+        candidates = find_isolated_notes()
+        by_pitch = {}
+        for c in candidates:
+            by_pitch.setdefault(c['midi'], []).append(c)
+        # Only pitches with clean notes in >= 2 takes, so each test has a real-vs-real reference
+        chosen = sorted(m for m in by_pitch if len({c['take'] for c in by_pitch[m]}) >= 2)
+        print(f'Isolated-note candidates: {len(candidates)} across {len(by_pitch)} pitches; testing {chosen}')
 
-    # ------------------------------------------------------------------------
-    # Summary Table
-    # ------------------------------------------------------------------------
-    print("\n" + "=" * 90)
-    print("GUITARSET MULTI-SCALE STFT BENCHMARK RESULTS SUMMARY")
-    print(f"{'Benchmark Target':<28} | {'Waveguide SC':<13} | {'Waveguide L1':<13} | {'FDTD SC':<10} | {'FDTD L1':<10} | {'FDTD Adv (ΔL)':<12}")
-    print("-" * 90)
-    for r in results:
-        adv = r['diff']
-        adv_str = f"+{adv:.4f}" if adv >= 0 else f"{adv:.4f}"
-        print(f"{r['test']:<28} | {r['sc_ks']:<13.4f} | {r['log_ks']:<13.4f} | {r['sc_fdtd']:<10.4f} | {r['log_fdtd']:<10.4f} | {adv_str:<12}")
-    print("=" * 90)
+        for midi in chosen:
+            group = sorted(by_pitch[midi], key=lambda c: abs(c['cents']))
+            c = group[0]
+            ref = load_wav(os.path.join(AUDIO_DIR, c['take'] + '_mic.wav'), c['time'], ISOLATED_WINDOW_SEC)
+            events = [{'time': 0.0, 'note': midi, 'dur': c['dur']}]
+            scores = score_all(ref, events, ISOLATED_WINDOW_SEC, tmpdir, f'iso_{midi}', 0.05)
 
-    # Save summary markdown report
-    report_path = os.path.join(os.path.dirname(__file__), "guitarset_results.json")
-    with open(report_path, 'w') as f:
+            other = next((o for o in group[1:] if o['take'] != c['take']), None)
+            if other is not None:
+                ref2 = load_wav(os.path.join(AUDIO_DIR, other['take'] + '_mic.wav'), other['time'], ISOLATED_WINDOW_SEC)
+                scores['real_other_take'] = multi_scale_stft(ref, align(ref, ref2, 0.05))
+
+            entry = {'midi': midi, 'take': c['take'], 'time': round(c['time'], 3),
+                     'cents': round(c['cents'], 1), 'other_take': other['take'] if other else None,
+                     'scores': scores}
+            results['isolated'].append(entry)
+            print(f"  MIDI {midi:2d} ({c['take']} @ {c['time']:.2f}s, {c['cents']:+.1f} c): "
+                  + '  '.join(f"{k} {v['combined']:.3f}" for k, v in scores.items()))
+            if make_plots:
+                tracks = [(lbl, align(ref, render(events, eng, ISOLATED_WINDOW_SEC, tmpdir, f'p{midi}{lbl}'), 0.05))
+                          for lbl, eng in ENGINES]
+                plot(ref, tracks, f'Isolated MIDI {midi}', os.path.join(PLOTS_DIR, f'guitarset_note_{midi}.png'))
+
+        # ---- Continuous phrases -------------------------------------------
+        for take, dur, desc in PHRASES:
+            if not os.path.exists(os.path.join(AUDIO_DIR, take + '_mic.wav')):
+                print(f'  (skipping {take}: audio missing)')
+                continue
+            notes = load_notes(take)
+            t0 = notes[0]['time']
+            events = [e for e in window_events(notes, t0, dur) if SYNTH_MIN_NOTE - 2 <= e['note'] <= SYNTH_MAX_NOTE]
+            ref = load_wav(os.path.join(AUDIO_DIR, take + '_mic.wav'), t0, dur)
+            scores = score_all(ref, events, dur, tmpdir, f'phr_{take}', 0.1)
+            off_tune = float(np.mean([abs(100 * (e['pitch'] - e['note'])) for e in events]))
+            results['phrases'].append({'take': take, 'description': desc, 'start': round(t0, 3),
+                                       'duration': dur, 'num_notes': len(events),
+                                       'mean_abs_cents_from_midi': round(off_tune, 1), 'scores': scores})
+            print(f"  {take} ({len(events)} notes, mean |{off_tune:.0f}| c off-grid): "
+                  + '  '.join(f"{k} {v['combined']:.3f}" for k, v in scores.items()))
+            if make_plots:
+                tracks = [(lbl, align(ref, render(events, eng, dur, tmpdir, f'pp{lbl}'), 0.1)) for lbl, eng in ENGINES]
+                plot(ref, tracks, desc, os.path.join(PLOTS_DIR, f'guitarset_{take}.png'))
+
+    # ---- Summary ------------------------------------------------------------
+    def summarise(entries, key):
+        vals = [e['scores'][key] for e in entries if key in e['scores']]
+        if not vals:
+            return None
+        return {m: float(np.mean([v[m] for v in vals])) for m in ('sc', 'l1', 'combined')} | {'n': len(vals)}
+
+    summary = {}
+    for group in ('isolated', 'phrases'):
+        summary[group] = {k: summarise(results[group], k)
+                          for k in ('real_other_take', 'fdtd', 'waveguide', 'naive_tone')}
+        summary[group] = {k: v for k, v in summary[group].items() if v}
+    for group in ('isolated', 'phrases'):
+        entries = results[group]
+        summary[group]['fdtd_beats_waveguide'] = {
+            m: int(sum(e['scores']['fdtd'][m] < e['scores']['waveguide'][m] for e in entries))
+            for m in ('sc', 'l1', 'combined')} | {'n': len(entries)}
+    results['summary'] = summary
+    results['method'] = {'stft_sizes': STFT_SIZES, 'normalisation': 'RMS', 'alignment': 'envelope xcorr',
+                         'synth_settings': 'steel strings, Gibson IR body, body mix 0.75, velocity 0.80'}
+
+    print('\nMean scores (lower is better)')
+    print(f"{'group':10} {'system':16} {'n':>3} {'SC':>7} {'logL1':>7} {'combined':>9}")
+    for group, rows in summary.items():
+        for k, v in rows.items():
+            if k == 'fdtd_beats_waveguide':
+                print(f"{group:10} FDTD better than waveguide in: SC {v['sc']}/{v['n']}, "
+                      f"logL1 {v['l1']}/{v['n']}, combined {v['combined']}/{v['n']} tests")
+                continue
+            print(f"{group:10} {k:16} {v['n']:3d} {v['sc']:7.3f} {v['l1']:7.3f} {v['combined']:9.3f}")
+
+    with open(RESULTS_JSON, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"\n[Saved JSON Report] -> {report_path}")
-
-    return results
+    print(f'\nSaved {RESULTS_JSON}')
 
 
 if __name__ == '__main__':
-    run_benchmarks()
+    main()

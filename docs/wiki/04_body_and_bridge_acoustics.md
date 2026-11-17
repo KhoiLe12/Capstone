@@ -24,7 +24,7 @@ When a note is plucked on an acoustic guitar, the bridge vibrates and drives the
 ### The Sympathetic Coupling Network (`SympatheticResonance.h`)
 - Implemented as an energy-conserving multi-port scattering junction.
 - Maintains 6 tuned parallel resonators corresponding to the open fundamental and overtone modes of the unplayed strings ($E_2, A_2, D_3, G_3, B_3, E_4$).
-- **Fretted String Damping**: If a voice is actively fretting physical string $s$, its open-string speaking length is clamped, naturally damping that string's sympathetic mode.
+- **Fretted String Damping**: If a voice is actively fretting physical string $s$, its open-string speaking length is clamped, naturally damping that string's sympathetic mode. Once fully damped, that string's resonator state is **cleared**, not frozen (v63.f). Before v63.f the frozen energy rang out as a ghost tone of the open string when the voice ended (about −61 dB re. peak, ~40 dB under the note, on every release).
 - **Mute Mode Coupling**: When palm or full mutes are active, sympathetic coupling is attenuated to match physical hand contact.
 - **Coupling Factor ($0.12\times$)**: Calibrated so sparse voicings and open chords bloom with an authentic acoustic wooden halo.
 

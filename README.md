@@ -155,7 +155,7 @@ Then rescan plugins in your DAW. The standalone app can be launched with
 |---|---|---|
 | Real-time safety & latency | `./build/bench_synth` | `[RTCheck Result] PASS (0)` — zero heap allocations on the audio thread; 1/4/6-voice loads within deadline at 32–512 sample blocks |
 | Plugin conformance | `cmake --build build --config Release --target validate` | `pluginval` strictness 8 returns `SUCCESS` (requires `pluginval` on `PATH` or in `tools/pluginval/`) |
-| Spectral comparison | `python3 benchmarks/spectral_eval.py` | Multi-scale STFT distance vs. real guitar recordings; plots written to `benchmarks/plots/` |
+| Spectral comparison | `.venv/bin/python benchmarks/guitarset_eval.py [--plots]` | Multi-scale STFT distance vs. GuitarSet recordings, with real-take and naive-tone reference points. Not a realism score; see [wiki 06 §5](docs/wiki/06_realtime_safety_and_qa.md) |
 
 Offline rendering example:
 ```bash

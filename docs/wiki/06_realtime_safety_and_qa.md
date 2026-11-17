@@ -86,26 +86,52 @@ The workflow [`.github/workflows/build_and_validate.yml`](../../.github/workflow
 
 ---
 
-## 5. Multi-Scale STFT Benchmark: Official GuitarSet Dataset Integration (v61.f)
+## 5. GuitarSet Multi-Scale STFT Benchmark (v63.f method)
 
-To validate acoustic realism against the industry standard, the repository features an automated comparative evaluation pipeline ([`benchmarks/guitarset_eval.py`](../../benchmarks/guitarset_eval.py)) integrating the **official GuitarSet dataset** (ISMIR 2018, NYU MARL / Queen Mary University of London):
+[`benchmarks/guitarset_eval.py`](../../benchmarks/guitarset_eval.py) compares both string engines against real acoustic guitar recordings from **GuitarSet** (ISMIR 2018: `audio_mono-mic` + JAMS note annotations, expected in `benchmarks/data/guitarset/`).
 
-### Multi-Scale STFT Metric Formulation
-Evaluated across 5 STFT window scales $m \in \{1..5\}$ ($N_\text{fft} \in \{2048, 1024, 512, 256, 128\}$ with 75% overlap):
-1. **Spectral Convergence (SC)**:
-   $$\mathcal{SC}_m = \frac{\| |S_\text{ref}| - |S_\text{syn}| \|_F}{\| |S_\text{ref}| \|_F + \epsilon}$$
-2. **Log-Magnitude STFT L1 Distance**:
-   $$\mathcal{L}_{1, \log, m} = \frac{1}{N} \| \log(|S_\text{ref}| + \epsilon) - \log(|S_\text{syn}| + \epsilon) \|_1$$
-3. **Multi-Scale STFT Objective Loss**:
-   $$\mathcal{L}_\text{total} = \frac{1}{M} \sum_{m=1}^M \left( \mathcal{SC}_m + \mathcal{L}_{1, \log, m} \right)$$
+```bash
+.venv/bin/python benchmarks/guitarset_eval.py           # scores -> benchmarks/guitarset_results.json
+.venv/bin/python benchmarks/guitarset_eval.py --plots   # + spectrograms -> benchmarks/plots/
+```
 
-### Dual-Paradigm Benchmark Modes
-1. **Isolated Acoustic Event Extraction**:
-   Slices clean single plucks (e.g. C3, Bb3) and ringing cadence chords directly from condenser mic audio (`audio_mono-mic`) using JAMS millisecond annotations.
-2. **Continuous Performance Resynthesis**:
-   Transcribes full 6-string continuous musical excerpts (e.g. 5–6 seconds of Singer-Songwriter fingerstyle comping or solo lead melodies) via `--eventsFile` into `./build/render_audio`, aligning synthesized output with real acoustic microphone recordings.
+### Metrics
+STFT sizes $N \in \{2048, 1024, 512, 256, 128\}$, hop $N/4$, averaged over sizes. Lower is better.
+- **Spectral convergence**: $\mathcal{SC} = \| |S_\text{ref}| - |S_\text{syn}| \|_F \,/\, \| |S_\text{ref}| \|_F$ (linear magnitude).
+- **Log-magnitude L1**: $\frac{1}{N}\| \log|S_\text{ref}| - \log|S_\text{syn}| \|_1$, with magnitudes floored at −80 dB re. the reference peak.
+- **Combined** = SC + log-L1.
 
-### Benchmark Results (v61.f)
-Across all evaluated targets, Stefan Bilbao's Non-Linear FDTD engine demonstrated an **$18\%$ to $33.6\%$ lower Log-Magnitude STFT L1 distance** compared to Digital Waveguide modeling, validating the physical PDE's superior capture of tension modulation, modal dispersion, and soundboard coupling.
+### Method
+- **Re-synthesis from annotations**: every test renders the annotated notes of its window (onsets, durations, simultaneous chord notes) through `render_audio --eventsFile`. Settings: steel strings, Gibson IR, body mix 0.75. Velocity is not annotated, so all notes use 0.80.
+- **Alignment and level**: synth output is aligned to the reference by envelope cross-correlation and RMS-normalised, so scores compare spectro-temporal shape rather than latency or loudness.
+- **Isolated notes are chosen automatically** from all 360 takes. A note qualifies if it is within ±15 cents of a MIDI pitch (the synth has no fine-tune or pitch bend), held ≥ 1.0 s, with no other note starting from 0.3 s before to the end of the 1.5 s window, and none still sounding at the onset. Only pitches with clean notes in **two different takes** are tested (currently 12 pitches, MIDI 51–74).
+- **Phrases**: the first 5–6 s of four takes (SS1 comp and solo, BN1 comp, Rock1 comp). These contain bends and off-grid pitches (mean 9–20 cents from the nearest MIDI note) that the synth cannot reproduce.
+- **Reference points**:
+  - *Real (other take)*: a second real recording of the same pitch, scored against the reference. This is roughly the best a perfect guitar model could expect, given player and take variation.
+  - *Naive tone*: a decaying additive harmonic tone with the same events. An engine that does not clearly beat this is not being distinguished by the metric.
 
+### Results (v63.f)
+| Group | System | SC | log-L1 | Combined |
+| :--- | :--- | ---: | ---: | ---: |
+| Isolated (12) | Real (other take) | 0.635 | 0.628 | 1.263 |
+| | **Bilbao FDTD** | 0.592 | **0.610** | **1.202** |
+| | Digital waveguide | 0.614 | 0.667 | 1.281 |
+| | Naive tone | 0.577 | 0.704 | 1.281 |
+| Phrases (4) | **Bilbao FDTD** | 0.739 | **0.594** | **1.333** |
+| | Digital waveguide | 0.732 | 0.781 | 1.513 |
+| | Naive tone | 0.741 | 0.741 | 1.482 |
 
+FDTD beats the waveguide on log-L1 in **16/16** tests and on the combined score in **15/16**. FDTD log-L1 is 9% lower on isolated notes and 24% lower on phrases.
+
+### How to read these numbers
+- **Log-L1 is the discriminating metric.** It ranks FDTD < waveguide < naive tone consistently.
+- **Spectral convergence does not discriminate here.** The naive tone gets the best SC, and all systems sit within ±0.03. SC on linear magnitude is dominated by the few strongest low partials.
+- **This is not a realism score.** A second real recording of the same pitch scores no better than the synths, because take-to-take differences (dynamics, pick position, string, room noise) dominate. Supported claim: *FDTD's spectral envelope and decay fit real recordings better than the waveguide's*. Not supported: *FDTD sounds as real as a recording* — that needs a listening test (e.g. MUSHRA/ABX).
+
+### History
+The v61.f version of this benchmark reported "18–33.6% lower log-magnitude L1" for FDTD. That figure came from:
+- two flawed isolated tests (a "Bb3 pluck" that was actually a G#3 bend; a chord muted after 0.5–0.9 s that the synth strummed over 18 ms and let ring);
+- no alignment on the isolated tests;
+- peak normalisation.
+
+It also left out that on the combined score it reported, FDTD lost 4 of 5 tests. v63.f replaces that method entirely; do not cite the v61.f numbers.

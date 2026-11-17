@@ -30,26 +30,14 @@ The physical modeling engine is evaluated using an automated, native C++ benchma
 
 ---
 
-## 2. Multi-Scale STFT vs. Acoustic Dataset Benchmark (`benchmarks/spectral_eval.py`)
+## 2. GuitarSet Multi-Scale STFT Benchmark (`benchmarks/guitarset_eval.py`)
 
-A quantitative objective spectral distance and timbral benchmark comparing the synthesizer's output against studio recordings of authentic acoustic guitars.
+Compares both string engines against real GuitarSet recordings: 12 automatically selected isolated notes and 4 annotated phrases. Every test is re-synthesised from the annotations, aligned, and RMS-normalised, and scored with spectral convergence and log-magnitude L1 over five STFT sizes. A second real take of the same pitch and a naive harmonic tone serve as reference points.
 
-### 2.1 Mathematical Formulation
-Evaluates multi-resolution Short-Time Fourier Transforms across 5 distinct window scales ($M \in \{2048, 1024, 512, 256, 128\}$) to capture both short-time attack transients (nail/plectrum slip) and long-time low-frequency decay:
-1. **Spectral Convergence (SC)**:
-   $$\mathcal{L}_{\text{SC}} = \frac{\| |S_{\text{ref}}| - |S_{\text{syn}}| \|_F}{\| |S_{\text{ref}}| \|_F}$$
-2. **Log-Magnitude STFT Distance ($\mathcal{L}_1$)**:
-   $$\mathcal{L}_{\text{log}} = \frac{1}{N} \| \log(|S_{\text{ref}}| + \epsilon) - \log(|S_{\text{syn}}| + \epsilon) \|_1$$
-3. **Multi-Scale Total Distance**:
-   $$\mathcal{L}_{\text{total}} = \frac{1}{M} \sum_{m=1}^M \left( \mathcal{L}_{\text{SC}}^{(m)} + \mathcal{L}_{\text{log}}^{(m)} \right)$$
+```bash
+.venv/bin/python benchmarks/guitarset_eval.py [--plots]
+```
 
-### 2.2 Execution & Outputs
-* **Command:**
-  ```bash
-  .venv/bin/python3 benchmarks/spectral_eval.py
-  ```
-* **Renderer:** Uses native `./build/render_audio` CLI executable to synthesize bit-exact audio matching reference chord notes and lengths.
-* **Output Plots:** Saves publication-quality 300 DPI comparative spectrogram figures (Dataset Reference vs. Digital Waveguide vs. Bilbao FDTD vs. Absolute Error Residual) to:
-  - `benchmarks/plots/stft_comparison_E.png`
-  - `benchmarks/plots/stft_comparison_Am.png`
+Method, current results, and how to interpret them (including what the benchmark does *not* show) are in [wiki 06 §5](docs/wiki/06_realtime_safety_and_qa.md).
 
+`benchmarks/spectral_eval.py` is the older chord comparison against downloaded Fender recordings. It uses peak normalisation and guessed chord voicings; it is kept for reference only and is not used for any claims.

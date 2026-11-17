@@ -6,6 +6,16 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v63.f
+- **GuitarSet benchmark rebuilt** ([`benchmarks/guitarset_eval.py`](../../benchmarks/guitarset_eval.py); method and interpretation in wiki 06 §5):
+  - Isolated notes are now chosen automatically: 12 pitches with clean notes in two takes. The v61.f "Bb3 pluck" was a G#3 bend, and its chord test strummed and sustained a chord the player had muted.
+  - Every test is re-synthesised from annotations, aligned, and RMS-normalised.
+  - New reference points: a second real take of the same pitch, and a naive harmonic tone.
+  - **Results**: FDTD beats the waveguide on log-L1 in 16/16 tests and on the combined score in 15/16. Spectral convergence does not discriminate (the naive tone scores best). A second real take scores no better than the synths, so the benchmark supports "better spectral fit than the waveguide", not "realistic".
+  - The v61.f "18–33.6%" claim is withdrawn.
+- **Sympathetic ghost tone fix**: fully damped (played) strings now clear their sympathetic resonator state instead of freezing it. The frozen energy used to ring out about 0.3 s after every note release (247 Hz band on C4: −61 dB → −104 dB).
+- **Quality Gates**: `bench_synth --events-only` RTCheck PASS (0).
+
 ### v62.f
 - **FDTD horizontal polarization restored to the output**: `FdtdString::tickPolar()` returned $F_H$, but `SynthEngine` summed only $F_V$, so the H plane was computed and thrown away. The bridge now sums $F_V + 0.35\,F_H$ (`kHorizontalSaddleCoupling`, matching the waveguide engine). Output is about +0.7 to +1.1 dB louder; pitch is unchanged (within ~1.3 cents).
 - **Audio-thread allocation fixes**:
@@ -24,7 +34,7 @@ This document records all version increments, DSP milestones, acoustic breakthro
     1. *Isolated Acoustic Event Extraction*: clean ringing plucks (C3, Bb3) and cadence chords sliced from acoustic mic takes.
     2. *Continuous Performance Resynthesis*: full 5–6s multi-string fingerstyle comping (`00_SS1-100-C#_comp`) and solo lead melodies (`00_SS1-100-C#_solo`) transcribed from JAMS note annotations.
   - Enhanced headless C++ CLI renderer [`src/bench/RenderAudioCLI.cpp`](../../src/bench/RenderAudioCLI.cpp) with `--eventsFile` timestamped scheduling, supporting noteOn, noteOff, and continuous multi-voice phrase synthesis.
-  - Evaluated Multi-Scale STFT Convergence and Log-Magnitude L1 loss across 5 scales ($N_\text{fft} \in \{2048, 1024, 512, 256, 128\}$): Bilbao Non-Linear FDTD demonstrated **$18\%$ to $33.6\%$ lower Log-Magnitude L1 spectral distance** compared to Digital Waveguide modeling against real acoustic microphone audio.
+  - Evaluated Multi-Scale STFT Convergence and Log-Magnitude L1 loss across 5 scales ($N_\text{fft} \in \{2048, 1024, 512, 256, 128\}$): *(Superseded: this result came from a flawed method and is withdrawn in v63.f.)* Bilbao Non-Linear FDTD demonstrated **$18\%$ to $33.6\%$ lower Log-Magnitude L1 spectral distance** compared to Digital Waveguide modeling against real acoustic microphone audio.
   - Generated high-resolution 4-panel spectral comparison charts (`guitarset_pluck_C3.png`, `guitarset_pluck_Bb3.png`, `guitarset_chord_B.png`, `guitarset_phrase_SS1_comp.png`, `guitarset_phrase_SS1_solo.png`).
 - **Quality Gates Passed**: Local `bench_synth: RTCheck PASS (0)` (zero heap allocations on audio thread, peak load 26.28%).
 - **DAW Deployment**: Deployed freshly compiled release binaries to `~/Library/Audio/Plug-Ins/VST3/` and `~/Library/Audio/Plug-Ins/Components/`.
