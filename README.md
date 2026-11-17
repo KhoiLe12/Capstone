@@ -101,6 +101,7 @@ Details: [05 — Articulations & Keyswitches](docs/wiki/05_articulations_and_key
 | **Palm Mute** | toggle | off | Same as holding C1. |
 | **Full Mute** | toggle | off | Same as holding D1. |
 | **Strum 8th** | toggle | off | Same as holding E1. |
+| **Legato (HO/PO)** | toggle | on | Overlapping notes on one string play as hammer-ons / pull-offs. Notes within 40 ms of each other always play as a chord. |
 
 ---
 

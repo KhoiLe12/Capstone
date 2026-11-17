@@ -106,6 +106,17 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     strumAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         p.apvts, "strumPattern", strumToggle);
 
+    // Legato toggle (hammer-ons / pull-offs on overlapping notes)
+    legatoToggle.setButtonText("Legato (HO/PO)");
+    legatoToggle.setTooltip("Overlapping notes on one string play as hammer-ons / pull-offs. "
+                            "Notes within 40 ms of each other always play as a chord.");
+    legatoToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xfff0f0f0));
+    legatoToggle.setColour(juce::ToggleButton::tickColourId, juce::Colour(0xff8ecae6));
+    addAndMakeVisible(legatoToggle);
+
+    legatoAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.apvts, "legato", legatoToggle);
+
     auto setupKnob = [this](juce::Slider& knob, juce::Label& label,
                             const juce::String& name)
     {
@@ -196,8 +207,8 @@ void HybridSynthEditor::paint(juce::Graphics& g)
     // Title text
     g.setColour(juce::Colour(0xfff0f0f0));
     g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
-    g.drawText("Hybrid Physical Modeling Synthesizer — Acoustic IR & Modal Engine",
-               juce::Rectangle<int>(14, 0, getWidth() - 410, 36),
+    g.drawText("Hybrid Physical Modeling Guitar",
+               juce::Rectangle<int>(14, 0, getWidth() - 560, 36),
                juce::Justification::centredLeft);
 
     // Prominent Version Badge in top-right
@@ -267,6 +278,7 @@ void HybridSynthEditor::paint(juce::Graphics& g)
 
 void HybridSynthEditor::resized()
 {
+    legatoToggle.setBounds(getWidth() - 535, 6, 130, 24);
     presetLabel.setBounds(getWidth() - 395, 6, 52, 24);
     presetBox.setBounds(getWidth() - 340, 6, 210, 24);
 
@@ -279,30 +291,30 @@ void HybridSynthEditor::resized()
     const int engLabelW = 50;
     engineModelLabel.setBounds(strip.removeFromLeft(engLabelW));
     strip.removeFromLeft(4);
-    engineModelBox.setBounds(strip.removeFromLeft(145));
+    engineModelBox.setBounds(strip.removeFromLeft(135));
 
     strip.removeFromLeft(8);
     const int matLabelW = 44;
     stringMaterialLabel.setBounds(strip.removeFromLeft(matLabelW));
     strip.removeFromLeft(4);
-    stringMaterialBox.setBounds(strip.removeFromLeft(125));
+    stringMaterialBox.setBounds(strip.removeFromLeft(115));
 
     strip.removeFromLeft(8);
     const int labelW = 44;
     bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
     strip.removeFromLeft(4);
-    bodyModelBox.setBounds(strip.removeFromLeft(135));
+    bodyModelBox.setBounds(strip.removeFromLeft(130));
 
     strip.removeFromLeft(8);
-    palmMuteToggle.setBounds(strip.removeFromLeft(120));
+    palmMuteToggle.setBounds(strip.removeFromLeft(115));
     palmBadgeArea = strip.removeFromLeft(46).reduced(0, 2);
 
     strip.removeFromLeft(6);
-    fullMuteToggle.setBounds(strip.removeFromLeft(120));
+    fullMuteToggle.setBounds(strip.removeFromLeft(115));
     fullBadgeArea = strip.removeFromLeft(48).reduced(0, 2);
 
     strip.removeFromLeft(6);
-    strumToggle.setBounds(strip.removeFromLeft(125));
+    strumToggle.setBounds(strip.removeFromLeft(118));
     strumBadgeArea = strip.removeFromLeft(56).reduced(0, 2);
 
     // Rotary Knobs Section

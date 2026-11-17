@@ -118,6 +118,12 @@ HybridSynthProcessor::createParameterLayout()
         "Strum 8th",
         false));
 
+    // Legato: overlapping notes on one string play as hammer-ons / pull-offs (40 ms chord window)
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "legato", 1 },
+        "Legato (HO/PO)",
+        true));
+
     return { params.begin(), params.end() };
 }
 
@@ -170,34 +176,58 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramPalmMute   = apvts.getRawParameterValue("palmMute")->load() > 0.5f;
     synth.paramFullMute   = apvts.getRawParameterValue("fullMute")->load() > 0.5f;
     synth.paramStrum      = apvts.getRawParameterValue("strumPattern")->load() > 0.5f;
+    synth.paramLegatoEnabled = apvts.getRawParameterValue("legato")->load() > 0.5f;
 
-    // Process MIDI events
-    for (const auto meta : midiMessages)
-    {
-        const auto msg = meta.getMessage();
-        if (msg.isNoteOn())
-        {
-            if (msg.getFloatVelocity() > 0.0001f)
-                synth.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
-            else
-                synth.noteOff(msg.getNoteNumber());
-        }
-        else if (msg.isNoteOff())
-        {
-            synth.noteOff(msg.getNoteNumber());
-        }
-        else if (msg.isAllNotesOff() || msg.isResetAllControllers())
-        {
-            synth.reset();
-        }
-    }
-
-    // Render audio
     if (buffer.getNumChannels() == 0) return;
 
     auto* outputL = buffer.getWritePointer(0);
     auto* outputR = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : outputL;
-    synth.process(outputL, outputR, buffer.getNumSamples());
+    const int numSamples = buffer.getNumSamples();
+
+    // Sample-accurate MIDI: collect timestamped events and let SynthEngine apply each one at its
+    // exact sample. If a block carries more events than the fixed queue holds, render up to the
+    // overflowing event's position and continue with an empty queue (no allocation either way).
+    int segmentStart = 0;
+    int numEvents = 0;
+
+    for (const auto meta : midiMessages)
+    {
+        const auto msg = meta.getMessage();
+        SynthEngine::Event e;
+        if (msg.isNoteOn())
+        {
+            e.type     = SynthEngine::Event::Type::NoteOn;   // velocity 0 is treated as note-off by the engine
+            e.note     = msg.getNoteNumber();
+            e.velocity = msg.getFloatVelocity();
+        }
+        else if (msg.isNoteOff())
+        {
+            e.type = SynthEngine::Event::Type::NoteOff;
+            e.note = msg.getNoteNumber();
+        }
+        else if (msg.isAllNotesOff() || msg.isAllSoundOff() || msg.isResetAllControllers())
+        {
+            e.type = SynthEngine::Event::Type::AllNotesOff;
+        }
+        else
+        {
+            continue;
+        }
+
+        const int pos = std::clamp(meta.samplePosition, segmentStart, numSamples);
+        if (numEvents == kMaxEventsPerSegment)
+        {
+            synth.process(outputL + segmentStart, outputR + segmentStart, pos - segmentStart,
+                          eventQueue.data(), numEvents);
+            segmentStart = pos;
+            numEvents = 0;
+        }
+        e.sampleOffset = pos - segmentStart;
+        eventQueue[static_cast<size_t>(numEvents++)] = e;
+    }
+
+    synth.process(outputL + segmentStart, outputR + segmentStart, numSamples - segmentStart,
+                  eventQueue.data(), numEvents);
 }
 
 // ---------------------------------------------------------------------------

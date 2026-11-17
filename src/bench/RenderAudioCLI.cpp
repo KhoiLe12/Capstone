@@ -287,24 +287,39 @@ int main(int argc, char* argv[])
     std::vector<float> blockL(blockSize, 0.0f);
     std::vector<float> blockR(blockSize, 0.0f);
 
+    std::stable_sort(scheduledEvents.begin(), scheduledEvents.end(),
+                     [](const ScheduledEvent& a, const ScheduledEvent& b) {
+                         return a.sampleOffset < b.sampleOffset;
+                     });
+
+    // Sample-accurate event delivery: each block receives the events that fall inside it,
+    // timestamped relative to the block start (same path as the plugin's processBlock).
+    std::vector<SynthEngine::Event> blockEvents;
+    blockEvents.reserve(scheduledEvents.size());
+    size_t nextEvent = 0;
+
     int samplesRendered = 0;
     while (samplesRendered < totalSamples)
     {
-        // Trigger any events (noteOn / noteOff) scheduled up to the current sample
-        for (auto& ev : scheduledEvents)
+        const int numToProcess = std::min(blockSize, totalSamples - samplesRendered);
+
+        blockEvents.clear();
+        while (nextEvent < scheduledEvents.size()
+               && scheduledEvents[nextEvent].sampleOffset < samplesRendered + numToProcess)
         {
-            if (!ev.triggered && samplesRendered >= ev.sampleOffset)
-            {
-                if (ev.isNoteOff)
-                    engine.noteOff(ev.note);
-                else
-                    engine.noteOn(ev.note, ev.vel, ev.brightness, ev.pickPos);
-                ev.triggered = true;
-            }
+            const auto& ev = scheduledEvents[nextEvent++];
+            SynthEngine::Event e;
+            e.sampleOffset = std::max(0, ev.sampleOffset - samplesRendered);
+            e.type         = ev.isNoteOff ? SynthEngine::Event::Type::NoteOff : SynthEngine::Event::Type::NoteOn;
+            e.note         = ev.note;
+            e.velocity     = ev.vel;
+            e.brightness   = ev.brightness;
+            e.pickPos      = ev.pickPos;
+            blockEvents.push_back(e);
         }
 
-        const int numToProcess = std::min(blockSize, totalSamples - samplesRendered);
-        engine.process(blockL.data(), blockR.data(), numToProcess);
+        engine.process(blockL.data(), blockR.data(), numToProcess,
+                       blockEvents.data(), static_cast<int>(blockEvents.size()));
 
         for (int s = 0; s < numToProcess; ++s)
         {

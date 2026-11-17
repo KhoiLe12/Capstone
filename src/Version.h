@@ -1,3 +1,3 @@
 #pragma once
 
-#define HYBRID_SYNTH_VERSION_STRING "Version 63.f"
+#define HYBRID_SYNTH_VERSION_STRING "Version 64.f"

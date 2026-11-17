@@ -52,12 +52,13 @@ The repository includes a native C++ benchmark harness [`src/bench/BenchSynth.cp
 build/bench_synth.exe
 ```
 
-Quick allocation-only check (seconds): `./build/bench_synth --events-only`.
+Quick check (seconds): `./build/bench_synth --events-only` runs the event-stress RTCheck and the sample-accurate MIDI timing check.
 
 ### Validation Metrics & Requirements
 1. **`[RTCheck Result]`**: Must report **`PASS (0)`** (zero heap allocations intercepted on simulated audio threads across all voice and block sweeps).
    - **Event stress (v62.f)**: the timing sweeps trigger their notes *before* the guarded region, so they only cover steady-state rendering. The event stress test runs every event path *inside* the guarded region: note-ons on every string (including Drop-D D2), legato pull-offs that grow the FDTD grid, hammer-ons, palm/choke/strum keyswitches, engine/material/body-model switches, and an All-Notes-Off `reset()`. It runs at 44.1, 48, 88.2, 96 and 192 kHz with 32- and 512-sample blocks. On v61.f code it reported ~2,500 heap operations per run (body switches, plus FDTD grids beyond 512 points at ≥ 88.2 kHz).
-2. **Single-Instance Latency Sweep**:
+2. **`[Timing Result]`** (v64.f): must report **PASS**. For both engines, a note-on at sample $k \in \{1, 37, 200, 511\}$ of a 512-sample block must match a note-on at sample 0 of a block starting $k$ samples later (relative difference $< 10^{-4}$), with output before $k$ below −120 dB re. peak. That residual is FFT-convolution round-off, ~−150 dB.
+3. **Single-Instance Latency Sweep**:
    - Tests 1, 4, and 6 active voices across block sizes 32, 64, 128, 256, and 512 samples at $48\text{ kHz}$.
    - Bilbao FDTD 6-voice peak load must remain $\le 30\%$ of the audio deadline.
 3. **DAW Multi-Track Capacity Test**:

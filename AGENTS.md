@@ -111,7 +111,14 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v63.f**
+### Current Version Status: **v64.f**
+- **v64.f**:
+  - Sample-accurate MIDI: events are applied at their exact sample via `SynthEngine::process(..., events, numEvents)`. Before, everything was applied at block start.
+  - All Notes Off now stops strings without hard-resetting the body.
+  - Legato needs a 40 ms chord window (was ~3.5 ms; live rolled chords lost notes) and is now a `legato` parameter with a GUI toggle.
+  - `bench_synth` timing check added. See wiki 01 and wiki 07.
+
+**v63.f:**
 - **v63.f**:
   - GuitarSet benchmark rebuilt: automatic clean-note selection, annotation-driven re-synthesis, alignment + RMS normalisation, and real-take / naive-tone reference points.
   - FDTD beats the waveguide on log-L1 in 16/16 tests. The metric does not measure realism (a second real take scores no better), so do not claim realism from it. The v61.f "18–33.6%" figure is withdrawn.

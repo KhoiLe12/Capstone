@@ -36,6 +36,14 @@ flowchart TD
 
 ---
 
+### Sample-Accurate MIDI (v64.f)
+`HybridSynthProcessor::processBlock` converts the host `MidiBuffer` into timestamped `SynthEngine::Event`s (NoteOn / NoteOff / AllNotesOff) in a fixed 512-entry queue, and calls `SynthEngine::process(L, R, n, events, numEvents)`. The engine applies each event at its exact sample inside the per-sample voice loop. The body convolution runs after that loop on the whole block; it is linear, so it needs no splitting.
+- If a block carries more than 512 events, the processor renders up to the overflowing event's position and continues with an empty queue, so it never allocates.
+- `render_audio` delivers its scheduled events the same way.
+- Before v64.f every event was applied at sample 0 of its block: up to 10.7 ms of timing error at 512 samples / 48 kHz. Fast passages inside one block also collapsed to the same onset, which defeated the legato onset-age guard.
+- **All Notes Off / All Sound Off / Reset All Controllers** call `SynthEngine::allNotesOff()` at their timestamp. It stops all strings and clears held notes, keyswitches and pending strum plucks, but lets the body, reflection and DC-filter tails decay. Before v64.f these triggered a full `reset()` at the start of the block.
+- `bench_synth` verifies timing: a note at offset *k* of a 512-sample block must match the same note at the start of a block *k* samples later (measured rel. difference ~3×10⁻⁷).
+
 ## 2. Physical 6-String Layout & Voice Allocation
 
 Unlike standard electronic synthesizers with generic round-robin voice stealing, this synthesizer models a **real physical 6-string guitar**:
@@ -52,9 +60,9 @@ Unlike standard electronic synthesizers with generic round-robin voice stealing,
 - **Decaying String Re-Trigger Protection (v45.f)**: If an incoming chord note targets a physical string currently decaying in release, the allocator prioritizes truly idle strings to prevent audible voice-clobbering pops.
 
 ### Monophonic Lead Legato Routing Engine (v57.f–v58.f)
-When `paramLegatoEnabled` is true, incoming notes in DAW piano rolls are evaluated for acoustic hammer-ons and pull-offs before string allocation:
+When the **Legato (HO/PO)** parameter (`legato`, default on, exposed in the GUI title bar and to the DAW since v64.f) is enabled, incoming notes in DAW piano rolls are evaluated for acoustic hammer-ons and pull-offs before string allocation:
 1. **Monophonic State Verification**: Exactly 1 note must be currently held (`numCurrentlyHeld == 1`). If 2 or more notes are held, polyphonic chord behavior is preserved.
-2. **Onset Age Guard**: The held note must have been sounding for $\ge 160$ samples ($\sim 4\text{ ms}$) to prevent near-simultaneous chord voicings from collapsing.
+2. **Chord Window (v64.f)**: The held note must have started at least **40 ms** earlier (`SynthEngine::kLegatoChordWindowSec`, converted to samples at the current rate). Rolled or humanised keyboard chords spread their notes over ~10–40 ms and must stay chords; a legato note 40 ms after the previous one is already 25 notes/s. Onsets are sample-accurate, so the window is the same at every host buffer size. Before v64.f the window was 160 samples (~3.5 ms): the second note of a live chord within 3 semitones (e.g. E3 then G3, 8 ms apart) was turned into a hammer-on, and the chord lost a note.
 3. **Physical Fretting Reach**: Legato triggers if the new note is on the same natural string ($\text{interval} \le 12$) OR within an adjacent cross-boundary melodic reach ($0 \le \text{fret} \le 19$, $\text{interval} \le 3$).
 4. **Seamless Handover**: The active voice updates its fundamental pitch without pick transient click, and transfers `heldNotes` tracking so subsequent Note-Offs release cleanly.
 

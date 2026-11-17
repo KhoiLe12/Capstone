@@ -19,6 +19,7 @@ void SynthEngine::init(float sr, int blockSize)
     body.init(sr, blockSize, paramBodySize, 1.0f);
     sympathetic.init(sr);
     polyScaleFilterCoeff = std::exp(-1.0f / (0.015f * sampleRate));
+    legatoMinOnsetSamples = static_cast<int>(kLegatoChordWindowSec * sampleRate);
     smoothedPolyScale = 1.0f;
     reset();
 }
@@ -152,9 +153,9 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
         // Legato is strictly valid ONLY for monophonic lead transitions where exactly 1 note is held:
         if (numCurrentlyHeld == 1 && heldVoiceIdx >= 0)
         {
-            // The held note must have been sounding for at least ~4ms (160 samples at 44.1k/48k)
-            // to distinguish an intentional legato transition from a simultaneous chord / polyphonic voicing:
-            if (voices[heldVoiceIdx].getSamplesSinceNoteOn() >= 160)
+            // The held note must have started at least kLegatoChordWindowSec (40 ms) earlier, so the
+            // notes of a rolled / humanised chord (typically 10-40 ms apart) stay a chord:
+            if (voices[heldVoiceIdx].getSamplesSinceNoteOn() >= legatoMinOnsetSamples)
             {
                 const int interval = std::abs(midiNote - heldMidiNote);
                 if (interval >= 1 && interval <= 12)
@@ -422,8 +423,37 @@ void SynthEngine::schedulePluck(int stringIdx, int midiNote, float velocity, flo
 // Pure Acoustic String & Modalys Soundboard Processing
 // ---------------------------------------------------------------------------
 
-void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexcept
+void SynthEngine::dispatch(const Event& e)
 {
+    switch (e.type)
+    {
+        case Event::Type::NoteOn:      noteOn(e.note, e.velocity, e.brightness, e.pickPos); break;
+        case Event::Type::NoteOff:     noteOff(e.note);            break;
+        case Event::Type::AllNotesOff: allNotesOff();              break;
+    }
+}
+
+void SynthEngine::allNotesOff() noexcept
+{
+    for (auto& v : voices)
+        v.reset();
+    sympathetic.reset();
+    keyswitchPalmMuteActive = false;
+    keyswitchFullMuteActive = false;
+    keyswitchStrumActive    = false;
+    strumSampleCounter      = 0;
+    nextStrumIsDown         = true;
+    std::fill(std::begin(heldNotes), std::end(heldNotes), 0.f);
+    for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
+        pendingPlucks[p].active = false;
+    prevMuteMode = getEffectiveMuteMode();
+}
+
+void SynthEngine::process(float* outputL, float* outputR, int numSamples,
+                          const Event* events, int numEvents) noexcept
+{
+    int nextEvent = 0;
+
     // Update body parameters (size, damping, coupling, bodyType)
     const int bodyType = static_cast<int>(std::round(paramBodyType));
     body.setParameters(paramBodySize, 1.0f, paramBodyMix, bodyType);
@@ -456,6 +486,10 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
     // 1. Advance all active string voices and sum bridge force into output buffers.
     for (int i = 0; i < numSamples; ++i)
     {
+        // Sample-accurate MIDI: apply every event scheduled at (or, if mis-sorted, before) sample i
+        while (nextEvent < numEvents && events[nextEvent].sampleOffset <= i)
+            dispatch(events[nextEvent++]);
+
         // Advance 8th-note strum interval timer
         if (keyswitchStrumActive || paramStrum)
         {
@@ -574,6 +608,10 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
         outputL[i] = driveL;
         outputR[i] = driveR;
     }
+
+    // Events with offsets past the end of the block (out-of-range timestamps) still take effect
+    while (nextEvent < numEvents)
+        dispatch(events[nextEvent++]);
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
     body.processBlock(outputL, outputR, numSamples);

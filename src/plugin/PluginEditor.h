@@ -52,6 +52,10 @@ private:
     bool isFullVisuallyActive = false;
     juce::Rectangle<int> fullBadgeArea;
 
+    // Legato (hammer-on / pull-off) toggle
+    juce::ToggleButton legatoToggle;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> legatoAttach;
+
     // Strum 8th Articulation Toggle & Visual Status
     juce::ToggleButton strumToggle;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> strumAttach;

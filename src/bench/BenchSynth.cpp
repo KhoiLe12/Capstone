@@ -338,10 +338,10 @@ static size_t runEventStressScenario(float sampleRate, int blockSize)
                 run(step * 4);
 
                 // Legato: start fretted (small grid), pull off to open / Drop-D (grid grows), hammer back
-                engine.noteOn(43, 0.8f);  run(step * 2);
-                engine.noteOn(40, 0.8f);  run(step * 2);   // pull-off G2 -> E2
-                engine.noteOn(38, 0.8f);  run(step * 2);   // pull-off E2 -> D2
-                engine.noteOn(45, 0.8f);  run(step * 2);   // hammer-on D2 -> A2
+                engine.noteOn(43, 0.8f);  run(step * 5);   // > 40 ms legato chord window
+                engine.noteOn(40, 0.8f);  run(step * 5);   // pull-off G2 -> E2
+                engine.noteOn(38, 0.8f);  run(step * 5);   // pull-off E2 -> D2
+                engine.noteOn(45, 0.8f);  run(step * 5);   // hammer-on D2 -> A2
                 engine.noteOff(45);       run(step * 4);
 
                 // Keyswitches: palm mute, choke / dead notes, auto-strum
@@ -367,6 +367,111 @@ static size_t runEventStressScenario(float sampleRate, int blockSize)
     g_realtimeThreadActive = false;
 
     return g_realtimeAllocCount.load() + g_realtimeFreeCount.load();
+}
+
+// ---------------------------------------------------------------------------
+// Sample-accurate MIDI timing check: a note-on at offset k inside a 512-sample block must
+// produce the same audio as a note-on at offset 0 of a block that starts k samples later.
+// Returns the worst-case normalised difference; also fails if anything sounds before k.
+// ---------------------------------------------------------------------------
+static bool runTimingAccuracyCheck(float sampleRate)
+{
+    constexpr int block = 512;
+    constexpr int total = block * 6;
+    bool ok = true;
+
+    for (float engineType : { 0.0f, 1.0f })
+    {
+        for (int k : { 1, 37, 200, 511 })
+        {
+            auto render = [&](bool splitAtK) {
+                SynthEngine eng;
+                eng.init(sampleRate, block);
+                eng.paramEngineType = engineType;
+                std::vector<float> L(total, 0.0f), R(total, 0.0f);
+                SynthEngine::Event on;
+                on.type = SynthEngine::Event::Type::NoteOn;
+                on.note = 52;
+                on.velocity = 0.8f;
+
+                int pos = 0;
+                if (splitAtK)
+                {
+                    eng.process(L.data(), R.data(), k);          // silence up to k
+                    pos = k;
+                    on.sampleOffset = 0;
+                }
+                else
+                {
+                    on.sampleOffset = k;
+                }
+                eng.process(L.data() + pos, R.data() + pos, block, &on, 1);
+                pos += block;
+                while (pos < total)
+                {
+                    const int n = std::min(block, total - pos);
+                    eng.process(L.data() + pos, R.data() + pos, n);
+                    pos += n;
+                }
+                return L;
+            };
+
+            const auto a = render(false);
+            const auto b = render(true);
+            float peak = 0.0f, maxDiff = 0.0f, preOnset = 0.0f;
+            for (int i = 0; i < total; ++i)
+            {
+                peak = std::max(peak, std::abs(b[static_cast<size_t>(i)]));
+                maxDiff = std::max(maxDiff, std::abs(a[static_cast<size_t>(i)] - b[static_cast<size_t>(i)]));
+                if (i < k) preOnset = std::max(preOnset, std::abs(a[static_cast<size_t>(i)]));
+            }
+            const float relDiff = maxDiff / std::max(peak, 1e-9f);
+            // Pre-onset output must be silent to within FFT-convolution round-off (< -120 dB re. peak)
+            const bool pass = (relDiff < 1e-4f) && (preOnset < 1e-6f * peak) && (peak > 0.0f);
+            std::cout << "  " << (engineType > 0.5f ? "Bilbao FDTD   " : "Waveguide (KS)") << "  note-on at sample "
+                      << std::setw(3) << k << " of 512 : rel. diff " << std::scientific << std::setprecision(2) << relDiff
+                      << "  pre-onset " << std::scientific << preOnset / std::max(peak, 1e-9f) << std::defaultfloat << std::setprecision(6) << (pass ? "  PASS" : "  FAIL") << "\n";
+            ok = ok && pass;
+        }
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Chord vs legato regression: a rolled chord (notes 8 ms apart, within 3 semitones) must keep
+// every note; a hammer-on 100 ms after the held note must retune the held string (one voice).
+// ---------------------------------------------------------------------------
+static bool runChordVsLegatoCheck(float sampleRate)
+{
+    auto voicesAfter = [&](const std::vector<std::pair<float, int>>& notes, bool legatoOn) {
+        SynthEngine eng;
+        eng.init(sampleRate, 512);
+        eng.paramEngineType = 1.0f;
+        eng.paramLegatoEnabled = legatoOn;
+        std::vector<SynthEngine::Event> evs;
+        for (const auto& [t, note] : notes)
+        {
+            SynthEngine::Event e;
+            e.sampleOffset = static_cast<int>(t * sampleRate);
+            e.type = SynthEngine::Event::Type::NoteOn;
+            e.note = note;
+            e.velocity = 0.8f;
+            evs.push_back(e);
+        }
+        const int total = static_cast<int>(0.25f * sampleRate);
+        std::vector<float> L(static_cast<size_t>(total)), R(static_cast<size_t>(total));
+        eng.process(L.data(), R.data(), total, evs.data(), static_cast<int>(evs.size()));
+        return eng.getNumActiveVoices();
+    };
+
+    const int rolled  = voicesAfter({ { 0.000f, 52 }, { 0.008f, 55 }, { 0.016f, 48 } }, true);
+    const int hammer  = voicesAfter({ { 0.000f, 52 }, { 0.100f, 54 } }, true);
+    const int noLeg   = voicesAfter({ { 0.000f, 52 }, { 0.100f, 54 } }, false);
+    const bool ok = (rolled == 3) && (hammer == 1) && (noLeg == 2);
+    std::cout << "  Rolled chord E3-G3-C3 (8 ms apart)  : " << rolled << " voices (expect 3)\n"
+              << "  Hammer-on E3->F#3 after 100 ms     : " << hammer << " voice  (expect 1)\n"
+              << "  Same with legato disabled          : " << noLeg  << " voices (expect 2)\n";
+    return ok;
 }
 
 static void printHeader(float sampleRate)
@@ -684,10 +789,19 @@ int main(int argc, char* argv[])
     }
     std::cout << "---------------------------------------------------------------------------------------------------------\n";
 
+    std::cout << "\n SAMPLE-ACCURATE MIDI TIMING (48 kHz)\n"
+              << "---------------------------------------------------------------------------------------------------------\n";
+    bool timingOk = runTimingAccuracyCheck(48000.0f);
+    std::cout << "---------------------------------------------------------------------------------------------------------\n"
+              << " CHORD vs LEGATO DETECTION (48 kHz)\n";
+    timingOk = runChordVsLegatoCheck(48000.0f) && timingOk;
+    std::cout << "---------------------------------------------------------------------------------------------------------\n";
+
     if (eventsOnly)
     {
+        std::cout << " [Timing Result]   : " << (timingOk ? "PASS" : "FAILED") << "\n";
         std::cout << " [RTCheck Result]  : " << (allRtPassed ? "PASS (0)" : "FAILED") << " (event stress only)\n";
-        return allRtPassed ? 0 : 1;
+        return (allRtPassed && timingOk) ? 0 : 1;
     }
 
     // -----------------------------------------------------------------------
@@ -749,5 +863,6 @@ int main(int argc, char* argv[])
               << " [Max CPU Load FDTD]: " << maxFdtdLoad << " % of audio deadline (single voice/chord sweep)\n"
               << "=========================================================================================================\n\n";
 
-    return allRtPassed ? 0 : 1;
+    std::cout << " [Timing Result]   : " << (timingOk ? "PASS: MIDI events applied at their exact sample" : "FAILED") << "\n";
+    return (allRtPassed && timingOk) ? 0 : 1;
 }

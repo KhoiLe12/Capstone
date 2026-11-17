@@ -42,8 +42,11 @@ The synthesizer features 4 distinct physical playing articulations, modeled via 
 - **Cross-Boundary Fretting Reach (v58.f)**:
   - In standard guitar string allocation, adjacent scale notes often span default string boundaries (e.g. $C_4 \to D_4$, $F \to G$, $A \to B$).
   - When exactly 1 note is actively held on physical string $s$, the engine allows cross-boundary notes to hammer on or pull off on string $s$ if physically reachable ($0 \le \text{fret} \le 19$) within a melodic fretting span ($\text{interval} \le 3$ semitones).
-- **Simultaneous Chord Protection via Voice Onset Age (v58.f)**:
-  - Legato transitions require the held note to have been sounding for at least $\sim 4\text{ ms}$ (`samplesSinceNoteOn >= 160` at 44.1k/48k).
+- **Chord Protection via a 40 ms Chord Window (v58.f, revised v64.f)**:
+  - Legato transitions require the held note to have started at least **40 ms** earlier (`kLegatoChordWindowSec`). Notes closer together than that, such as a rolled chord played live on a keyboard, always play as a chord. Each hammer-on restarts the window, so legato runs faster than 25 notes/s are re-picked.
+  - Note onsets are sample-accurate (v64.f), so the window is independent of host buffer size.
+  - v58.f–v63.f used a 160-sample (~3.5 ms) window. That was too short for live playing: in a chord rolled 8 ms apart (E3, G3, C3), G3 hammered onto E3's string and E3 disappeared (−85 dB). `bench_synth` now checks this case.
+- **Legato toggle (v64.f)**: the `legato` parameter ("Legato (HO/PO)", default on) switches hammer-on / pull-off detection off entirely, for rhythm parts with slow arpeggiated chords.
   - Simultaneous chord voicings drawn at the same piano roll tick have 0 ms onset difference, guaranteeing chord notes are never stolen or collapsed into legato runs.
 - **Acoustic Mechanics & Synthesis**:
   - **Zero Plectrum Snap**: Direct airborne pick attack, flexural tortex eigenmodes, and wound wire rasp chirps are completely bypassed.

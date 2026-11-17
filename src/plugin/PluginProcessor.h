@@ -82,6 +82,10 @@ private:
     SynthEngine synth;
     int currentProgram = 0;
 
+    // Fixed-capacity timestamped MIDI event queue for sample-accurate processing (no allocation)
+    static constexpr int kMaxEventsPerSegment = 512;
+    std::array<SynthEngine::Event, kMaxEventsPerSegment> eventQueue {};
+
     /** Build the parameter layout used to construct the APVTS. */
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

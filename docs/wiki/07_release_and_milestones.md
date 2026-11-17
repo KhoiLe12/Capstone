@@ -6,6 +6,20 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v64.f
+- **Sample-accurate MIDI**:
+  - `SynthEngine::process()` takes timestamped events and applies each at its exact sample. `PluginProcessor` fills a fixed 512-entry event queue from the `MidiBuffer`, splitting the block if it overflows, so it never allocates.
+  - Before this, every event was applied at sample 0 of its block: up to 10.7 ms of jitter at 512 samples / 48 kHz, and fast legato pairs inside one block were misread as chords.
+  - `render_audio` uses the same path. It previously snapped events to 128-sample blocks; the GuitarSet phrase scores improved slightly as a result (FDTD log-L1 0.594 → 0.592).
+- **All Notes Off**: All Notes Off, All Sound Off (newly handled) and Reset All Controllers now call `SynthEngine::allNotesOff()` at their timestamp. It stops strings and clears held notes, keyswitches and pending strums without hard-resetting the body, reflection and DC-filter state.
+- **`bench_synth` timing check**: a note-on at offset k must match a block-aligned note-on k samples later, for both engines (rel. diff ~3×10⁻⁷). It is part of `--events-only` and of the exit code.
+- **Chord vs legato fix**:
+  - The legato onset guard was 160 samples (~3.5 ms), so live rolled chords lost notes: E3, G3, C3 played 8 ms apart dropped E3 to −85 dB. Previously this showed up at small buffer sizes only; sample-accurate timing made it consistent at every size.
+  - The guard is now a time-based 40 ms chord window, and legato is a real parameter: `legato`, "Legato (HO/PO)", default on, toggle in the GUI title bar.
+  - `bench_synth` regression: a rolled chord keeps 3 voices, a 100 ms hammer-on retunes to 1 voice, and with legato disabled it plays 2 voices.
+- **GUI**: shortened the title so the Legato toggle fits in the title bar. The articulation strip's fixed widths added up to 1106 px of 1064 px available, clipping the strum badge; they now fit.
+- **Quality Gates**: RTCheck PASS (0) on all sweeps and the event stress test; Timing PASS; FDTD peak 26.2% at 32-sample blocks.
+
 ### v63.f
 - **GuitarSet benchmark rebuilt** ([`benchmarks/guitarset_eval.py`](../../benchmarks/guitarset_eval.py); method and interpretation in wiki 06 §5):
   - Isolated notes are now chosen automatically: 12 pitches with clean notes in two takes. The v61.f "Bb3 pluck" was a G#3 bend, and its chord test strummed and sustained a chord the player had muted.

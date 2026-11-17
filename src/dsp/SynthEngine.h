@@ -17,6 +17,18 @@ class SynthEngine
 public:
     static constexpr int NUM_VOICES = 6; ///< 6 physical guitar strings (0 = E2, 1 = A2, 2 = D3, 3 = G3, 4 = B3, 5 = E4)
 
+    /** A timestamped performance event, applied at sampleOffset within a process() call. */
+    struct Event
+    {
+        enum class Type { NoteOn, NoteOff, AllNotesOff };
+        int   sampleOffset = 0;   ///< Position within the processed block (0 .. numSamples-1)
+        Type  type         = Type::NoteOn;
+        int   note         = 0;
+        float velocity     = 0.0f;
+        float brightness   = -1.0f; ///< NoteOn override (< 0 = use paramBrightness)
+        float pickPos      = -1.0f; ///< NoteOn override (< 0 = use paramPickPos)
+    };
+
     SynthEngine() = default;
 
     /** Initialise all voices and body resonance for the given sample rate. */
@@ -33,7 +45,23 @@ public:
      * Fill outputL and outputR with numSamples of synthesised audio.
      * Output is mono-summed to both channels with stereo spatial spreading.
      */
-    void process(float* outputL, float* outputR, int numSamples) noexcept;
+    void process(float* outputL, float* outputR, int numSamples) noexcept
+    {
+        process(outputL, outputR, numSamples, nullptr, 0);
+    }
+
+    /**
+     * Render numSamples, applying each event at its exact sample offset (sample-accurate MIDI).
+     * Events must be sorted by sampleOffset; offsets outside [0, numSamples) are clamped.
+     */
+    void process(float* outputL, float* outputR, int numSamples, const Event* events, int numEvents) noexcept;
+
+    /**
+     * Stop all strings immediately and clear held notes, keyswitches and pending strum plucks
+     * (MIDI All Notes Off / Reset All Controllers). Body, reflection and DC filter states are left
+     * running so their tails decay naturally. Audio-thread safe.
+     */
+    void allNotesOff() noexcept;
 
     /** Hard-reset all voices and body resonance. */
     void reset();
@@ -44,6 +72,22 @@ public:
     // Physical Parameters & Articulations — set by PluginProcessor
     // -------------------------------------------------------------------
     bool paramLegatoEnabled = true; ///< Enable acoustic hammer-on / pull-off legato on same-string intervals
+
+    /**
+     * Chord window: a new note only becomes a hammer-on / pull-off if the single held note started
+     * at least this long before it. Rolled keyboard chords spread their notes over ~10-40 ms; a
+     * legato note 40 ms after the previous one is already 25 notes/s, faster than any real run.
+     */
+    static constexpr float kLegatoChordWindowSec = 0.040f;
+
+    /** Number of string voices currently sounding (for tests and UI). */
+    int getNumActiveVoices() const noexcept
+    {
+        int n = 0;
+        for (const auto& v : voices)
+            if (v.isActive()) ++n;
+        return n;
+    }
     static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24 / FL: C2) Hold Keyswitch
     static constexpr int KEYSWITCH_FULL_MUTE = 26; ///< D1 (MIDI Note 26 / FL: D2) Hold/Choke Keyswitch
     static constexpr int KEYSWITCH_STRUM_8TH = 28; ///< E1 (MIDI Note 28 / FL: E2) 8th-Note Strum Keyswitch
@@ -109,6 +153,7 @@ private:
     SympatheticResonance sympathetic;
     float         sampleRate = 44100.f;
     float         currentBpm = 120.0f;
+    int           legatoMinOnsetSamples = 1920; ///< kLegatoChordWindowSec at the current sample rate
 
     bool          keyswitchPalmMuteActive = false;
     bool          keyswitchFullMuteActive = false;
@@ -139,6 +184,7 @@ private:
     void schedulePluck(int stringIdx, int midiNote, float velocity, float brightness, int delaySamples) noexcept;
 
     void syncVoiceMuteModes() noexcept;
+    void dispatch(const Event& e);
 
     int assignStringForNote(int midiNote) const noexcept;
     int findFreeVoice() const noexcept;
