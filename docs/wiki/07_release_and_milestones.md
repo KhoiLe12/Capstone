@@ -6,6 +6,20 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v65.f
+- **FDTD sustain across the neck**:
+  - *Damping shape*: $\sigma_0$ is now frequency-independent (standard Bilbao model), replacing the $(f/82.4)^{0.65/0.80}$ register multiplier. Calibrated on 87 GuitarSet notes with the new `benchmarks/decay_calibration.py`: the fitted pitch exponent of fundamental decay went from 0.84 to 0.34; the real data gives 0.21, 90% CI [−0.14, 0.36]. Anchored at E2, so bass sustain per Decay setting is unchanged.
+  - *Ring-out detection*: the fixed $\sum u^2$ threshold, checked every sample, cut high notes while loud (D6 nylon at −15 dB after 0.39 s; E4 at −38 dB). $\sum u^2$ dips towards zero twice per cycle. It is replaced by total (kinetic + potential) energy, −80 dB re. the note's own peak, checked every 32 samples. All notes now ring to −76 to −84 dB; D6 nylon rings 3.9 s.
+- **Chord string assignment**:
+  - High piano-roll chords dropped notes: C5–E5–G5–B5–D6 played only 2 of 5. This predates v65.f (identical on v61.f) and became obvious once high notes rang.
+  - Simultaneous notes now get a joint best-fit assignment over a 22-fret neck (19 before). The auto-strum uses the same solver.
+  - New **Strict Fretboard** parameter (default off): off plays unplaceable notes on a free string past the fretboard, voiced with their natural string's gauge; on drops them.
+  - Within a sample, note-offs and keyswitches are applied before chord note-ons.
+  - `bench_synth` regressions: open C = 5 voices; the high chord = 5 voices (strict off) or 4 (strict on). The event stress test covers same-tick chords in both modes.
+- **Found**: both body IRs notch ~8–11 dB at ~981 Hz, so B5 is quiet through IR bodies (wiki 04). Not yet fixed.
+- **GuitarSet benchmark**: log-L1 improved slightly (isolated 0.607, phrases 0.587). The combined isolated score went 1.202 → 1.235, through spectral convergence (longer sustain at Decay 0.75). FDTD beats the waveguide on log-L1 in 15/16 tests and on combined in 12/16.
+- **Quality Gates**: RTCheck PASS (0), Timing PASS. FDTD 6-voice load at 32-sample blocks: 25.5% (was 26.2%; the energy check now runs every 32 samples).
+
 ### Documentation pass (after v64.f, no code change)
 - Corrected claims that did not match the code or measurements:
   - README version (was v55.f), parameter defaults (now preset 1), and CPU figures (now measured).

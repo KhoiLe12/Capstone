@@ -55,13 +55,16 @@ public:
      * @param muteMode       Articulation mode (Open, Palm, or Full mute dead notes)
      * @param stringIdx      Physical guitar string index (0..5)
      * @param stringMaterial String material (0 = Nylon Classical, 1 = Steel Acoustic)
+     * @param geometryString String whose gauge/material is used for the sound (-1 = stringIdx).
+     *                       Differs from stringIdx only for notes placed past the fretboard.
      */
     void noteOn(int midiNote, float velocity,
                 float brightness, float pickPosition, float decay,
                 float stiffness = 0.25f,
                 KarplusStrong::MuteMode muteMode = KarplusStrong::MuteMode::Open,
                 int stringIdx = -1,
-                int stringMaterial = 0);
+                int stringMaterial = 0,
+                int geometryString = -1);
 
     /**
      * Legato transition (Hammer-On or Pull-Off) without plectrum snap.
@@ -121,6 +124,7 @@ private:
     EngineType    engineType = EngineType::DigitalWaveguide;
     int           stringMaterial = 0; // 0 = Nylon Classical, 1 = Steel Acoustic
     int           physicalStringIndex = -1;
+    int           geometryStringIndex = -1; ///< String gauge used for the sound (see noteOn)
 
     int   midiNote   = -1;
     float velocity   = 1.f;
@@ -210,11 +214,41 @@ private:
      * note's open / palm damping and saddle brightness for later mute changes and legato.
      */
     FdtdString::StringParams makeFdtdParams(int note, int s, float stiffness, float decay, float brightness) noexcept;
+
+    /** Pitch exponent of the FDTD frequency-independent damping sigma0 ~ (f / 82.4 Hz)^p. */
+    static constexpr float kFdtdSteelRegisterExponent = 0.0f;
+    static constexpr float kFdtdNylonRegisterExponent = 0.0f;
     float fdtdOpenSigma0 = 1.0f;
     float fdtdOpenSigma1 = 4.5e-4f;
     float fdtdPalmSigma0 = 10.5f;
     float fdtdPalmSigma1 = 3.2e-3f;
     float fdtdBrightness = 0.60f;
+
+    /**
+     * FDTD ring-out detection. Uses the string's total (kinetic + tension-potential) energy, which
+     * is smooth over each vibration cycle, relative to the note's own peak, checked every 32 samples.
+     * Before v65.f a fixed threshold on displacement energy sum(u^2) was used: sum(u^2) dips towards
+     * zero twice per cycle (all energy kinetic), and short treble strings hold little displacement,
+     * so high notes were cut while loud (D6 nylon at -15 dB re. peak after 0.39 s; E4 at -38 dB).
+     */
+    static constexpr float kFdtdSilenceRatio = 1.0e-8f; ///< -80 dB re. the note's peak energy
+    static constexpr int   kFdtdSilenceCheckInterval = 32;
+    float fdtdPeakEnergy = 0.0f;
+    int   fdtdSilenceCheckCounter = 0;
+    bool fdtdIsSilent() noexcept
+    {
+        if (++fdtdSilenceCheckCounter < kFdtdSilenceCheckInterval)
+            return false;
+        fdtdSilenceCheckCounter = 0;
+        const float energy = fdtdString.computeDiscreteEnergy();
+        fdtdPeakEnergy = std::max(fdtdPeakEnergy, energy);
+        return energy <= fdtdPeakEnergy * kFdtdSilenceRatio;
+    }
+    void resetFdtdSilenceReference() noexcept
+    {
+        fdtdPeakEnergy = fdtdString.computeDiscreteEnergy();
+        fdtdSilenceCheckCounter = 0;
+    }
 
     static constexpr float kSilenceThreshold = 1e-9f;
 

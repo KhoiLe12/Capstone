@@ -27,7 +27,7 @@ void Voice::init(float sr)
 void Voice::noteOn(int note, float vel,
                    float brightness, float pickPosition, float decay,
                    float stiffness, KarplusStrong::MuteMode muteMode,
-                   int stringIdx, int mat)
+                   int stringIdx, int mat, int geometryString)
 {
     midiNote = note;
     velocity = vel;
@@ -57,6 +57,11 @@ void Voice::noteOn(int note, float vel,
     }
 
     physicalStringIndex = s;
+
+    // A note placed past the fretboard (non-strict chord voicing) occupies string slot s but
+    // sounds with the gauge of the string that would naturally play it.
+    geometryStringIndex = (geometryString >= 0 && geometryString <= 5) ? geometryString : s;
+    s = geometryStringIndex;
 
     const float clampedVel = std::clamp(velocity, 0.01f, 1.0f);
 
@@ -185,6 +190,7 @@ void Voice::noteOn(int note, float vel,
         const float peakDisp = (-0.0004f - 0.00125f * clampedVel) * effDispScale * lengthScale;
         const float clampedPickPos = std::clamp(pickPosition + pickJitter, 0.08f, 0.48f);
         fdtdString.pluckDisplacement(clampedPickPos, peakDisp, effBrightness, humanAngle);
+        resetFdtdSilenceReference();
 
         // ── Direct Airborne Plectrum Physical Radiation (v50.f) ───────────────
         // Physical model of:
@@ -362,9 +368,12 @@ FdtdString::StringParams Voice::makeFdtdParams(int note, int s, float stiffness,
     p.T0 = std::max(5.0f, rhoA * std::pow(2.0f * p.L * tunedFreq, 2.0f)
                           - (3.14159265f * 3.14159265f * EI) / (p.L * p.L));
 
-    // Register-dependent acoustic decay with fretboard positional damping (open nut rings longer)
+    // Register-dependent acoustic decay with fretboard positional damping (open nut rings longer).
+    // Exponents calibrated against GuitarSet fundamental decay rates (benchmarks/decay_calibration.py):
+    // real steel-string decay grows only weakly with pitch (~f^0.21). Anchored at E2, so the Decay
+    // knob's bass sustain is unchanged. Nylon keeps its previous +0.15 offset (no nylon reference data).
     const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
-    const float registerDecayScale = std::pow(fRatio, isSteel ? 0.65f : 0.80f);
+    const float registerDecayScale = std::pow(fRatio, isSteel ? kFdtdSteelRegisterExponent : kFdtdNylonRegisterExponent);
     const float nutVsFretScale = (fret == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(fret));
     fdtdOpenSigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - decay)) : (0.75f + 1.25f * (1.0f - decay)))
                      * registerDecayScale * nutVsFretScale;
@@ -407,7 +416,7 @@ void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, fl
     active = true;
 
     const float freq = midiToFreq(midiNote);
-    int s = physicalStringIndex;
+    int s = geometryStringIndex;
     if (s < 0 || s > 5)
     {
         if (newNote < 45)      s = 0;
@@ -439,6 +448,7 @@ void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, fl
             p.sigma1 = fdtdPalmSigma1;
         }
         fdtdString.legatoTransition(p, newVelocity, isHammerOn);
+        resetFdtdSilenceReference(); // new reference for the retuned string
     }
 }
 
@@ -671,9 +681,9 @@ float Voice::tick() noexcept
     }
     else
     {
-        const float currentEnergy = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
-        const float silenceThresh = (engineType == EngineType::BilbaoFdtd) ? 2e-4f : 1e-7f;
-        if (currentEnergy < silenceThresh && fadeSamplesLeft < 0)
+        const bool silent = (engineType == EngineType::BilbaoFdtd) ? fdtdIsSilent()
+                                                                   : (string.getEnergy() < 1e-7f);
+        if (silent && fadeSamplesLeft < 0)
         {
             // Natural ring-out also fades out cleanly instead of hard-cutting
             fadeSamplesLeft = 64;
@@ -778,7 +788,7 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         }
         else
         {
-            if (fdtdString.getEnergy() < 2e-4f && fadeSamplesLeft < 0)
+            if (fdtdIsSilent() && fadeSamplesLeft < 0)
                 fadeSamplesLeft = 64;
         }
 

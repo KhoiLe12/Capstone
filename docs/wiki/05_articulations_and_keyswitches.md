@@ -46,6 +46,7 @@ The synthesizer features 4 distinct physical playing articulations, modeled via 
   - Legato transitions require the held note to have started at least **40 ms** earlier (`kLegatoChordWindowSec`). Notes closer together than that, such as a rolled chord played live on a keyboard, always play as a chord. Each hammer-on restarts the window, so legato runs faster than 25 notes/s are re-picked.
   - Note onsets are sample-accurate (v64.f), so the window is independent of host buffer size.
   - v58.f–v63.f used a 160-sample (~3.5 ms) window. That was too short for live playing: in a chord rolled 8 ms apart (E3, G3, C3), G3 hammered onto E3's string and E3 disappeared (−85 dB). `bench_synth` now checks this case.
+- **Chords and the fretboard (v65.f)**: simultaneous notes are assigned to strings jointly over a 22-fret neck. **Strict Fretboard** decides what happens to notes no guitarist could finger at the same time: drop them (on) or play them on a free string past the fretboard (off, default). Details in wiki 01 §2.
 - **Legato toggle (v64.f)**: the `legato` parameter ("Legato (HO/PO)", default on) switches hammer-on / pull-off detection off entirely, for rhythm parts with slow arpeggiated chords.
   - Simultaneous chord voicings drawn at the same piano roll tick have 0 ms onset difference, guaranteeing chord notes are never stolen or collapsed into legato runs.
 - **Acoustic Mechanics & Synthesis**:

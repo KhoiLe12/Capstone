@@ -40,4 +40,6 @@ Compares both string engines against real GuitarSet recordings: 12 automatically
 
 Method, current results, and how to interpret them (including what the benchmark does *not* show) are in [wiki 06 §5](docs/wiki/06_realtime_safety_and_qa.md).
 
+`benchmarks/decay_calibration.py` fits how fast the fundamental decays against pitch, for GuitarSet notes and the synth. It is used to calibrate FDTD damping (wiki 02 §7).
+
 `benchmarks/spectral_eval.py` is the older chord comparison against downloaded Fender recordings. It uses peak normalisation and guessed chord voicings; it is kept for reference only and is not used for any claims.

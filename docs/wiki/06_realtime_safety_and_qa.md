@@ -111,23 +111,26 @@ STFT sizes $N \in \{2048, 1024, 512, 256, 128\}$, hop $N/4$, averaged over sizes
   - *Real (other take)*: a second real recording of the same pitch, scored against the reference. This is roughly the best a perfect guitar model could expect, given player and take variation.
   - *Naive tone*: a decaying additive harmonic tone with the same events. An engine that does not clearly beat this is not being distinguished by the metric.
 
-### Results (v63.f)
+### Results
 | Group | System | SC | log-L1 | Combined |
 | :--- | :--- | ---: | ---: | ---: |
 | Isolated (12) | Real (other take) | 0.635 | 0.628 | 1.263 |
-| | **Bilbao FDTD** | 0.592 | **0.610** | **1.202** |
+| | **Bilbao FDTD** | 0.629 | **0.607** | **1.235** |
 | | Digital waveguide | 0.614 | 0.667 | 1.281 |
 | | Naive tone | 0.577 | 0.704 | 1.281 |
-| Phrases (4) | **Bilbao FDTD** | 0.739 | **0.594** | **1.333** |
-| | Digital waveguide | 0.732 | 0.781 | 1.513 |
+| Phrases (4) | **Bilbao FDTD** | 0.740 | **0.586** | **1.326** |
+| | Digital waveguide | 0.735 | 0.772 | 1.508 |
 | | Naive tone | 0.741 | 0.741 | 1.482 |
 
-FDTD beats the waveguide on log-L1 in **16/16** tests and on the combined score in **15/16**. FDTD log-L1 is 9% lower on isolated notes and 24% lower on phrases.
+v65.f results. FDTD beats the waveguide on log-L1 in **15/16** tests and on the combined score in **12/16**. FDTD log-L1 is 9% lower on isolated notes and 24% lower on phrases. v63.f–v64.f had 16/16 and 15/16. The v65.f damping recalibration (wiki 02 §7) made FDTD sustain longer at the benchmark's Decay 0.75 setting: log-L1 improved slightly, while SC on isolated notes worsened.
 
 ### How to read these numbers
 - **Log-L1 is the discriminating metric.** It ranks FDTD < waveguide < naive tone consistently.
 - **Spectral convergence does not discriminate here.** The naive tone gets the best SC, and all systems sit within ±0.03. SC on linear magnitude is dominated by the few strongest low partials.
 - **This is not a realism score.** A second real recording of the same pitch scores no better than the synths, because take-to-take differences (dynamics, pick position, string, room noise) dominate. Supported claim: *FDTD's spectral envelope and decay fit real recordings better than the waveguide's*. Not supported: *FDTD sounds as real as a recording* — that needs a listening test (e.g. MUSHRA/ABX).
+
+### Related: decay calibration
+[`benchmarks/decay_calibration.py`](../../benchmarks/decay_calibration.py) fits fundamental decay rate against pitch for GuitarSet and the synth. It is used to calibrate FDTD register damping (wiki 02 §7).
 
 ### History
 The v61.f version of this benchmark reported "18–33.6% lower log-magnitude L1" for FDTD. That figure came from:

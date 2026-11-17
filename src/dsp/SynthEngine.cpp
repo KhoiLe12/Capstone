@@ -122,8 +122,6 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
         return;
     }
 
-    const bool isFdtd = (paramEngineType >= 0.5f);
-
     // ── Legato Articulation Detection (DAW Piano Roll Overlapping Notes) ──
     // On acoustic guitar, a hammer-on or pull-off occurs ONLY when playing a monophonic lead line
     // along the SAME physical string, where the new note starts while the previous fret is still held.
@@ -168,12 +166,12 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
                         const int fret = midiNote - minOpen;
 
                         // Case 1: Same natural string: full span up to 12 semitones
-                        const bool sameNaturalString = (assignStringForNote(midiNote) == heldStr);
+                        const bool sameNaturalString = (assignStringForNote(midiNote, false) == heldStr);
 
                         // Case 2: Adjacent string boundary crossover (e.g. C3 to D3 on string 1):
-                        // Valid hammer-on / pull-off if physically reachable on the held string (fret 0..19)
+                        // Valid hammer-on / pull-off if physically reachable on the held string (fret 0..kMaxFret)
                         // within a comfortable melodic fretting reach (interval <= 3 semitones):
-                        const bool reachableLegatoOnHeldString = (fret >= 0 && fret <= 19 && interval <= 3);
+                        const bool reachableLegatoOnHeldString = (fret >= 0 && fret <= kMaxFret && interval <= 3);
 
                         if (sameNaturalString || reachableLegatoOnHeldString)
                         {
@@ -196,18 +194,180 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
     }
 
     heldNotes[midiNote] = velocity;
-    const int s = assignStringForNote(midiNote);
+    const int s = assignStringForNote(midiNote, !paramStrictFretboard);
+    startNoteOnString(midiNote, velocity, s, brightnessOverride, pickPosOverride);
+}
 
+void SynthEngine::startNoteOnString(int midiNote, float velocity, int s, float brightness, float pickPos)
+{
+    const bool isFdtd = (paramEngineType >= 0.5f);
     voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
     voices[s].setPhysicalStringIndex(s);
+
+    // On-board: the string's own gauge. Off-board (past fret kMaxFret or below the open pitch):
+    // sound with the gauge of the note's natural string so tone and level match a fretted note.
+    const int fret = midiNote - stringMinOpen(s);
+    const int geometry = (fret >= 0 && fret <= kMaxFret) ? s : naturalStringForNote(midiNote);
 
     const auto muteMode = getEffectiveMuteMode();
     const int mat = static_cast<int>(paramStringMaterial + 0.5f);
     voices[s].noteOn(midiNote, velocity,
-                     (brightnessOverride >= 0.0f ? brightnessOverride : paramBrightness),
-                     (pickPosOverride >= 0.0f ? pickPosOverride : paramPickPos),
+                     (brightness >= 0.0f ? brightness : paramBrightness),
+                     (pickPos >= 0.0f ? pickPos : paramPickPos),
                      paramDecay,
-                     paramStiffness, muteMode, s, mat);
+                     paramStiffness, muteMode, s, mat, geometry);
+}
+
+void SynthEngine::noteOnChord(const Event* const* chordEvents, int count)
+{
+    // Auto-strum: held notes define the chord; the strum engine does its own assignment
+    if (isStrumActive())
+    {
+        for (int i = 0; i < count; ++i)
+            dispatch(*chordEvents[i]);
+        return;
+    }
+
+    // Sort by pitch so the solver's output order is deterministic
+    const Event* sorted[NUM_VOICES];
+    for (int i = 0; i < count; ++i)
+        sorted[i] = chordEvents[i];
+    std::sort(sorted, sorted + count, [](const Event* a, const Event* b) { return a->note < b->note; });
+
+    int notes[NUM_VOICES];
+    int strings[NUM_VOICES];
+    for (int i = 0; i < count; ++i)
+    {
+        notes[i] = sorted[i]->note;
+        heldNotes[notes[i]] = sorted[i]->velocity;
+    }
+
+    // Simultaneous notes are a chord, never a legato transition
+    assignChordStrings(notes, count, !paramStrictFretboard, true, strings);
+
+    for (int i = 0; i < count; ++i)
+        if (strings[i] >= 0)
+            startNoteOnString(notes[i], sorted[i]->velocity, strings[i], sorted[i]->brightness, sorted[i]->pickPos);
+}
+
+void SynthEngine::dispatchGroup(const Event* events, int count)
+{
+    // Within one sample: note-offs, all-notes-off and keyswitches first (in arrival order), so a
+    // keyswitch on the same tick as a chord applies to it and a note ending where the next begins
+    // releases the old note instead of killing the new one. Guitar-range note-ons form a chord.
+    const Event* chord[NUM_VOICES];
+    int chordCount = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        const Event& e = events[i];
+        const bool isChordNote = e.type == Event::Type::NoteOn && e.velocity > 0.0001f
+                              && e.note >= GUITAR_MIN_NOTE && e.note <= GUITAR_MAX_NOTE;
+        if (!isChordNote)
+            dispatch(e);
+    }
+    for (int i = 0; i < count; ++i)
+    {
+        const Event& e = events[i];
+        const bool isChordNote = e.type == Event::Type::NoteOn && e.velocity > 0.0001f
+                              && e.note >= GUITAR_MIN_NOTE && e.note <= GUITAR_MAX_NOTE;
+        if (!isChordNote)
+            continue;
+        if (chordCount < NUM_VOICES)
+            chord[chordCount++] = &e;
+        else
+            dispatch(e); // more than 6 simultaneous notes: extra notes take the single-note path
+    }
+
+    if (chordCount == 1)
+        dispatch(*chord[0]);
+    else if (chordCount > 1)
+        noteOnChord(chord, chordCount);
+}
+
+namespace
+{
+    struct ChordSearch
+    {
+        const int* notes;
+        int count;
+        bool allowOffBoard;
+        bool ringing[6];
+        int minOpen[6];
+        int maxFret;
+
+        int current[6];
+        int best[6];
+        // Score: physical count, placed count, ringing strings kept, -hand span, -fret sum
+        int bestScore[5];
+        bool haveBest = false;
+
+        void evaluate()
+        {
+            int physical = 0, placed = 0, ringingUsed = 0, fretSum = 0;
+            int lo = 1000, hi = -1;
+            for (int i = 0; i < count; ++i)
+            {
+                const int s = current[i];
+                if (s < 0) continue;
+                ++placed;
+                if (ringing[s]) ++ringingUsed;
+                const int fret = notes[i] - minOpen[s];
+                if (fret >= 0 && fret <= maxFret)
+                {
+                    ++physical;
+                    fretSum += fret;
+                    if (fret > 0) { lo = std::min(lo, fret); hi = std::max(hi, fret); }
+                }
+            }
+            const int span = (hi >= 0) ? (hi - lo) : 0;
+            const int score[5] = { physical, placed, -ringingUsed, -span, -fretSum };
+            bool better = !haveBest;
+            for (int k = 0; k < 5 && !better; ++k)
+            {
+                if (score[k] != bestScore[k]) { better = score[k] > bestScore[k]; break; }
+            }
+            if (better)
+            {
+                haveBest = true;
+                std::copy(score, score + 5, bestScore);
+                std::copy(current, current + count, best);
+            }
+        }
+
+        void search(int i, unsigned usedMask)
+        {
+            if (i == count) { evaluate(); return; }
+            current[i] = -1; // leave this note unplaced
+            search(i + 1, usedMask);
+            for (int s = 0; s < 6; ++s)
+            {
+                if (usedMask & (1u << s)) continue;
+                const int fret = notes[i] - minOpen[s];
+                if (!allowOffBoard && (fret < 0 || fret > maxFret)) continue;
+                current[i] = s;
+                search(i + 1, usedMask | (1u << s));
+            }
+        }
+    };
+}
+
+void SynthEngine::assignChordStrings(const int* notes, int count, bool allowOffBoard, bool avoidRinging,
+                                     int* outString) const noexcept
+{
+    count = std::min(count, NUM_VOICES);
+    ChordSearch cs;
+    cs.notes = notes;
+    cs.count = count;
+    cs.allowOffBoard = allowOffBoard;
+    cs.maxFret = kMaxFret;
+    for (int s = 0; s < NUM_VOICES; ++s)
+    {
+        cs.ringing[s] = avoidRinging && voices[s].isActive();
+        cs.minOpen[s] = stringMinOpen(s);
+    }
+    cs.search(0, 0u);
+    for (int i = 0; i < count; ++i)
+        outString[i] = cs.haveBest ? cs.best[i] : -1;
 }
 
 void SynthEngine::noteOff(int midiNote)
@@ -298,58 +458,18 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
         return a.first < b.first;
     });
 
-    static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
-    bool stringUsed[6] = { false, false, false, false, false, false };
+    // Joint best-fit string assignment (same solver as simultaneous note-ons). The strum re-picks
+    // every chord string, so ringing strings are not avoided.
+    int chordNotes[6];
     int noteToString[6] = { -1, -1, -1, -1, -1, -1 };
-
     for (int i = 0; i < chordSize; ++i)
-    {
-        const int note = chord[i].first;
-        int s = 0;
-        if (note < 45)      s = 0;
-        else if (note < 50) s = 1;
-        else if (note < 55) s = 2;
-        else if (note < 59) s = 3;
-        else if (note < 64) s = 4;
-        else                s = 5;
+        chordNotes[i] = chord[i].first;
+    assignChordStrings(chordNotes, chordSize, !paramStrictFretboard, false, noteToString);
 
-        if (!stringUsed[s])
-        {
-            stringUsed[s] = true;
-            noteToString[i] = s;
-        }
-        else
-        {
-            // Search for an unused string within reachable fret span (fret <= 7)
-            int bestAlt = -1;
-            int bestFret = 999;
-            for (int alt = 0; alt < 6; ++alt)
-            {
-                if (!stringUsed[alt])
-                {
-                    const int minOpen = (alt == 0) ? 38 : openMidi[alt];
-                    if (note >= minOpen)
-                    {
-                        const int fret = note - minOpen;
-                        if (fret <= 19 && fret < bestFret)
-                        {
-                            bestFret = fret;
-                            bestAlt = alt;
-                        }
-                    }
-                }
-            }
-            if (bestAlt >= 0)
-            {
-                stringUsed[bestAlt] = true;
-                noteToString[i] = bestAlt;
-            }
-            else
-            {
-                noteToString[i] = s;
-            }
-        }
-    }
+    bool stringUsed[6] = { false, false, false, false, false, false };
+    for (int i = 0; i < chordSize; ++i)
+        if (noteToString[i] >= 0)
+            stringUsed[noteToString[i]] = true;
 
     // 4. Immediately damp any currently ringing strings that are NOT part of this chord!
     // When switching chords, strings left behind are naturally muted.
@@ -388,19 +508,11 @@ void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
 
 void SynthEngine::schedulePluck(int stringIdx, int midiNote, float velocity, float brightness, int delaySamples) noexcept
 {
-    const bool isFdtd = (paramEngineType >= 0.5f);
     const int s = std::clamp(stringIdx, 0, 5);
 
     if (delaySamples <= 0)
     {
-        voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-        voices[s].setPhysicalStringIndex(s);
-
-        const auto muteMode = getEffectiveMuteMode();
-        const int mat = static_cast<int>(paramStringMaterial + 0.5f);
-        voices[s].noteOn(midiNote, velocity,
-                         brightness, paramPickPos, paramDecay,
-                         paramStiffness, muteMode, s, mat);
+        startNoteOnString(midiNote, velocity, s, brightness, -1.0f);
         return;
     }
 
@@ -487,8 +599,14 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
     for (int i = 0; i < numSamples; ++i)
     {
         // Sample-accurate MIDI: apply every event scheduled at (or, if mis-sorted, before) sample i
-        while (nextEvent < numEvents && events[nextEvent].sampleOffset <= i)
-            dispatch(events[nextEvent++]);
+        if (nextEvent < numEvents && events[nextEvent].sampleOffset <= i)
+        {
+            int groupEnd = nextEvent;
+            while (groupEnd < numEvents && events[groupEnd].sampleOffset <= i)
+                ++groupEnd;
+            dispatchGroup(events + nextEvent, groupEnd - nextEvent);
+            nextEvent = groupEnd;
+        }
 
         // Advance 8th-note strum interval timer
         if (keyswitchStrumActive || paramStrum)
@@ -510,19 +628,9 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
                 --pendingPlucks[p].delaySamples;
                 if (pendingPlucks[p].delaySamples <= 0)
                 {
-                    const bool isFdtd = (paramEngineType >= 0.5f);
-                    const int s = std::clamp(pendingPlucks[p].stringIdx, 0, 5);
-
-                    voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
-                    voices[s].setPhysicalStringIndex(s);
-
-                    const auto muteMode = getEffectiveMuteMode();
-                    const int mat = static_cast<int>(paramStringMaterial + 0.5f);
-                    voices[s].noteOn(pendingPlucks[p].midiNote,
-                                     pendingPlucks[p].velocity,
-                                     pendingPlucks[p].brightness,
-                                     paramPickPos, paramDecay,
-                                     paramStiffness, muteMode, s, mat);
+                    startNoteOnString(pendingPlucks[p].midiNote, pendingPlucks[p].velocity,
+                                      std::clamp(pendingPlucks[p].stringIdx, 0, 5),
+                                      pendingPlucks[p].brightness, -1.0f);
                     pendingPlucks[p].active = false;
                 }
             }
@@ -610,8 +718,8 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
     }
 
     // Events with offsets past the end of the block (out-of-range timestamps) still take effect
-    while (nextEvent < numEvents)
-        dispatch(events[nextEvent++]);
+    if (nextEvent < numEvents)
+        dispatchGroup(events + nextEvent, numEvents - nextEvent);
 
     // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
     body.processBlock(outputL, outputR, numSamples);
@@ -707,7 +815,7 @@ void SynthEngine::reset()
 // Physical 6-String Guitar Allocation & Monophonic String Choking
 // ---------------------------------------------------------------------------
 
-int SynthEngine::assignStringForNote(int note) const noexcept
+int SynthEngine::assignStringForNote(int note, bool allowOffBoard) const noexcept
 {
     // Acoustic guitar open string pitches (standard tuning: E2, A2, D3, G3, B3, E4)
     static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
@@ -732,7 +840,7 @@ int SynthEngine::assignStringForNote(int note) const noexcept
         return s;
 
     // 3. String s is currently active (either physically held or decaying in release).
-    // Search for an idle physical string that can comfortably voice this note (fret <= 19).
+    // Search for an idle physical string that can voice this note (fret <= kMaxFret).
     // This preserves ringing chord tails and prevents violent buffer re-trigger clobbering clicks!
     int bestAlt = -1;
     int bestFret = 999;
@@ -744,7 +852,7 @@ int SynthEngine::assignStringForNote(int note) const noexcept
             if (note >= minOpen)
             {
                 const int fret = note - minOpen;
-                if (fret <= 19 && fret < bestFret)
+                if (fret <= kMaxFret && fret < bestFret)
                 {
                     bestFret = fret;
                     bestAlt = alt;
@@ -754,6 +862,15 @@ int SynthEngine::assignStringForNote(int note) const noexcept
     }
     if (bestAlt >= 0)
         return bestAlt;
+
+    // 3b. No physical position free: unless the fretboard is strict, use an idle string past the
+    // fretboard (exact pitch) rather than re-plucking a ringing string.
+    if (allowOffBoard)
+    {
+        for (int alt = 5; alt >= 0; --alt)
+            if (!voices[alt].isActive() && note >= stringMinOpen(alt))
+                return alt;
+    }
 
     // 4. If all alternative strings are occupied, reuse string s
     return s;

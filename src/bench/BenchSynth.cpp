@@ -358,6 +358,26 @@ static size_t runEventStressScenario(float sampleRate, int blockSize)
                 for (int note : { 40, 47, 52, 55, 59, 64 }) engine.noteOff(note);
                 run(step * 2);
 
+                // Same-tick chords through the event path (joint string assignment), strict and free
+                for (bool strict : { false, true })
+                {
+                    engine.paramStrictFretboard = strict;
+                    SynthEngine::Event chordEv[6];
+                    const int chordNotes[6] = { 72, 76, 79, 83, 86, 64 };
+                    for (int c = 0; c < 6; ++c)
+                    {
+                        chordEv[c].sampleOffset = blockSize / 2;
+                        chordEv[c].type = SynthEngine::Event::Type::NoteOn;
+                        chordEv[c].note = chordNotes[c];
+                        chordEv[c].velocity = 0.8f;
+                    }
+                    engine.process(bufferL.data(), bufferR.data(), blockSize, chordEv, 6);
+                    run(step * 2);
+                    for (int note : chordNotes) engine.noteOff(note);
+                    run(step);
+                }
+                engine.paramStrictFretboard = false;
+
                 // Host "All Notes Off" path (PluginProcessor calls SynthEngine::reset on the audio thread)
                 engine.noteOn(40, 0.8f); run(step);
                 engine.reset();          run(step);
@@ -443,11 +463,12 @@ static bool runTimingAccuracyCheck(float sampleRate)
 // ---------------------------------------------------------------------------
 static bool runChordVsLegatoCheck(float sampleRate)
 {
-    auto voicesAfter = [&](const std::vector<std::pair<float, int>>& notes, bool legatoOn) {
+    auto voicesAfter = [&](const std::vector<std::pair<float, int>>& notes, bool legatoOn, bool strict = false) {
         SynthEngine eng;
         eng.init(sampleRate, 512);
         eng.paramEngineType = 1.0f;
         eng.paramLegatoEnabled = legatoOn;
+        eng.paramStrictFretboard = strict;
         std::vector<SynthEngine::Event> evs;
         for (const auto& [t, note] : notes)
         {
@@ -467,7 +488,17 @@ static bool runChordVsLegatoCheck(float sampleRate)
     const int rolled  = voicesAfter({ { 0.000f, 52 }, { 0.008f, 55 }, { 0.016f, 48 } }, true);
     const int hammer  = voicesAfter({ { 0.000f, 52 }, { 0.100f, 54 } }, true);
     const int noLeg   = voicesAfter({ { 0.000f, 52 }, { 0.100f, 54 } }, false);
-    const bool ok = (rolled == 3) && (hammer == 1) && (noLeg == 2);
+    // Simultaneous piano-roll chords: joint string assignment
+    const std::vector<std::pair<float, int>> openC   = { { 0.f, 48 }, { 0.f, 52 }, { 0.f, 55 }, { 0.f, 60 }, { 0.f, 64 } };
+    const std::vector<std::pair<float, int>> highMaj9 = { { 0.f, 72 }, { 0.f, 76 }, { 0.f, 79 }, { 0.f, 83 }, { 0.f, 86 } };
+    const int openCv   = voicesAfter(openC, true);
+    const int highFree = voicesAfter(highMaj9, true, false);
+    const int highStr  = voicesAfter(highMaj9, true, true);
+    std::cout << "  Open C chord (5 notes, same tick)  : " << openCv   << " voices (expect 5)\n"
+              << "  C5-E5-G5-B5-D6, strict fretboard off: " << highFree << " voices (expect 5)\n"
+              << "  C5-E5-G5-B5-D6, strict fretboard on : " << highStr  << " voices (expect 4: B5 and D6 both need the high E)\n";
+
+    const bool ok = (rolled == 3) && (hammer == 1) && (noLeg == 2) && (openCv == 5) && (highFree == 5) && (highStr == 4);
     std::cout << "  Rolled chord E3-G3-C3 (8 ms apart)  : " << rolled << " voices (expect 3)\n"
               << "  Hammer-on E3->F#3 after 100 ms     : " << hammer << " voice  (expect 1)\n"
               << "  Same with legato disabled          : " << noLeg  << " voices (expect 2)\n";

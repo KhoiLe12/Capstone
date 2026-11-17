@@ -52,6 +52,7 @@ flowchart LR
 - **Classical Nylon IR**: Prominent 210 Hz soundboard bloom with warm, intimate treble rolloff. Wet gain calibrated to $0.62\times$ to avoid soft-limiter saturation.
 - Uses partitioned low-latency frequency-domain FFT convolution (zero latency in audio thread).
 - Both embedded IRs are short: 2048 frames at 48 kHz ($\approx 43\text{ ms}$). Classical Nylon is stereo; Gibson is mono, used on both channels.
+- **Known issue: notch at ~981 Hz in both IRs.** Measured on the IR files: −10.7 dB (Classical) and −7.8 dB (Gibson) re. the 300–3000 Hz median. B5 (988 Hz) comes out ~10 dB quieter than A5 or C6 through either IR, but not with the modal bank or the dry signal. Two different guitars sharing a notch at the same frequency suggests a capture artifact (e.g. a mic-position comb), not a body property. Not yet corrected.
 
 ### Body Model Switching (v62.f)
 - Each IR has its own `juce::dsp::Convolution` engine, and **both are loaded in `init()` (`prepareToPlay`)**. Before v62.f a body change called `loadImpulseResponse()` + `prepare()` from `processBlock`, which allocated on the audio thread.

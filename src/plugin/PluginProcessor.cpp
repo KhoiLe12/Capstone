@@ -124,6 +124,12 @@ HybridSynthProcessor::createParameterLayout()
         "Legato (HO/PO)",
         true));
 
+    // Strict fretboard: drop chord notes that have no physical string position (off = still play them)
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "strictFretboard", 1 },
+        "Strict Fretboard",
+        false));
+
     return { params.begin(), params.end() };
 }
 
@@ -177,6 +183,7 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramFullMute   = apvts.getRawParameterValue("fullMute")->load() > 0.5f;
     synth.paramStrum      = apvts.getRawParameterValue("strumPattern")->load() > 0.5f;
     synth.paramLegatoEnabled = apvts.getRawParameterValue("legato")->load() > 0.5f;
+    synth.paramStrictFretboard = apvts.getRawParameterValue("strictFretboard")->load() > 0.5f;
 
     if (buffer.getNumChannels() == 0) return;
 

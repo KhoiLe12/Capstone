@@ -56,6 +56,10 @@ private:
     juce::ToggleButton legatoToggle;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> legatoAttach;
 
+    // Strict fretboard toggle (drop physically unplayable chord notes)
+    juce::ToggleButton strictToggle;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> strictAttach;
+
     // Strum 8th Articulation Toggle & Visual Status
     juce::ToggleButton strumToggle;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> strumAttach;

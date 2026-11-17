@@ -54,9 +54,24 @@ Unlike standard electronic synthesizers with generic round-robin voice stealing,
 - **String 4**: B ($B_3$, MIDI 59, $246.94\text{ Hz}$) — plain steel or rectified nylon
 - **String 5**: High E ($E_4$, MIDI 64, $329.63\text{ Hz}$) — plain steel or rectified nylon
 
-### Voice Assignment (`assignStringForNote`)
-- Each incoming MIDI note is assigned to the physical string that can fret it within a realistic hand span (up to 19 frets).
-- If multiple strings can play a note, the allocator chooses an idle string closest to the current fretting position.
+### Voice Assignment
+**Single notes** (`assignStringForNote`):
+- A note goes to its natural first-position string. If that string is busy, it goes to an idle string that can fret it within the **22-fret** neck (`kMaxFret`; 19 before v65.f), choosing the lowest fret.
+- If no idle string can fret it: with **Strict Fretboard** off, an idle string past the fretboard is used; otherwise the natural string is re-plucked.
+
+**Simultaneous notes** (same sample, e.g. a piano-roll chord; v65.f, `assignChordStrings`):
+- Assigned **jointly** by exhaustive search over note→string maps: at most 13,327 for 6 notes, stack-only, audio-thread safe. In priority order, it maximises:
+  1. notes at a physical position (fret 0–22);
+  2. notes placed at all (only with Strict Fretboard off);
+  3. untouched ringing strings;
+  4. a compact hand span;
+  5. low frets.
+- The auto-strum uses the same solver.
+- Before v65.f, notes were placed greedily in arrival order with a 19-fret limit, and a note with no free string re-plucked an occupied one. C5–E5–G5–B5–D6 (FL: C6–E6–G6–B6–D7) played only E5 and D6.
+- Within one sample, note-offs and keyswitches are applied before the chord's note-ons, so a keyswitch on the same tick affects the chord.
+- **Strict Fretboard** (`strictFretboard`, default off):
+  - *On*: notes with no physical position are dropped, as on a real guitar. The example plays 4 of 5 notes, since B5 and D6 both need the high E string.
+  - *Off*: such notes take a free string past the fretboard, so up to 6 notes always sound. They are voiced with the gauge of the note's natural string (`Voice::noteOn(..., geometryString)`), so they sound like a normally fretted note rather than an over-tensioned wound string.
 - **Decaying String Re-Trigger Protection (v45.f)**: If an incoming chord note targets a physical string currently decaying in release, the allocator prioritizes truly idle strings to prevent audible voice-clobbering pops.
 
 ### Monophonic Lead Legato Routing Engine (v57.f–v58.f)

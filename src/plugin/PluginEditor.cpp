@@ -117,6 +117,17 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     legatoAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         p.apvts, "legato", legatoToggle);
 
+    // Strict fretboard toggle
+    strictToggle.setButtonText("Strict Fretboard");
+    strictToggle.setTooltip("On: chord notes with no real string/fret position (22 frets) are dropped, "
+                            "as on a real guitar. Off: they play on a free string past the fretboard.");
+    strictToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xfff0f0f0));
+    strictToggle.setColour(juce::ToggleButton::tickColourId, juce::Colour(0xff8ecae6));
+    addAndMakeVisible(strictToggle);
+
+    strictAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.apvts, "strictFretboard", strictToggle);
+
     auto setupKnob = [this](juce::Slider& knob, juce::Label& label,
                             const juce::String& name)
     {
@@ -208,7 +219,7 @@ void HybridSynthEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xfff0f0f0));
     g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
     g.drawText("Hybrid Physical Modeling Guitar",
-               juce::Rectangle<int>(14, 0, getWidth() - 560, 36),
+               juce::Rectangle<int>(14, 0, getWidth() - 700, 36),
                juce::Justification::centredLeft);
 
     // Prominent Version Badge in top-right
@@ -278,6 +289,7 @@ void HybridSynthEditor::paint(juce::Graphics& g)
 
 void HybridSynthEditor::resized()
 {
+    strictToggle.setBounds(getWidth() - 680, 6, 140, 24);
     legatoToggle.setBounds(getWidth() - 535, 6, 130, 24);
     presetLabel.setBounds(getWidth() - 395, 6, 52, 24);
     presetBox.setBounds(getWidth() - 340, 6, 210, 24);

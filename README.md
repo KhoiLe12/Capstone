@@ -4,7 +4,7 @@ A physically modeled acoustic guitar synthesizer built with **JUCE** (C++17) and
 
 All sound is computed in real time from a simulation of the strings, bridge, and guitar body — **no samples or wavetables**.
 
-> **Current version:** v64.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
+> **Current version:** v65.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
 
 ---
 
@@ -83,7 +83,7 @@ Keyswitches sit below the guitar range so they never sound. (FL Studio and Yamah
 
 Each keyswitch also has an equivalent toggle parameter in the GUI / DAW. Playable range is **D2–D6** (MIDI 38–86, Drop-D to 22nd fret); other notes are ignored.
 
-Notes are assigned to physical strings like a real guitar: each string is monophonic, and a note goes to its first-position string or to the nearest idle string within 19 frets.
+Notes are assigned to physical strings like a real guitar: each string is monophonic. Single notes go to their first-position string, or to the nearest idle string within 22 frets. Simultaneous notes (chords) get a joint best-fit assignment; **Strict Fretboard** controls whether physically impossible voicings drop notes.
 
 Details: [05 — Articulations & Keyswitches](docs/wiki/05_articulations_and_keyswitches.md)
 
@@ -109,6 +109,7 @@ Defaults match factory preset 1, *Dreadnought Acoustic*, which is loaded on firs
 | **Palm Mute** | toggle | off | Same as holding C1. |
 | **Full Mute** | toggle | off | Same as holding D1. |
 | **Strum 8th** | toggle | off | Same as holding E1. |
+| **Strict Fretboard** | toggle | off | On: chord notes with no real string/fret position (22 frets) are dropped. Off: they play on a free string past the fretboard, so up to 6 notes always sound. |
 | **Legato (HO/PO)** | toggle | on | Overlapping notes on one string play as hammer-ons / pull-offs. Notes within 40 ms of each other always play as a chord. |
 
 ---

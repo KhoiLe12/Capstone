@@ -75,6 +75,14 @@ public:
     bool paramLegatoEnabled = true; ///< Enable acoustic hammer-on / pull-off legato on same-string intervals
 
     /**
+     * Strict fretboard: notes with no physical position (fret 0..kMaxFret on a free string) are
+     * dropped, as on a real guitar. Off (default): they are played on a free string past the
+     * fretboard (exact pitch), so a chord of up to 6 notes always sounds in full.
+     */
+    bool paramStrictFretboard = false;
+    static constexpr int kMaxFret = 22; ///< Highest fret (22-fret acoustic neck)
+
+    /**
      * Chord window: a new note only becomes a hammer-on / pull-off if the single held note started
      * at least this long before it. Rolled keyboard chords spread their notes over ~10-40 ms; a
      * legato note 40 ms after the previous one is already 25 notes/s, faster than any real run.
@@ -187,7 +195,30 @@ private:
     void syncVoiceMuteModes() noexcept;
     void dispatch(const Event& e);
 
-    int assignStringForNote(int midiNote) const noexcept;
+    /** Apply all events of one sample: offs / keyswitches first, then simultaneous note-ons as a chord. */
+    void dispatchGroup(const Event* events, int count);
+    /** Start simultaneous note-ons (2..6) with a joint best-fit string assignment. */
+    void noteOnChord(const Event* const* chordEvents, int count);
+    /** Trigger one note on physical string s with the current articulation state. */
+    void startNoteOnString(int midiNote, float velocity, int s, float brightness, float pickPos);
+
+    /**
+     * Joint best-fit assignment of up to 6 simultaneous notes to distinct strings. Maximises, in
+     * order: notes at a physical position (fret 0..kMaxFret), notes placed at all (only if
+     * allowOffBoard), untouched ringing strings (if avoidRinging), compact hand span, low frets.
+     * outString[i] = string for notes[i], or -1 if unplaced. Exhaustive search (<= 13,327 maps).
+     */
+    void assignChordStrings(const int* notes, int count, bool allowOffBoard, bool avoidRinging,
+                            int* outString) const noexcept;
+    static int stringMinOpen(int s) noexcept { return s == 0 ? 38 : kOpenMidi[s]; }
+    /** First-position string for a note (E2..G#2 -> 0, A2.. -> 1, D3.. -> 2, G3.. -> 3, B3.. -> 4, E4+ -> 5). */
+    static int naturalStringForNote(int note) noexcept
+    {
+        return note < 45 ? 0 : note < 50 ? 1 : note < 55 ? 2 : note < 59 ? 3 : note < 64 ? 4 : 5;
+    }
+    static constexpr int kOpenMidi[NUM_VOICES] = { 40, 45, 50, 55, 59, 64 };
+
+    int assignStringForNote(int midiNote, bool allowOffBoard) const noexcept;
     int findFreeVoice() const noexcept;
     int findVoiceForNote(int midiNote) const noexcept;
 

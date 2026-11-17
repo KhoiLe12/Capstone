@@ -111,7 +111,13 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v64.f**
+### Current Version Status: **v65.f**
+- **v65.f**:
+  - FDTD damping calibrated against GuitarSet decay rates (frequency-independent $\sigma_0$; `benchmarks/decay_calibration.py`).
+  - Ring-out detection now uses total string energy relative to the note's peak, so high notes are no longer cut off early. See wiki 02 §7.
+  - Joint chord string assignment (22 frets) plus a `strictFretboard` parameter: high piano-roll chords no longer drop notes. See wiki 01 §2.
+
+**v64.f:**
 - **v64.f**:
   - Sample-accurate MIDI: events are applied at their exact sample via `SynthEngine::process(..., events, numEvents)`. Before, everything was applied at block start.
   - All Notes Off now stops strings without hard-resetting the body.

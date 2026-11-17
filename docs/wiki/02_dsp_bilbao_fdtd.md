@@ -106,17 +106,34 @@ The remap snapshots ($u^n$, $u^{n-1}$ for V and H) live in `saved_*` scratch vec
 
 ---
 
-## 7. Measured Accuracy & Known Limitations (v64.f)
+## 7. Damping Calibration, Ring-Out & Measured Accuracy (v65.f)
 
-Measured with `render_audio` (one note per pitch, velocity 0.7, Gibson IR body, 44.1 kHz). FFT peak of the fundamental over 0.4–1.4 s; sustain is the time from peak until the 20 ms RMS envelope is 40 dB down.
+### Register-dependent damping
+$\sigma_0$ is now **frequency-independent**, as in the standard Bilbao loss model. All frequency dependence comes from the $\sigma_1$ term and the small fret/nut factor. Before v65.f, `Voice::makeFdtdParams()` multiplied $\sigma_0$ by $(f/82.4)^{0.65}$ (steel) or $^{0.80}$ (nylon). The exponents are kept as `Voice::kFdtdSteelRegisterExponent` / `kFdtdNylonRegisterExponent`, now both 0.
 
-- **Tuning**: within ±1.3 cents from E2 to G5 on both materials. The per-string `centsOffsets` compensate grid dispersion on open strings only.
-- **Upper-register sustain is very short**:
+This was calibrated with [`benchmarks/decay_calibration.py`](../../benchmarks/decay_calibration.py). The script fits the decay rate (dB/s) of the **fundamental**, isolated by complex demodulation, over the held part of each note. That excludes the pick click and attack. It uses 87 isolated, held GuitarSet notes (steel-string guitar), each re-rendered alone on the FDTD engine:
 
-| Note | E2 | E3 | E4 | C5 | G5 | C6 | D6 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Nylon | 3.98 s | 2.10 s | 1.42 s | 0.82 s | 0.46 s | 0.31 s | 0.23 s |
-| Steel | > 5 s | 3.75 s | 2.57 s | 1.68 s | 0.90 s | 0.46 s | 0.42 s |
+| Fit $\text{decay} = a\,(f/82.4)^p$ | $p$ (robust) | 90% CI |
+| :--- | ---: | ---: |
+| GuitarSet (real) | 0.21 | [−0.14, 0.36] |
+| FDTD before v65.f | 0.84 | [0.78, 0.89] |
+| FDTD v65.f | 0.34 | [0.22, 0.38] |
 
-  The cause is the register scaling in `Voice::makeFdtdParams()`: $\sigma_0 \propto (f/82.4)^{0.80}$ (nylon) or $^{0.65}$ (steel), plus the treble-weighted $\sigma_1$. Real guitars sustain high fretted notes noticeably longer. Recalibrating against GuitarSet decay times is an open task. Above ~G5, notes decay too fast to measure pitch reliably.
+- **Level is set by the Decay knob, not the data.** The calibration fixes only the *shape* (how decay scales with pitch). It is anchored at E2, so bass sustain at a given Decay setting is unchanged. GuitarSet's absolute decay (~8 dB/s at E2) reflects its players and guitar, not a target.
+- **Nylon has no reference data.** It gets the same frequency-independent $\sigma_0$; its faster treble loss comes from its larger $\sigma_1$. Judge it by ear.
 
+### Ring-out detection
+A voice fades out when the string's total energy (`FdtdString::computeDiscreteEnergy()`: kinetic + tension-potential) falls 80 dB below the note's own peak (`Voice::kFdtdSilenceRatio`). The check runs every 32 samples, and the reference resets on note-on and legato.
+
+Before v65.f the check was a fixed threshold on displacement energy $\sum u^2$, every sample. That quantity dips towards zero twice per cycle, when all the energy is kinetic, and short treble strings hold little displacement. As a result:
+- D6 (nylon) was cut after 0.39 s, still at −15 dB re. peak.
+- E4 was cut at 3.1 s, still at −38 dB.
+
+Now every note rings to −76 to −84 dB re. its post-attack level. Total ring time, nylon / steel: E2 9.5 / 15.0 s, E4 8.7 / 13.3 s, G5 5.7 / 8.7 s, D6 3.9 / 5.8 s.
+
+### Measured tuning
+`render_audio`, one note per pitch, FFT peak of the fundamental: within ±1.3 cents from E2 to G5 on both materials. The per-string `centsOffsets` compensate grid dispersion on open strings only.
+
+### Effect on the GuitarSet spectral benchmark (wiki 06 §5)
+- **Log-L1 improved slightly**: isolated 0.610 → 0.607, phrases 0.592 → 0.586.
+- **Spectral convergence on isolated notes worsened**: 0.592 → 0.629, so the combined score went 1.202 → 1.235. The benchmark renders at Decay 0.75, which now sustains longer than GuitarSet's notes. SC is dominated by fundamental level over time and does not discriminate between systems (wiki 06 §5).
