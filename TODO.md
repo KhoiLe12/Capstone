@@ -72,7 +72,7 @@ This document tracks all planned, ongoing, and completed features across physica
 
 ## 5. Known Issues & Calibration (measured v64.f)
 
-- [ ] **Waveguide tuning is sharp**: +2.9 cents at E2 down to +0.3 cents at C6, likely from the filters' phase delay at $f_0$ vs DC compensation (wiki 03).
+- [x] **Waveguide tuning was sharp** (fixed v67.f): caused by the +0.18 Hz detune on the long-sustaining horizontal plane, not the filters. The detune now goes on the vertical plane; sustain is within ±0.05 cents (wiki 03).
 - [x] **FDTD upper-register sustain too short** (fixed v65.f): calibrated $\sigma_0$ against GuitarSet decay rates, and replaced the ring-out detector that cut high notes while loud (wiki 02 §7).
 - [ ] **IR notch at ~981 Hz**: both embedded body IRs dip 8–11 dB there, so B5 is ~10 dB quieter than its neighbours through the IR bodies (wiki 04).
 - [x] **High chords dropping notes** (fixed v65.f): joint chord string assignment, 22-fret neck, Strict Fretboard toggle (wiki 01).

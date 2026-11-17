@@ -67,8 +67,14 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
     // DC group delay of the dispersion allpass filter: tau = (1 - D) / (1 + D)
     const float dispDelay = (1.0f - dispCoeff) / (1.0f + dispCoeff);
 
-    // 1. Vertical Polarization (y-axis: perpendicular to soundboard, fundamental f0)
-    const float totalDelayV = sampleRate / f0;
+    // Polarization detuning (beating). The horizontal plane decays much more slowly
+    // (tauH ~3.7 s vs tauV ~0.7 s) and dominates the sustain, so it carries the exact pitch;
+    // the short-lived vertical plane sits kPolarizationDetuneHz below it. Before v67.f the
+    // horizontal plane was detuned +0.18 Hz instead, making every sustained note sharp
+    // (+4.8 cents at E2, +1.0 at E4, +0.3 at C6).
+    // 1. Vertical Polarization (y-axis: perpendicular to soundboard, f0 - detune)
+    const float fV = std::max(1.0f, f0 - kPolarizationDetuneHz);
+    const float totalDelayV = sampleRate / fV;
     // DC group delay of 1st-order FIR loss filter (1 - S) + S * z^-1 is exactly S samples
     float etaV = totalDelayV - sCoeffV_computed - dispDelay;
     if (etaV < 2.0f) etaV = 2.0f;
@@ -88,8 +94,8 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
 
     apCoeffV = (1.0f - fracV) / (1.0f + fracV);
 
-    // 2. Horizontal Polarization (x-axis: parallel to soundboard, anisotropic micro-detuning ~0.18 Hz)
-    const float fH = f0 + 0.18f;
+    // 2. Horizontal Polarization (x-axis: parallel to soundboard, exact fundamental f0)
+    const float fH = f0;
     const float totalDelayH = sampleRate / fH;
     float etaH = totalDelayH - sCoeffH_computed - dispDelay;
     if (etaH < 2.0f) etaH = 2.0f;

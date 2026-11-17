@@ -21,7 +21,11 @@ Because $D$ is rarely an integer, rounding to the nearest sample causes unaccept
 ### Fractional Delay Allpass Filter
 The delay line is partitioned into an integer delay $N = \lfloor D - \tau_\text{filters} \rfloor$ and a fractional delay $\eta \in [0, 1)$:
 $$A(z) = \frac{a + z^{-1}}{1 + a z^{-1}}, \quad a = \frac{1 - \eta}{1 + \eta}$$
-- **Measured tuning (v64.f)**: the engine is consistently **sharp**: +2.9 cents at E2, +1.5 at E3, +1.1 at E4, +0.7 at C5, +0.3 at C6. The figures are the same with the body removed, so the detuning is real, not a measurement artifact. It is not a constant-sample delay error. The likely cause is that the loss and dispersion filters' phase delay at $f_0$ differs from the DC group delay used for compensation; not yet fixed. (Earlier docs claimed ±0.05 cents; that was never measured.)
+- **Measured tuning (v67.f)**: the loop tuning itself is exact. With both polarizations on $f_0$, every note from E2 to C6 measured within 0.02 cents, so the fractional-delay, loss-filter and dispersion compensation are correct.
+- **Polarization detune**: the vertical plane is tuned `kPolarizationDetuneHz` = 0.18 Hz **below** the horizontal plane, which produces the beating. The horizontal plane decays much more slowly ($\tau_H \approx 3.7$ s vs $\tau_V \approx 0.7$ s) and dominates the sustain, so it carries the exact pitch.
+  - Sustain measures within ±0.05 cents (E2–C6, 3–9 s windows).
+  - In the first ~0.5 s, low notes read slightly flat while V is still strong: −2.3 cents at E2, −0.4 at E4, ~0 above C5.
+- **History**: before v67.f the *horizontal* plane was detuned +0.18 Hz, so every sustained note settled sharp by a constant ~0.18–0.23 Hz (+4.8 cents at E2, +1.0 at E4, +0.3 at C6). v64.f docs blamed filter phase delay; measurement showed the detune was the cause.
 - Unity gain $|A(e^{j\omega})| = 1.0$ at all frequencies; avoids numerical energy loss in the pitch-tuning stage.
 
 ---

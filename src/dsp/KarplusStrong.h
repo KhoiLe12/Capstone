@@ -113,6 +113,9 @@ public:
 
     void updateLoopGains() noexcept;
 
+    /** Vertical-plane detune below the (pitch-carrying) horizontal plane; sets the beat rate. */
+    static constexpr float kPolarizationDetuneHz = 0.18f;
+
     // Double-decay loop gains (Vertical = fast attack, Horizontal = singing sustain)
     float loopGainV  = 0.965f;
     float loopGainH  = 0.994f;

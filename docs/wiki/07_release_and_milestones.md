@@ -6,6 +6,13 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v67.f
+- **Waveguide tuning fixed**:
+  - The sharpness (+4.8 cents at E2 in sustain, +1.0 at E4, +0.3 at C6) came from `KarplusStrong` tuning the horizontal polarization +0.18 Hz above $f_0$. That plane decays ~5× slower and dominates the sustain. With both planes on $f_0$ the loop measured within 0.02 cents, so the filter compensation was always correct.
+  - The 0.18 Hz detune (`kPolarizationDetuneHz`) now goes on the short-lived vertical plane, below $f_0$, which keeps the same beat rate.
+  - Sustain is within ±0.05 cents E2–C6. The first ~0.5 s of low notes reads up to −2.3 cents (E2).
+- **Quality Gates**: `bench_synth` RTCheck PASS (0), Timing PASS; pluginval strictness 8 via `validate` (see below). GuitarSet waveguide scores unchanged (log-L1 0.669 isolated, 0.769 phrases).
+
 ### v66.f
 - **pluginval running again** (macOS, v1.0.4 in `tools/pluginval/`, gitignored). CMake now also finds the binary inside `pluginval.app/Contents/MacOS`. It had not been run since about v47.f.
 - **State restoration fix**: discrete parameters (bools, choices) are snapped to their exact value after `replaceState()`. Before, an unquantised host value (e.g. 0.18 on Palm Mute) survived a state / project load because APVTS compares quantised values. pluginval failed this test depending on the seed.

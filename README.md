@@ -4,7 +4,7 @@ A physically modeled acoustic guitar synthesizer built with **JUCE** (C++17) and
 
 All sound is computed in real time from a simulation of the strings, bridge, and guitar body — **no samples or wavetables**.
 
-> **Current version:** v66.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
+> **Current version:** v67.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
 
 ---
 
@@ -48,9 +48,9 @@ See [01 — Architecture Overview](docs/wiki/01_architecture_overview.md) for th
 
 Strings can be **Nylon Classical** or **Steel Acoustic**, which switches density, Young's modulus, tension, and damping profiles. CPU figures are `bench_synth` means on an Apple M4 and include the body convolution.
 
-Measured tuning (v64.f, `render_audio`, one note per pitch):
-- **FDTD**: within ±1.3 cents from E2 to G5.
-- **Waveguide**: consistently sharp, from +2.9 cents at E2 down to +0.3 cents at C6.
+Measured tuning (`render_audio`, one note per pitch):
+- **FDTD** (v64.f): within ±1.3 cents from E2 to G5.
+- **Waveguide** (v67.f): sustain within ±0.05 cents from E2 to C6. In the first ~0.5 s, low notes read slightly flat (−2.3 cents at E2, −0.4 at E4) while the detuned vertical plane is still strong.
 
 See the known limitations in [wiki 02](docs/wiki/02_dsp_bilbao_fdtd.md) and [wiki 03](docs/wiki/03_dsp_waveguide.md).
 

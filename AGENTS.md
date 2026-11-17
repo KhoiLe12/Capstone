@@ -111,7 +111,10 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v66.f**
+### Current Version Status: **v67.f**
+- **v67.f**: waveguide tuning fixed. The +0.18 Hz polarization detune moved from the sustaining horizontal plane to the vertical plane; sustain is within ±0.05 cents (wiki 03).
+
+**v66.f:**
 - **v66.f**:
   - pluginval set up on macOS (`tools/pluginval/pluginval.app`, gitignored; CMake finds it).
   - Fixed state restoration of discrete parameters (pluginval failure) and host program-change notification.
