@@ -101,6 +101,9 @@ public:
     }
 
 private:
+    /** Lateral (H-polarization) saddle rocking efficiency relative to vertical drive. */
+    static constexpr float kHorizontalSaddleCoupling = 0.35f;
+
     Voice         voices[NUM_VOICES];
     BodyResonance body;
     SympatheticResonance sympathetic;

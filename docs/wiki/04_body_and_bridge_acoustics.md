@@ -13,6 +13,7 @@ At the guitar bridge, strings terminate on a bone or synthetic saddle. Energy tr
 2. **Horizontal Force ($F_H$ — Lateral Rocking)**:
    - Lateral transverse string slope: $\partial u_H / \partial x$ at $x = L$.
    - Drives rocking torque around the bridge center axis.
+   - `SynthEngine` sums $F_V + 0.35\,F_H$ (`kHorizontalSaddleCoupling`) into the single bridge drive that feeds the sympathetic bank and body. Before v62.f the $F_H$ term was dropped.
 
 ---
 
@@ -50,6 +51,12 @@ flowchart LR
 - **Gibson Dreadnought Acoustic IR**: Deep, resonant lower-bout cavity mode ($A_0 \approx 105\text{ Hz}$) and woody soundboard plate resonance ($T_1 \approx 200\text{ Hz}$). Wet gain calibrated to $0.82\times$.
 - **Classical Nylon IR**: Prominent 210 Hz soundboard bloom with warm, intimate treble rolloff. Wet gain calibrated to $0.62\times$ to avoid soft-limiter saturation.
 - Uses partitioned low-latency frequency-domain FFT convolution (zero latency in audio thread).
+- Both embedded IRs are short: 2048 frames at 48 kHz ($\approx 43\text{ ms}$). Classical Nylon is stereo; Gibson is mono, used on both channels.
+
+### Body Model Switching (v62.f)
+- Each IR has its own `juce::dsp::Convolution` engine, and **both are loaded in `init()` (`prepareToPlay`)**. Before v62.f a body change called `loadImpulseResponse()` + `prepare()` from `processBlock`, which allocated on the audio thread.
+- Only the audible engine is processed. On a switch, `setParameters()` clears the incoming body (`Convolution::reset()`, or zeroing the modal filters), unless it is still sounding as the outgoing half of an unfinished crossfade. Output then crossfades linearly over 20 ms; during the fade both bodies run.
+- `Convolution::reset()` only clears buffers (JUCE hands any retired engine to its background queue), so it is safe on the audio thread. The `bench_synth` event stress test checks this.
 
 ### 2. 32-Mode IRCAM Modalys Parallel Resonator Bank
 - Synthesizes the soundboard plate transfer function through 32 parallel second-order modal filters:

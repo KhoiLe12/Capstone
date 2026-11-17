@@ -77,84 +77,87 @@ void BodyResonance::init(float sr, int blockSize, float bodySize, float bodyDamp
     currentSize    = bodySize;
     currentDamping = bodyDamping;
 
-    convBufferL.assign(static_cast<size_t>(maxBlockSize), 0.f);
-    convBufferR.assign(static_cast<size_t>(maxBlockSize), 0.f);
+    const auto n = static_cast<size_t>(maxBlockSize);
+    dryBufferL.assign(n, 0.f);
+    dryBufferR.assign(n, 0.f);
+    for (int t = 0; t < NUM_IR_BODIES; ++t)
+    {
+        convBufferL[t].assign(n, 0.f);
+        convBufferR[t].assign(n, 0.f);
+    }
 
     // Wood viscosity & air dispersion filter (~10 kHz gentle cutoff)
-    const float cutoff = 10500.0f;
+    const float cutoff = std::min(10500.0f, 0.45f * sampleRate);
     airFilterBeta = std::exp(-2.0f * 3.14159265358979323846f * cutoff / sampleRate);
-    airFilterL = 0.0f;
-    airFilterR = 0.0f;
+
+    fadeSamplesTotal = std::max(1, static_cast<int>(0.020f * sampleRate));
+    fadeSamplesLeft  = 0;
+    previousBodyType = currentBodyType;
 
     updateFilters();
-    loadInternalIR(currentBodyType);
+    loadInternalIRs();
+    reset();
 }
 
-void BodyResonance::loadInternalIR(int type)
+void BodyResonance::loadInternalIRs()
 {
-    if (type == ClassicalNylonIR)
-    {
-        // Load as mono: JUCE sums both WAV channels into one symmetric IR,
-        // eliminating any L/R imbalance present in the source capture.
-        convolution.loadImpulseResponse(kClassicalNylonWav_data,
-                                        kClassicalNylonWav_size,
-                                        juce::dsp::Convolution::Stereo::no,
-                                        juce::dsp::Convolution::Trim::no,
-                                        0,
-                                        juce::dsp::Convolution::Normalise::no);
-        loadedIRType = ClassicalNylonIR;
-    }
-    else if (type == GibsonAcousticIR)
-    {
-        convolution.loadImpulseResponse(kGibsonAcousticWav_data,
-                                        kGibsonAcousticWav_size,
-                                        juce::dsp::Convolution::Stereo::yes,
-                                        juce::dsp::Convolution::Trim::no,
-                                        0,
-                                        juce::dsp::Convolution::Normalise::no);
-        loadedIRType = GibsonAcousticIR;
-    }
+    // Called from init() only (prepareToPlay / message thread). Never on the audio thread.
+    // Classical Nylon: loaded as mono so JUCE sums both WAV channels into one symmetric IR,
+    // eliminating any L/R imbalance present in the source capture.
+    convolutions[ClassicalNylonIR].loadImpulseResponse(kClassicalNylonWav_data,
+                                                       kClassicalNylonWav_size,
+                                                       juce::dsp::Convolution::Stereo::no,
+                                                       juce::dsp::Convolution::Trim::no,
+                                                       0,
+                                                       juce::dsp::Convolution::Normalise::no);
+    convolutions[GibsonAcousticIR].loadImpulseResponse(kGibsonAcousticWav_data,
+                                                       kGibsonAcousticWav_size,
+                                                       juce::dsp::Convolution::Stereo::yes,
+                                                       juce::dsp::Convolution::Trim::no,
+                                                       0,
+                                                       juce::dsp::Convolution::Normalise::no);
 
-    // Immediately call prepare() to force synchronous initialisation on the caller thread.
-    // This executes JUCE's background message queue popAll() synchronously, ensuring
-    // the convolution engine is fully constructed and active before audio begins.
+    // prepare() synchronously installs the pending IR so the engines are live before audio starts.
     juce::dsp::ProcessSpec spec;
     spec.sampleRate       = static_cast<double>(sampleRate);
-    spec.maximumBlockSize = static_cast<juce::uint32>(convBufferL.size());
+    spec.maximumBlockSize = static_cast<juce::uint32>(maxBlockSize);
     spec.numChannels      = 2;
-    convolution.prepare(spec);
-}
-
-void BodyResonance::loadCustomIR(const juce::File& file)
-{
-    if (file.existsAsFile())
-    {
-        convolution.loadImpulseResponse(file,
-                                        juce::dsp::Convolution::Stereo::yes,
-                                        juce::dsp::Convolution::Trim::no,
-                                        0,
-                                        juce::dsp::Convolution::Normalise::no);
-        loadedIRType = 99;
-
-        juce::dsp::ProcessSpec spec;
-        spec.sampleRate       = static_cast<double>(sampleRate);
-        spec.maximumBlockSize = static_cast<juce::uint32>(convBufferL.size());
-        spec.numChannels      = 2;
-        convolution.prepare(spec);
-    }
+    for (auto& conv : convolutions)
+        conv.prepare(spec);
 }
 
 void BodyResonance::setParameters(float bodySize, float bodyDamping, float bodyCoupling, int bodyType)
 {
+    // Audio-thread safe: only scalar state changes and zeroing of fixed-size modal state.
     currentCoupling = std::clamp(bodyCoupling, 0.0f, 1.0f);
 
+    bodyType = std::clamp(bodyType, 0, 2);
     if (bodyType != currentBodyType)
     {
-        currentBodyType = bodyType;
-        if (currentBodyType == ClassicalNylonIR || currentBodyType == GibsonAcousticIR)
+        // An engine that is still audible (the outgoing body of an unfinished crossfade) keeps its
+        // state; any other body was idle and is cleared before fading in, so no stale tail leaks.
+        const bool stillAudible = (fadeSamplesLeft > 0 && bodyType == previousBodyType);
+        if (!stillAudible)
         {
-            loadInternalIR(currentBodyType);
+            if (bodyType == ModalResonatorBank)
+            {
+                for (auto& f : filters)
+                    f.reset();
+                std::fill_n(crossDelayL, CROSS_DELAY_LEN, 0.f);
+                std::fill_n(crossDelayR, CROSS_DELAY_LEN, 0.f);
+            }
+            else
+            {
+                // juce::dsp::Convolution::reset() only clears buffers (any retired engine is
+                // handed to JUCE's background queue), so it is audio-thread safe.
+                convolutions[bodyType].reset();
+                airFilterL[bodyType] = 0.0f;
+                airFilterR[bodyType] = 0.0f;
+            }
         }
+        previousBodyType = currentBodyType;
+        currentBodyType  = bodyType;
+        fadeSamplesLeft  = fadeSamplesTotal;
     }
 
     if (std::abs(bodySize - currentSize) > 0.005f || std::abs(bodyDamping - currentDamping) > 0.005f)
@@ -187,71 +190,88 @@ void BodyResonance::updateFilters()
 
 void BodyResonance::processBlock(float* channelL, float* channelR, int numSamples) noexcept
 {
-    if (currentBodyType == ModalResonatorBank)
+    // Process in chunks of the pre-allocated scratch size so any host block size works
+    // without heap reallocations on the audio thread.
+    const int chunkSize = maxBlockSize;
+    int offset = 0;
+
+    while (offset < numSamples)
     {
-        // Modal Resonator Bank (IRCAM Modalys parallel biquad filters)
-        for (int i = 0; i < numSamples; ++i)
+        const int n = std::min(numSamples - offset, chunkSize);
+
+        std::copy(channelL + offset, channelL + offset + n, dryBufferL.begin());
+        std::copy(channelR + offset, channelR + offset + n, dryBufferR.begin());
+
+        // Only the audible IR engines run: the current body, plus the outgoing one during a crossfade.
+        for (int t = 0; t < NUM_IR_BODIES; ++t)
         {
-            float outL = 0.f;
-            float outR = 0.f;
-            processStereo(channelL[i], channelR[i], outL, outR);
-            channelL[i] = outL;
-            channelR[i] = outR;
-        }
-    }
-    else
-    {
-        // Physical acoustic radiation blend:
-        // currentCoupling = 1.0 -> 100% radiated acoustic soundboard (zero piezo quack)
-        // currentCoupling = 0.0 -> 100% direct bridge string (dry DI pickup)
-        const float dryFactor = std::clamp(1.0f - currentCoupling, 0.0f, 1.0f);
-        const float dryGain   = dryFactor * dryFactor;
+            if (t != currentBodyType && !(fadeSamplesLeft > 0 && t == previousBodyType))
+                continue;
 
-        // Level-balanced acoustic radiation blend:
-        // Classical Nylon IR has a pronounced 4.0x body resonance peak at 210 Hz, whereas Gibson
-        // Acoustic has a broader ~2.8x dreadnought spread. Scaling Nylon to 0.62 and Gibson to 0.82
-        // balances perceived volume perfectly and ensures multi-note chord peaks never clip the output stage.
-        const float irScale   = (currentBodyType == ClassicalNylonIR) ? 0.62f : 0.82f;
-        const float wetGain   = irScale * std::sqrt(std::clamp(currentCoupling, 0.0f, 1.0f));
+            std::copy(dryBufferL.begin(), dryBufferL.begin() + n, convBufferL[t].begin());
+            std::copy(dryBufferR.begin(), dryBufferR.begin() + n, convBufferR[t].begin());
 
-        // Process in chunks of convBufferL.size() to handle any arbitrary host block size
-        // without heap reallocations on the audio thread.
-        int remaining = numSamples;
-        int offset = 0;
-        const int chunkSize = static_cast<int>(convBufferL.size());
-
-        while (remaining > 0)
-        {
-            const int currentChunk = std::min(remaining, chunkSize);
-            std::copy(channelL + offset, channelL + offset + currentChunk, convBufferL.begin());
-            std::copy(channelR + offset, channelR + offset + currentChunk, convBufferR.begin());
-
-            float* channels[2] = { convBufferL.data(), convBufferR.data() };
-            juce::dsp::AudioBlock<float> block(channels, 2, static_cast<size_t>(currentChunk));
+            float* channels[2] = { convBufferL[t].data(), convBufferR[t].data() };
+            juce::dsp::AudioBlock<float> block(channels, 2, static_cast<size_t>(n));
             juce::dsp::ProcessContextReplacing<float> context(block);
-            convolution.process(context);
+            convolutions[t].process(context);
+        }
 
-            for (int i = 0; i < currentChunk; ++i)
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = dryBufferL[static_cast<size_t>(i)];
+            const float inR = dryBufferR[static_cast<size_t>(i)];
+
+            float outL = 0.f, outR = 0.f;
+            renderBody(currentBodyType, i, inL, inR, outL, outR);
+
+            if (fadeSamplesLeft > 0)
             {
-                channelL[offset + i] = dryGain * channelL[offset + i] + wetGain * convBufferL[static_cast<size_t>(i)];
-                channelR[offset + i] = dryGain * channelR[offset + i] + wetGain * convBufferR[static_cast<size_t>(i)];
+                float prevL = 0.f, prevR = 0.f;
+                renderBody(previousBodyType, i, inL, inR, prevL, prevR);
+                const float g = static_cast<float>(fadeSamplesLeft) / static_cast<float>(fadeSamplesTotal);
+                outL = (1.0f - g) * outL + g * prevL;
+                outR = (1.0f - g) * outR + g * prevR;
+                --fadeSamplesLeft;
             }
 
-            offset += currentChunk;
-            remaining -= currentChunk;
+            channelL[offset + i] = outL;
+            channelR[offset + i] = outR;
         }
 
-        // Apply acoustic wood viscosity & air dispersion filter (~10 kHz smooth roll-off)
-        // Gentle single-pole lowpass eliminates artificial high-frequency digital harshness
-        const float alpha = 1.0f - airFilterBeta;
-        for (int i = 0; i < numSamples; ++i)
-        {
-            airFilterL = alpha * channelL[i] + airFilterBeta * airFilterL;
-            channelL[i] = airFilterL;
-            airFilterR = alpha * channelR[i] + airFilterBeta * airFilterR;
-            channelR[i] = airFilterR;
-        }
+        offset += n;
     }
+}
+
+void BodyResonance::renderBody(int type, int i, float inL, float inR, float& outL, float& outR) noexcept
+{
+    if (type == ModalResonatorBank)
+    {
+        processStereo(inL, inR, outL, outR);
+        return;
+    }
+
+    // Physical acoustic radiation blend:
+    // currentCoupling = 1.0 -> 100% radiated acoustic soundboard (zero piezo quack)
+    // currentCoupling = 0.0 -> 100% direct bridge string (dry DI pickup)
+    const float dryFactor = 1.0f - currentCoupling;
+    const float dryGain   = dryFactor * dryFactor;
+
+    // Level-balanced radiation: Classical Nylon IR has a pronounced ~4x body peak at 210 Hz,
+    // Gibson a broader ~2.8x dreadnought spread; 0.62 vs 0.82 balances perceived level.
+    const float irScale = (type == ClassicalNylonIR) ? 0.62f : 0.82f;
+    const float wetGain = irScale * std::sqrt(currentCoupling);
+
+    const auto idx = static_cast<size_t>(i);
+    const float mixL = dryGain * inL + wetGain * convBufferL[type][idx];
+    const float mixR = dryGain * inR + wetGain * convBufferR[type][idx];
+
+    // Wood viscosity & air dispersion (~10 kHz single-pole roll-off)
+    const float alpha = 1.0f - airFilterBeta;
+    airFilterL[type] = alpha * mixL + airFilterBeta * airFilterL[type];
+    airFilterR[type] = alpha * mixR + airFilterBeta * airFilterR[type];
+    outL = airFilterL[type];
+    outR = airFilterR[type];
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +329,10 @@ void BodyResonance::reset() noexcept
     std::fill_n(crossDelayL, CROSS_DELAY_LEN, 0.f);
     std::fill_n(crossDelayR, CROSS_DELAY_LEN, 0.f);
     crossDelayIdx = 0;
-    airFilterL = 0.0f;
-    airFilterR = 0.0f;
-    convolution.reset();
+    std::fill_n(airFilterL, NUM_IR_BODIES, 0.0f);
+    std::fill_n(airFilterR, NUM_IR_BODIES, 0.0f);
+    fadeSamplesLeft = 0;
+    previousBodyType = currentBodyType;
+    for (auto& conv : convolutions)
+        conv.reset();
 }

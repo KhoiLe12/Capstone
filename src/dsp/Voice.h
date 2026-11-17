@@ -203,6 +203,19 @@ private:
     uint32_t pickClickRng          = 0xC0FFEE17u; ///< Xorshift32 PRNG for organic roughness micro-texture
 
     static float midiToFreq(int note) noexcept;
+
+    /**
+     * Physical FDTD string parameters for a note on physical string s (shared by picked notes and
+     * legato so both get identical tuning, damping, fret clearance and coupling). Also records the
+     * note's open / palm damping and saddle brightness for later mute changes and legato.
+     */
+    FdtdString::StringParams makeFdtdParams(int note, int s, float stiffness, float decay, float brightness) noexcept;
+    float fdtdOpenSigma0 = 1.0f;
+    float fdtdOpenSigma1 = 4.5e-4f;
+    float fdtdPalmSigma0 = 10.5f;
+    float fdtdPalmSigma1 = 3.2e-3f;
+    float fdtdBrightness = 0.60f;
+
     static constexpr float kSilenceThreshold = 1e-9f;
 
     static constexpr int kMaxExciterLength = 2216;

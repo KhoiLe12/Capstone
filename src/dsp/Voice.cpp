@@ -43,20 +43,6 @@ void Voice::noteOn(int note, float vel,
     currentMuteMode = muteMode;
     currentDecay = decay;
 
-    // 6 acoustic guitar strings: E2 (40), A2 (45), D3 (50), G3 (55), B3 (59), E4 (64)
-    static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
-
-    // Nylon string geometries (radii and inner flexible bending core radii)
-    static constexpr float nylonRadii[6]        = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
-    static constexpr float nylonBendingRadii[6] = { 0.00018f, 0.00019f, 0.00020f, 0.00026f, 0.00024f, 0.00020f };
-
-    // Steel string geometries (standard light acoustic set 12-53):
-    // Strings 0, 1, 2, 3: phosphor bronze / nickel wound on hex steel core
-    // Strings 4, 5: plain steel wire
-    static constexpr float steelRadii[6]        = { 0.00067f, 0.00053f, 0.00041f, 0.00030f, 0.00020f, 0.00015f };
-    static constexpr float steelBendingRadii[6] = { 0.00018f, 0.00018f, 0.00018f, 0.00016f, 0.00020f, 0.00015f };
-    static constexpr float steelDensities[6]    = { 6200.0f,  6400.0f,  6600.0f,  6800.0f,  7850.0f,  7850.0f };
-
     const bool isSteel = (stringMaterial == 1);
 
     int s = stringIdx;
@@ -171,82 +157,26 @@ void Voice::noteOn(int note, float vel,
 
     if (engineType == EngineType::BilbaoFdtd)
     {
-        const int fret = std::max(0, std::min(22, note - openMidi[s]));
-        const float fretLength = 0.65f * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
-        const float targetFreq = midiToFreq(note);
-
-        FdtdString::StringParams p;
-        p.fretNumber = fret;
-        p.L = fretLength;
-        p.r = isSteel ? steelRadii[s] : nylonRadii[s];
-        p.r_stiffness = isSteel ? steelBendingRadii[s] : nylonBendingRadii[s];
-        p.rho = isSteel ? steelDensities[s] : 1140.0f;
-        // Nylon Young's modulus E ~ 1.2 GPa, Steel E ~ 200 GPa:
-        p.E = isSteel ? (2.0e11f * (0.35f + 0.85f * stiffness))
-                      : (1.2e9f  * (0.15f + 1.20f * stiffness));
-
-        const float A = 3.14159265358979323846f * p.r * p.r;
-        const float I = 3.14159265358979323846f * p.r_stiffness * p.r_stiffness * p.r_stiffness * p.r_stiffness * 0.25f;
-        const float rhoA = p.rho * A;
-        const float EI = p.E * I;
-
-        // Discrete grid numerical dispersion compensation across physical strings (0..5)
-        static constexpr float centsOffsets[6] = { 1.5f, 1.5f, 1.0f, 0.8f, 0.5f, 0.0f };
-        const float tunedFreq = targetFreq * std::pow(2.0f, -centsOffsets[s] / 1200.0f);
-
-        // f = (1 / 2L) * sqrt(T0/rhoA + pi^2 EI / rhoA L^2)
-        // -> T0 = rhoA * (2*L*f)^2 - pi^2 * EI / L^2
-        float T0 = rhoA * std::pow(2.0f * p.L * tunedFreq, 2.0f) - (3.14159265f * 3.14159265f * EI) / (p.L * p.L);
-        if (T0 < 5.0f) T0 = 5.0f;
-        p.T0 = T0;
-
         // Dynamic velocity-dependent brightness with humanization micro-variation:
         const float humanJitter = 1.0f + 0.03f * humanRand();
         const float pickJitter  = 0.012f * humanRand();
         const float humanAngle  = humanRand();
         float effBrightness = std::clamp(brightness * (0.35f + 0.65f * clampedVel) * humanJitter, 0.05f, 1.0f);
 
-        // Register-dependent acoustic decay and compliance:
-        const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
-        const float registerDecayScale = std::pow(fRatio, isSteel ? 0.65f : 0.80f);
-
-        // Fretboard Positional Damping Profile:
-        const float nutVsFretScale = (fret == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(fret));
-        float effSigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - decay)) : (0.75f + 1.25f * (1.0f - decay)))
-                          * registerDecayScale * nutVsFretScale;
-
-        const float trebleFactor = std::clamp((targetFreq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
-        const float decaySigma1Scale = (1.0f + 0.6f * (1.0f - decay));
-        float effSigma1 = (isSteel ? (3.5e-4f + 1.8e-3f * trebleFactor)
-                                   : (4.5e-4f + 2.5e-3f * trebleFactor)) * decaySigma1Scale;
         float effDispScale = 1.0f;
-
         if (muteMode == KarplusStrong::MuteMode::Palm)
         {
-            // Palm muting: fleshy palm heel rests on bridge saddles.
-            // High sigma1 viscoelastic absorption rapidly dissipates high partials (>350 Hz),
-            // while allowing the low fundamental and 2nd harmonic (80-250 Hz) to produce
-            // a tight, punchy acoustic "chug" lasting ~75-110 ms (v55.f).
-            effSigma0 = (isSteel ? 9.5f : 11.0f) + 8.5f * (1.0f - decay);
-            effSigma1 = std::max(2.8e-3f, effSigma1 * 4.0f);
+            // Palm muting: fleshy palm heel cushions the pluck and darkens the saddle.
             effDispScale = 0.90f;
             effBrightness *= 0.50f;
         }
 
-        p.sigma0 = effSigma0;
-        p.sigma1 = effSigma1;
-        p.brightness = effBrightness;
-
-        // Longitudes and tension bloom
-        p.longitudinalAttack = isSteel ? 0.35f : 0.15f;
-        p.phantomCoupling    = isSteel ? 0.30f : 0.20f;
-
-        // Physical wound bass string vs plain treble factor:
-        p.woundFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.22f) : 0.0f;
-
-        // Calibrated guitar fret action clearance (1.3 mm bass down to 1.0 mm treble)
-        p.m0 = -0.0010f - 0.0003f * (1.0f - static_cast<float>(s) / 5.0f);
-        p.b0 = -0.0028f;
+        FdtdString::StringParams p = makeFdtdParams(note, s, stiffness, decay, effBrightness);
+        if (muteMode == KarplusStrong::MuteMode::Palm)
+        {
+            p.sigma0 = fdtdPalmSigma0;
+            p.sigma1 = fdtdPalmSigma1;
+        }
 
         fdtdString.init(sampleRate, p);
 
@@ -388,6 +318,84 @@ void Voice::noteOn(int note, float vel,
     string.trigger(exciterScratch, exciterLen, velocity);
 }
 
+FdtdString::StringParams Voice::makeFdtdParams(int note, int s, float stiffness, float decay, float brightness) noexcept
+{
+    static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
+
+    // Nylon string geometries (radii and inner flexible bending core radii)
+    static constexpr float nylonRadii[6]        = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
+    static constexpr float nylonBendingRadii[6] = { 0.00018f, 0.00019f, 0.00020f, 0.00026f, 0.00024f, 0.00020f };
+
+    // Steel string geometries (standard light acoustic set 12-53):
+    // Strings 0..3: phosphor bronze wound on hex steel core; strings 4, 5: plain steel wire
+    static constexpr float steelRadii[6]        = { 0.00067f, 0.00053f, 0.00041f, 0.00030f, 0.00020f, 0.00015f };
+    static constexpr float steelBendingRadii[6] = { 0.00018f, 0.00018f, 0.00018f, 0.00016f, 0.00020f, 0.00015f };
+    static constexpr float steelDensities[6]    = { 6200.0f,  6400.0f,  6600.0f,  6800.0f,  7850.0f,  7850.0f };
+
+    // Discrete grid numerical dispersion compensation across physical strings (0..5)
+    static constexpr float centsOffsets[6] = { 1.5f, 1.5f, 1.0f, 0.8f, 0.5f, 0.0f };
+
+    s = std::clamp(s, 0, 5);
+    const bool isSteel = (stringMaterial == 1);
+    const float targetFreq = midiToFreq(note);
+    const int fret = std::clamp(note - openMidi[s], 0, 22);
+
+    FdtdString::StringParams p;
+    p.fretNumber  = fret;
+    p.L           = 0.65f * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
+    p.f0          = targetFreq;
+    p.r           = isSteel ? steelRadii[s] : nylonRadii[s];
+    p.r_stiffness = isSteel ? steelBendingRadii[s] : nylonBendingRadii[s];
+    p.rho         = isSteel ? steelDensities[s] : 1140.0f;
+    // Nylon Young's modulus E ~ 1.2 GPa, Steel E ~ 200 GPa:
+    p.E = isSteel ? (2.0e11f * (0.35f + 0.85f * stiffness))
+                  : (1.2e9f  * (0.15f + 1.20f * stiffness));
+
+    const float A = 3.14159265358979323846f * p.r * p.r;
+    const float I = 3.14159265358979323846f * p.r_stiffness * p.r_stiffness * p.r_stiffness * p.r_stiffness * 0.25f;
+    const float rhoA = p.rho * A;
+    const float EI = p.E * I;
+
+    // Stiff-string tuning: f = (1 / 2L) * sqrt(T0/rhoA + pi^2 EI / (rhoA L^2))
+    //   -> T0 = rhoA * (2*L*f)^2 - pi^2 * EI / L^2
+    const float tunedFreq = targetFreq * std::pow(2.0f, -centsOffsets[s] / 1200.0f);
+    p.T0 = std::max(5.0f, rhoA * std::pow(2.0f * p.L * tunedFreq, 2.0f)
+                          - (3.14159265f * 3.14159265f * EI) / (p.L * p.L));
+
+    // Register-dependent acoustic decay with fretboard positional damping (open nut rings longer)
+    const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
+    const float registerDecayScale = std::pow(fRatio, isSteel ? 0.65f : 0.80f);
+    const float nutVsFretScale = (fret == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(fret));
+    fdtdOpenSigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - decay)) : (0.75f + 1.25f * (1.0f - decay)))
+                     * registerDecayScale * nutVsFretScale;
+
+    const float trebleFactor = std::clamp((targetFreq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
+    const float decaySigma1Scale = 1.0f + 0.6f * (1.0f - decay);
+    fdtdOpenSigma1 = (isSteel ? (3.5e-4f + 1.8e-3f * trebleFactor)
+                              : (4.5e-4f + 2.5e-3f * trebleFactor)) * decaySigma1Scale;
+
+    // Palm mute: tight ~75-110 ms chug; high sigma1 strips partials above ~350 Hz
+    fdtdPalmSigma0 = (isSteel ? 9.5f : 11.0f) + 8.5f * (1.0f - decay);
+    fdtdPalmSigma1 = std::max(2.8e-3f, fdtdOpenSigma1 * 4.0f);
+
+    p.sigma0     = fdtdOpenSigma0;
+    p.sigma1     = fdtdOpenSigma1;
+    p.brightness = brightness;
+    fdtdBrightness = brightness;
+
+    // Longitudinal snap and tension bloom
+    p.longitudinalAttack = isSteel ? 0.35f : 0.15f;
+    p.phantomCoupling    = isSteel ? 0.30f : 0.20f;
+
+    // Wound bass string vs plain treble factor
+    p.woundFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.22f) : 0.0f;
+
+    // Calibrated fret action clearance (1.3 mm bass down to 1.0 mm treble)
+    p.m0 = -0.0010f - 0.0003f * (1.0f - static_cast<float>(s) / 5.0f);
+    p.b0 = -0.0028f;
+    return p;
+}
+
 void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, float stiffness) noexcept
 {
     midiNote = newNote;
@@ -399,7 +407,6 @@ void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, fl
     active = true;
 
     const float freq = midiToFreq(midiNote);
-    const bool isSteel = (stringMaterial == 1);
     int s = physicalStringIndex;
     if (s < 0 || s > 5)
     {
@@ -423,53 +430,14 @@ void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, fl
     }
     else
     {
-        // Compute new FDTD parameters for the fretted string length
-        static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
-        static constexpr float nylonRadii[6]        = { 0.00055f, 0.00048f, 0.00042f, 0.00038f, 0.00034f, 0.00028f };
-        static constexpr float nylonBendingRadii[6] = { 0.00018f, 0.00019f, 0.00020f, 0.00026f, 0.00024f, 0.00020f };
-        static constexpr float steelRadii[6]        = { 0.00067f, 0.00053f, 0.00041f, 0.00030f, 0.00020f, 0.00015f };
-        static constexpr float steelBendingRadii[6] = { 0.00018f, 0.00018f, 0.00018f, 0.00016f, 0.00020f, 0.00015f };
-        static constexpr float steelDensities[6]    = { 6200.0f,  6400.0f,  6600.0f,  6800.0f,  7850.0f,  7850.0f };
-
-        FdtdString::StringParams p;
-        p.fretNumber = std::max(0, newNote - openMidi[s]);
-        p.L          = 0.65f * std::pow(2.0f, -static_cast<float>(p.fretNumber) / 12.0f);
-        p.f0         = freq;
-        p.r          = isSteel ? steelRadii[s] : nylonRadii[s];
-        p.r_stiffness = isSteel ? steelBendingRadii[s] : nylonBendingRadii[s];
-        p.rho        = isSteel ? steelDensities[s] : 1140.0f;
-        p.E          = isSteel ? (2.0e11f * (0.35f + 0.85f * stiffness))
-                               : (1.2e9f  * (0.15f + 1.20f * stiffness));
-
-        const float A = 3.14159265358979323846f * p.r * p.r;
-        const float I = 3.14159265358979323846f * p.r_stiffness * p.r_stiffness * p.r_stiffness * p.r_stiffness * 0.25f;
-        const float rhoA = p.rho * A;
-        const float EI = p.E * I;
-
-        // Discrete grid numerical dispersion compensation across physical strings (0..5)
-        static constexpr float centsOffsets[6] = { 1.5f, 1.5f, 1.0f, 0.8f, 0.5f, 0.0f };
-        const float tunedFreq = freq * std::pow(2.0f, -centsOffsets[s] / 1200.0f);
-
-        // Compute string tension dynamically to ensure EXACT pitch tracking matching noteOn:
-        float T0 = rhoA * std::pow(2.0f * p.L * tunedFreq, 2.0f) - (3.14159265f * 3.14159265f * EI) / (p.L * p.L);
-        if (T0 < 5.0f) T0 = 5.0f;
-        p.T0 = T0;
-
-        // Register-dependent acoustic decay and compliance (matching noteOn):
-        const float fRatio = std::clamp(freq / 82.4f, 1.0f, 16.0f);
-        const float registerDecayScale = std::pow(fRatio, isSteel ? 0.65f : 0.80f);
-        const float nutVsFretScale = (p.fretNumber == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(p.fretNumber));
-        p.sigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - currentDecay)) : (0.75f + 1.25f * (1.0f - currentDecay)))
-                   * registerDecayScale * nutVsFretScale;
-
-        const float trebleFactor = std::clamp((freq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
-        const float decaySigma1Scale = (1.0f + 0.6f * (1.0f - currentDecay));
-        p.sigma1 = (isSteel ? (3.5e-4f + 1.8e-3f * trebleFactor)
-                            : (4.5e-4f + 2.5e-3f * trebleFactor)) * decaySigma1Scale;
-
-        p.brightness = 0.60f;
-        p.woundFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.22f) : 0.0f;
-
+        // Same physical parameter derivation as a picked note on this string, keeping the
+        // note's saddle brightness so the timbre does not jump on the fret change.
+        FdtdString::StringParams p = makeFdtdParams(newNote, s, stiffness, currentDecay, fdtdBrightness);
+        if (currentMuteMode == KarplusStrong::MuteMode::Palm)
+        {
+            p.sigma0 = fdtdPalmSigma0;
+            p.sigma1 = fdtdPalmSigma1;
+        }
         fdtdString.legatoTransition(p, newVelocity, isHammerOn);
     }
 }
@@ -509,7 +477,7 @@ void Voice::setMuteMode(KarplusStrong::MuteMode mode) noexcept
 
     if (mode == KarplusStrong::MuteMode::Palm)
     {
-        fdtdString.setDamping(10.5f, 3.2e-3f);
+        fdtdString.setDamping(fdtdPalmSigma0, fdtdPalmSigma1);
     }
     else if (mode == KarplusStrong::MuteMode::Full)
     {
@@ -520,7 +488,8 @@ void Voice::setMuteMode(KarplusStrong::MuteMode mode) noexcept
     }
     else
     {
-        fdtdString.setDamping(0.75f + 1.25f * (1.0f - currentDecay));
+        // Restore the open-string damping computed for this note (register, material, fret)
+        fdtdString.setDamping(fdtdOpenSigma0, fdtdOpenSigma1);
     }
 }
 

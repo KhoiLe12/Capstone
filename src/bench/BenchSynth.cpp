@@ -286,6 +286,89 @@ static BenchmarkResult runScenario(
     return res;
 }
 
+// ---------------------------------------------------------------------------
+// Event Stress RTCheck: every MIDI/parameter event path runs INSIDE the
+// guarded region (note-ons on every string incl. Drop-D, legato hammer-ons and
+// pull-offs that grow the FDTD grid, keyswitches, strum, engine / material /
+// body model switches). Returns the number of audio-thread heap operations.
+// ---------------------------------------------------------------------------
+static size_t runEventStressScenario(float sampleRate, int blockSize)
+{
+    SynthEngine engine;
+    engine.init(sampleRate, blockSize);
+    engine.paramEngineType = 1.0f;
+    engine.paramBodyType   = 0.0f;
+
+    std::vector<float> bufferL(static_cast<size_t>(blockSize), 0.0f);
+    std::vector<float> bufferR(static_cast<size_t>(blockSize), 0.0f);
+
+    // Blocks per ~10 ms so the legato onset-age guard (160 samples) is satisfied at any block size
+    const int step = std::max(1, static_cast<int>(0.010f * sampleRate) / blockSize + 1);
+
+    g_realtimeAllocCount.store(0);
+    g_realtimeAllocBytes.store(0);
+    g_realtimeFreeCount.store(0);
+
+    g_realtimeThreadActive = true;
+    int block = 0;
+    auto run = [&](int numBlocks) {
+        for (int b = 0; b < numBlocks; ++b, ++block)
+            engine.process(bufferL.data(), bufferR.data(), blockSize);
+    };
+
+    for (int engineType = 1; engineType >= 0; --engineType)
+    {
+        engine.paramEngineType = static_cast<float>(engineType);
+        for (int material = 0; material <= 1; ++material)
+        {
+            engine.paramStringMaterial = static_cast<float>(material);
+            for (int bodyType = 0; bodyType <= 2; ++bodyType)
+            {
+                engine.paramBodyType = static_cast<float>(bodyType);
+
+                // Lowest notes on every string (largest FDTD grids), incl. Drop-D D2
+                for (int note : { 38, 45, 50, 55, 59, 64, 86 })
+                {
+                    engine.noteOn(note, 0.9f);
+                    run(1);
+                }
+                run(step);
+                for (int note : { 38, 45, 50, 55, 59, 64, 86 })
+                    engine.noteOff(note);
+                run(step * 4);
+
+                // Legato: start fretted (small grid), pull off to open / Drop-D (grid grows), hammer back
+                engine.noteOn(43, 0.8f);  run(step * 2);
+                engine.noteOn(40, 0.8f);  run(step * 2);   // pull-off G2 -> E2
+                engine.noteOn(38, 0.8f);  run(step * 2);   // pull-off E2 -> D2
+                engine.noteOn(45, 0.8f);  run(step * 2);   // hammer-on D2 -> A2
+                engine.noteOff(45);       run(step * 4);
+
+                // Keyswitches: palm mute, choke / dead notes, auto-strum
+                engine.noteOn(SynthEngine::KEYSWITCH_PALM_MUTE, 0.8f);
+                engine.noteOn(40, 0.8f);  run(step);
+                engine.noteOff(SynthEngine::KEYSWITCH_PALM_MUTE); run(step);
+                engine.noteOn(SynthEngine::KEYSWITCH_FULL_MUTE, 0.8f);
+                engine.noteOn(52, 0.8f);  run(step);
+                engine.noteOff(SynthEngine::KEYSWITCH_FULL_MUTE);
+                engine.noteOff(40); engine.noteOff(52);
+                for (int note : { 40, 47, 52, 55, 59, 64 }) engine.noteOn(note, 0.8f);
+                engine.noteOn(SynthEngine::KEYSWITCH_STRUM_8TH, 0.8f); run(step * 8);
+                engine.noteOff(SynthEngine::KEYSWITCH_STRUM_8TH);
+                for (int note : { 40, 47, 52, 55, 59, 64 }) engine.noteOff(note);
+                run(step * 2);
+
+                // Host "All Notes Off" path (PluginProcessor calls SynthEngine::reset on the audio thread)
+                engine.noteOn(40, 0.8f); run(step);
+                engine.reset();          run(step);
+            }
+        }
+    }
+    g_realtimeThreadActive = false;
+
+    return g_realtimeAllocCount.load() + g_realtimeFreeCount.load();
+}
+
 static void printHeader(float sampleRate)
 {
     std::cout << "\n"
@@ -538,8 +621,7 @@ static void printMultiTrackRow(const MultiTrackResult& r)
 
 int main(int argc, char* argv[])
 {
-    (void)argc;
-    (void)argv;
+    const bool eventsOnly = (argc > 1 && std::string(argv[1]) == "--events-only");
 
     std::cout << "Starting Hybrid Synth DSP Benchmarks & Multi-Track Stress Suite...\n";
 
@@ -559,6 +641,7 @@ int main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     for (float sr : sampleRates)
     {
+        if (eventsOnly) break;
         printHeader(sr);
 
         for (int bs : blockSizes)
@@ -582,6 +665,29 @@ int main(int argc, char* argv[])
             }
             std::cout << "---------------------------------------------------------------------------------------------------------\n";
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // PART 1b: Event Stress RTCheck across host sample rates
+    // -----------------------------------------------------------------------
+    std::cout << "\n EVENT STRESS RTCHECK (note-ons, legato, keyswitches, strum, engine/material/body switches)\n"
+              << "---------------------------------------------------------------------------------------------------------\n";
+    for (float sr : { 44100.0f, 48000.0f, 88200.0f, 96000.0f, 192000.0f })
+    {
+        for (int bs : { 32, 512 })
+        {
+            const size_t heapOps = runEventStressScenario(sr, bs);
+            std::cout << "  " << std::setw(6) << static_cast<int>(sr) << " Hz  block " << std::setw(4) << bs
+                      << "  : " << (heapOps == 0 ? "PASS (0)" : "FAIL (" + std::to_string(heapOps) + " heap ops)") << "\n";
+            if (heapOps != 0) allRtPassed = false;
+        }
+    }
+    std::cout << "---------------------------------------------------------------------------------------------------------\n";
+
+    if (eventsOnly)
+    {
+        std::cout << " [RTCheck Result]  : " << (allRtPassed ? "PASS (0)" : "FAILED") << " (event stress only)\n";
+        return allRtPassed ? 0 : 1;
     }
 
     // -----------------------------------------------------------------------

@@ -111,7 +111,14 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v61.f**
+### Current Version Status: **v62.f**
+- **v62.f DSP correctness & real-time safety pass**:
+  - FDTD H-polarization now reaches the output.
+  - Body model switching and high-sample-rate FDTD grids no longer allocate on the audio thread.
+  - FDTD legato rebuilds all grid-derived state.
+  - New `bench_synth --events-only` event stress RTCheck. Details in [`07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
+
+**v61.f:**
 - **Official GuitarSet Dataset STFT Benchmark & Comparative Evaluation**: Integrated official GuitarSet dataset (ISMIR 2018, NYU MARL / Queen Mary University of London) directly into automated synthesis verification pipeline ([`benchmarks/guitarset_eval.py`](benchmarks/guitarset_eval.py)).
 - **Dual-Paradigm Acoustic Evaluation**:
   - *Isolated Acoustic Pluck & Cadence Extraction*: Clean ringing plucks (C3, Bb3) and cadence chords sliced from real condenser mic recordings (`audio_mono-mic`) using JAMS millisecond annotations.

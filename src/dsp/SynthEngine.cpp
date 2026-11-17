@@ -525,8 +525,11 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples) noexce
             activeVoices++;
             float fV = 0.0f, fH = 0.0f;
             voices[v].tickPolar(fV, fH);
-            // All string fundamentals are 100% centered (constant spatial location for every note)
-            totalForceV += fV;
+            // Vertical (soundboard pumping) drives the saddle directly; the horizontal polarization
+            // couples through lateral saddle rocking at ~35% (same ratio as the waveguide engine).
+            // The slightly detuned H plane is what produces the natural two-stage decay and beating.
+            // All string fundamentals are centered (constant spatial location for every note).
+            totalForceV += fV + kHorizontalSaddleCoupling * fH;
         }
 
         if (i < CLICK_BUF_SIZE)

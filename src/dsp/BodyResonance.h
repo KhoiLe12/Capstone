@@ -62,10 +62,6 @@ public:
 
     float getBodyCoupling() const noexcept { return currentCoupling; }
     int   getBodyType() const noexcept     { return currentBodyType; }
-    int   getIRSize() const noexcept       { return convolution.getCurrentIRSize(); }
-
-    /** Load a custom external WAV impulse response file. */
-    void loadCustomIR(const juce::File& file);
 
 private:
     BiquadFilter filters[N_MODES];
@@ -82,19 +78,32 @@ private:
     float crossDelayR[CROSS_DELAY_LEN] = {};
     int   crossDelayIdx = 0;
 
-    // Wood viscosity & high-frequency air dispersion filter (gentle 10 kHz acoustic roll-off)
-    float airFilterL = 0.0f;
-    float airFilterR = 0.0f;
+    // Wood viscosity & high-frequency air dispersion filter (gentle 10 kHz acoustic roll-off),
+    // one state pair per IR body so the two can run side by side during a crossfade.
+    static constexpr int NUM_IR_BODIES = 2;
+    float airFilterL[NUM_IR_BODIES] = {};
+    float airFilterR[NUM_IR_BODIES] = {};
     float airFilterBeta = 0.0f;
 
-    // Zero-latency partitioned stereo convolution engine
-    juce::dsp::Convolution convolution { juce::dsp::Convolution::Latency { 0 } };
-    int loadedIRType = -1;
+    // Zero-latency partitioned stereo convolution, one engine per embedded body IR.
+    // Both IRs are loaded in init() (prepareToPlay), so switching body model never loads or
+    // allocates on the audio thread. Only the audible engine(s) are processed each block.
+    juce::dsp::Convolution convolutions[NUM_IR_BODIES] {
+        juce::dsp::Convolution { juce::dsp::Convolution::Latency { 0 } },
+        juce::dsp::Convolution { juce::dsp::Convolution::Latency { 0 } }
+    };
 
-    // Scratch buffers for block convolution
-    std::vector<float> convBufferL;
-    std::vector<float> convBufferR;
+    // Scratch buffers: dry input copy + one wet buffer pair per IR engine
+    std::vector<float> dryBufferL, dryBufferR;
+    std::vector<float> convBufferL[NUM_IR_BODIES];
+    std::vector<float> convBufferR[NUM_IR_BODIES];
+
+    // Body model crossfade (~20 ms) when the body type changes
+    int   previousBodyType = 0;
+    int   fadeSamplesTotal = 960;
+    int   fadeSamplesLeft  = 0;
 
     void updateFilters();
-    void loadInternalIR(int type);
+    void loadInternalIRs();
+    void renderBody(int type, int i, float inL, float inR, float& outL, float& outR) noexcept;
 };

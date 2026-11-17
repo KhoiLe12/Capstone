@@ -72,167 +72,34 @@ public:
 
     FdtdString() = default;
 
-    /** Configure spatial grid, stability bounds, and allocate buffers. */
+    /** Lowest fundamental the grid capacity must hold (Drop-D D2 = 73.4 Hz, with margin). */
+    static constexpr float kMinStringFreqHz = 70.0f;
+
+    /**
+     * Configure for a sample rate with default parameters and pre-allocate all buffers.
+     * Call from prepareToPlay / constructors only (may allocate).
+     */
     void init(float sampleRateHz)
     {
         init(sampleRateHz, StringParams());
     }
 
+    /**
+     * Configure grid for new string parameters. Allocates only if the sample rate requires more
+     * capacity than previously reserved, so after init(sampleRate) it is audio-thread safe.
+     */
     void init(float sampleRateHz, const StringParams& params)
     {
         fs = sampleRateHz;
         k  = 1.0f / fs;
-        p  = params;
-        initialSigma1 = p.sigma1;
-
-        // Derived physical constants
-        const float A = 3.14159265358979323846f * p.r * p.r;
-        const float rBending = (p.r_stiffness > 0.0f) ? p.r_stiffness : p.r;
-        const float I = 3.14159265358979323846f * rBending * rBending * rBending * rBending * 0.25f;
-        rhoA = p.rho * A;
-        EI   = p.E * I;
-        EA   = p.E * A;
-
-        // H-polarization tension:
-        // H vibrates at a slightly higher tension so its frequency is offset from V,
-        // producing the natural shimmer/beating (0.1..1.0 Hz) heard on real acoustic guitar.
-        // T0_H = T0_V * (1 + delta)^2 => f_H = f_V * (1 + delta)
-        const float delta = std::clamp(p.polarizationSplit, 0.0f, 0.010f);
-        T0_H = p.T0 * (1.0f + delta) * (1.0f + delta);
-
-        // Stability condition (Bilbao DAFx24 Eq. 47):
-        // Must hold for BOTH polarizations, so use max(T0, T0_H):
-        const float maxT0 = std::max(p.T0, T0_H);
-        const float term1 = (maxT0 * k) / rhoA + 4.0f * p.sigma1;
-        const float hMinSq = (k * 0.5f) * (term1 + std::sqrt(term1 * term1 + (16.0f * EI) / rhoA));
-        const float hMin   = std::sqrt(hMinSq);
-
-        // Grid spacing h: Choose integer N = floor(L / h_min)
-        N = static_cast<int>(std::floor(p.L / hMin));
-        if (N < 10) N = 10;
-        h = p.L / static_cast<float>(N);
-
-        // Ensure vector capacity is pre-reserved to eliminate audio thread heap allocations
-        constexpr size_t kMaxGridSize = 512;
-        if (u_next.capacity() < kMaxGridSize)
-        {
-            u_next.reserve(kMaxGridSize);
-            u_curr.reserve(kMaxGridSize);
-            u_prev.reserve(kMaxGridSize);
-            Du.reserve(kMaxGridSize);
-            D2u.reserve(kMaxGridSize);
-            Du_prev.reserve(kMaxGridSize);
-            kn.reserve(kMaxGridSize);
-            v_lin.reserve(kMaxGridSize);
-            Bu_plus_Cu.reserve(kMaxGridSize);
-            gradVB.reserve(kMaxGridSize);
-            gB.reserve(kMaxGridSize);
-            gradVF.reserve(kMaxGridSize);
-            gF.reserve(kMaxGridSize);
-            gFG.reserve(kMaxGridSize);
-            b_string.reserve(kMaxGridSize);
-            fretIndices.reserve(32);
-            fretAlpha.reserve(32);
-            // H-polarization scratch
-            u_next_H.reserve(kMaxGridSize);
-            u_curr_H.reserve(kMaxGridSize);
-            u_prev_H.reserve(kMaxGridSize);
-            Du_H.reserve(kMaxGridSize);
-            D2u_H.reserve(kMaxGridSize);
-            Du_prev_H.reserve(kMaxGridSize);
-            saved_curr.reserve(kMaxGridSize);
-            saved_prev.reserve(kMaxGridSize);
-        }
-
-        // States
-        N_pts = N - 1; // interior points
-        u_next.assign(static_cast<size_t>(N_pts), 0.0f);
-        u_curr.assign(static_cast<size_t>(N_pts), 0.0f);
-        u_prev.assign(static_cast<size_t>(N_pts), 0.0f);
-
-        // Pre-allocate scratch vectors for zero heap allocations in tick()
-        Du.assign(static_cast<size_t>(N_pts), 0.0f);
-        D2u.assign(static_cast<size_t>(N_pts), 0.0f);
-        Du_prev.assign(static_cast<size_t>(N_pts), 0.0f);
-        kn.assign(static_cast<size_t>(N_pts), 0.0f);
-        v_lin.assign(static_cast<size_t>(N_pts), 0.0f);
-        Bu_plus_Cu.assign(static_cast<size_t>(N_pts), 0.0f);
-        gradVB.assign(static_cast<size_t>(N_pts), 0.0f);
-        gB.assign(static_cast<size_t>(N_pts), 0.0f);
-        gradVF.assign(static_cast<size_t>(N_pts), 0.0f);
-        gF.assign(static_cast<size_t>(N_pts), 0.0f);
-        gFG.assign(static_cast<size_t>(N_pts), 0.0f);
-        b_string.assign(static_cast<size_t>(N_pts), 0.0f);
-
-        // H-polarization state buffers
-        u_next_H.assign(static_cast<size_t>(N_pts), 0.0f);
-        u_curr_H.assign(static_cast<size_t>(N_pts), 0.0f);
-        u_prev_H.assign(static_cast<size_t>(N_pts), 0.0f);
-        Du_H.assign(static_cast<size_t>(N_pts), 0.0f);
-        D2u_H.assign(static_cast<size_t>(N_pts), 0.0f);
-        Du_prev_H.assign(static_cast<size_t>(N_pts), 0.0f);
-        dcBlockerStateH = 0.0f;
-        prevRawForceH = 0.0f;
-        saddleFilterStateH = 0.0f;
-        saddleFilterState2H = 0.0f;
-
-        // Bone saddle terminating mechanical impedance filter (brightness-dependent cutoff)
-        const float saddleCutoff = 3500.0f + 3500.0f * std::clamp(p.brightness, 0.05f, 1.0f);
-        saddleBeta = std::exp(-2.0f * 3.14159265358979323846f * saddleCutoff / fs);
-        saddleFilterState = 0.0f;
-        saddleFilterState2 = 0.0f;
-        saddleFilterPhantom = 0.0f;
-
-        // Longitudinal string wave parameters (P-wave compressional vibration)
-        const float cL = std::sqrt(p.E / p.rho);
-        const float fL = std::clamp(cL / (2.0f * p.L), 300.0f, 4000.0f);
-        const float omegaL = 2.0f * 3.14159265358979323846f * fL;
-        // Longitudinal waves decay rapidly (~20-30 ms) through nut and bridge
-        const float decayTauL = 0.024f;
-        longitudinalR  = std::exp(-1.0f / (decayTauL * fs));
-        longitudinalB1 = -2.0f * longitudinalR * std::cos(omegaL / fs);
-        longitudinalB2 = longitudinalR * longitudinalR;
-        longitudinalS1 = 0.0f;
-        longitudinalS2 = 0.0f;
-        longitudinalImpulse = 0.0f;
-        dcBlockerStatePhantom = 0.0f;
-        prevRawForcePhantom = 0.0f;
-
-        // Finger states
-        w_next = 0.0f;
-        w_curr = 0.0f;
-        w_prev = 0.0f;
-
-        // Auxiliary variables: [psi_B, psi_F, psi_FG]
-        psi = { 0.0f, 0.0f, 0.0f };
-        psi_prev = { 0.0f, 0.0f, 0.0f };
-
-        // Fret coordinates: only frets ahead of the fretting position towards the bridge
-        const int maxFrets = 20;
-        const int activeFrets = std::max(0, maxFrets - p.fretNumber);
-        fretsM = activeFrets;
-        fretIndices.resize(static_cast<size_t>(fretsM));
-        fretAlpha.resize(static_cast<size_t>(fretsM));
-        for (int q = 1; q <= fretsM; ++q)
-        {
-            const float xq = p.L * (1.0f - std::pow(2.0f, -static_cast<float>(q) / 12.0f));
-            const float gridPos = xq / h;
-            const int idx = static_cast<int>(gridPos) - 1;
-            fretIndices[static_cast<size_t>(q - 1)] = std::clamp(idx, 0, N_pts - 2);
-            fretAlpha[static_cast<size_t>(q - 1)]   = gridPos - static_cast<float>(idx + 1);
-        }
-
-        // Finger interpolator coordinate
-        fingerIdx = std::clamp(static_cast<int>(p.xFG * p.L / h) - 1, 0, N_pts - 2);
-        fingerAlpha = (p.xFG * p.L / h) - static_cast<float>(fingerIdx + 1);
-
-        // Diagonal scaling Lambda (Eq. 51):
-        // Lambda_string = k^2 / (rhoA * h * (1 + sigma0*k))
-        lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
-        lambdaFinger = (k * k) / p.MFG;
-
+        reserveCapacity();
+        p = params;
+        configureGrid();
         reset();
     }
+
+    /** Maximum interior grid points this string can hold without allocating. */
+    int getGridCapacity() const noexcept { return static_cast<int>(gridCapacity); }
 
     void reset()
     {
@@ -288,64 +155,59 @@ public:
      */
     void legatoTransition(const StringParams& newParams, float velocity, bool isHammerOn) noexcept
     {
-        // 1. Save existing wave momentum
-        const float oldL = p.L;
+        // 1. Save existing wave state (both polarizations) in pre-reserved scratch
         const int oldN_pts = N_pts;
+        const float oldH = h;
+        const float oldL = p.L;
         saved_curr.resize(static_cast<size_t>(oldN_pts));
         saved_prev.resize(static_cast<size_t>(oldN_pts));
-        std::copy_n(u_curr.data(), oldN_pts, saved_curr.data());
-        std::copy_n(u_prev.data(), oldN_pts, saved_prev.data());
+        saved_curr_H.resize(static_cast<size_t>(oldN_pts));
+        saved_prev_H.resize(static_cast<size_t>(oldN_pts));
+        std::copy_n(u_curr.data(),   oldN_pts, saved_curr.data());
+        std::copy_n(u_prev.data(),   oldN_pts, saved_prev.data());
+        std::copy_n(u_curr_H.data(), oldN_pts, saved_curr_H.data());
+        std::copy_n(u_prev_H.data(), oldN_pts, saved_prev_H.data());
 
-        // 2. Re-initialize grid parameters for new vibrating length & frequency
+        // 2. Rebuild ALL derived state (grid, CFL, T0_H, frets, finger, lambdas, saddle filter)
+        //    for the new speaking length. Vectors are resized within reserved capacity.
         p = newParams;
-        initialSigma1 = p.sigma1;
-        const float A = 3.14159265358979323846f * p.r * p.r;
-        const float rBending = (p.r_stiffness > 0.0f) ? p.r_stiffness : p.r;
-        const float I = 3.14159265358979323846f * rBending * rBending * rBending * rBending * 0.25f;
-        rhoA = p.rho * A;
-        EI   = p.E * I;
-        EA   = p.E * A;
+        configureGrid();
 
-        const float cSq = p.T0 / rhoA;
-        const float kappaSq = EI / rhoA;
-        const float hMin = std::sqrt(0.5f * (cSq * k * k + 4.0f * p.sigma1 * k + std::sqrt((cSq * k * k + 4.0f * p.sigma1 * k) * (cSq * k * k + 4.0f * p.sigma1 * k) + 16.0f * kappaSq * k * k)));
-        N = static_cast<int>(std::floor(p.L / hMin));
-        if (N < 10) N = 10;
-        h = p.L / static_cast<float>(N);
-        N_pts = N - 1;
+        // Collision auxiliaries refer to the old grid geometry: restart them from rest.
+        psi = { 0.0f, 0.0f, 0.0f };
+        psi_prev = { 0.0f, 0.0f, 0.0f };
+        prevXiB = 0.0f;
+        prevXiF = 0.0f;
+        pluckDurSamples = 0;
+        pluckSampleCount = 0;
 
-        // 3. Physically correct boundary mapping:
-        // On a real guitar, the bridge is fixed at coordinate x = 0 (or x = L_bridge),
-        // and fretting shortens the string from the nut end (x_fret = oldL - newL).
-        // The bridge slope is computed at the bridge boundary index (N_pts - 1).
-        // Therefore, we align the grid at the bridge end:
-        // x_bridge_dist = (N_pts - 1 - i) * h
-        // old_idx = oldN_pts - 1 - (x_bridge_dist / old_h)
-        const float oldH = oldL / static_cast<float>(oldN_pts + 1);
+        // 3. Bridge-aligned remap: the saddle is fixed, fretting shortens the string from the nut.
+        //    New point i sits (N_pts - i) * h from the bridge; old point j sat (oldN_pts - j) * oldH.
+        auto sampleOld = [oldN_pts](const std::vector<float>& v, float g) noexcept -> float
+        {
+            // Fixed (zero) boundaries at old indices -1 (nut/fret) and oldN_pts (bridge)
+            if (g <= -1.0f || g >= static_cast<float>(oldN_pts)) return 0.0f;
+            const int i0 = static_cast<int>(std::floor(g));
+            const float frac = g - static_cast<float>(i0);
+            const float v0 = (i0 >= 0)            ? v[static_cast<size_t>(i0)]     : 0.0f;
+            const float v1 = (i0 + 1 < oldN_pts)  ? v[static_cast<size_t>(i0 + 1)] : 0.0f;
+            return (1.0f - frac) * v0 + frac * v1;
+        };
 
         for (int i = 0; i < N_pts; ++i)
         {
-            // Distance from bridge (point N_pts is 0 distance from bridge)
             const float distFromBridge = static_cast<float>(N_pts - i) * h;
-            const float oldGridPos = static_cast<float>(oldN_pts) - (distFromBridge / oldH);
-            const int idx0 = std::clamp(static_cast<int>(std::floor(oldGridPos)), 0, oldN_pts - 1);
-            const int idx1 = std::clamp(idx0 + 1, 0, oldN_pts - 1);
-            const float frac = std::clamp(oldGridPos - static_cast<float>(idx0), 0.0f, 1.0f);
+            const float g = static_cast<float>(oldN_pts) - distFromBridge / oldH;
 
             // Taper displacement smoothly to 0 at the new fretted nut (i = 0)
-            const float boundaryTaper = std::min(1.0f, static_cast<float>(i + 1) / 4.0f);
-
-            if (oldGridPos >= 0.0f && idx0 < static_cast<int>(saved_curr.size()) && idx1 < static_cast<int>(saved_curr.size()))
-            {
-                u_curr[static_cast<size_t>(i)] = ((1.0f - frac) * saved_curr[static_cast<size_t>(idx0)] + frac * saved_curr[static_cast<size_t>(idx1)]) * boundaryTaper;
-                u_prev[static_cast<size_t>(i)] = ((1.0f - frac) * saved_prev[static_cast<size_t>(idx0)] + frac * saved_prev[static_cast<size_t>(idx1)]) * boundaryTaper;
-            }
-            else
-            {
-                u_curr[static_cast<size_t>(i)] = 0.0f;
-                u_prev[static_cast<size_t>(i)] = 0.0f;
-            }
-            u_next[static_cast<size_t>(i)] = 0.0f;
+            const float taper = std::min(1.0f, static_cast<float>(i + 1) / 4.0f);
+            const auto si = static_cast<size_t>(i);
+            u_curr[si]   = sampleOld(saved_curr,   g) * taper;
+            u_prev[si]   = sampleOld(saved_prev,   g) * taper;
+            u_curr_H[si] = sampleOld(saved_curr_H, g) * taper;
+            u_prev_H[si] = sampleOld(saved_prev_H, g) * taper;
+            u_next[si]   = 0.0f;
+            u_next_H[si] = 0.0f;
         }
 
         // 4. Acoustic fret excitation on legato note transition:
@@ -1108,7 +970,7 @@ public:
     /** Dual-axis saddle output: returns distinct vertical (pumping) and horizontal (rocking) forces. */
     void tickPolar(float& outV, float& outH) noexcept
     {
-        const float total = tick();
+        static_cast<void>(tick());
         // outV is vertical plate pumping: V transverse + axial tension phantom + longitudinal snap + tactile scrape
         outV = saddleFilterState2 + saddleFilterPhantom * 0.35f + (longitudinalS1 * (p.woundFactor > 0.1f ? 0.22f : 0.14f)) + (lastScrapeForce * 0.85f);
         // outH is lateral rocking along saddle line
@@ -1158,6 +1020,102 @@ public:
     float getGridSpacing() const noexcept { return h; }
 
 private:
+    /** Reserve every grid-sized buffer for the worst case at this sample rate (may allocate). */
+    void reserveCapacity()
+    {
+        // Upper bound on interior points: N <= L / (c k) = fs / (2 f0) for the lowest fundamental
+        // (stiffness and sigma1 only enlarge h_min). Never below 512 so 44.1/48 kHz keep headroom.
+        const size_t needed = std::max<size_t>(512, static_cast<size_t>(std::ceil(fs / (2.0f * kMinStringFreqHz))) + 8);
+        if (gridCapacity >= needed)
+            return;
+        gridCapacity = needed;
+
+        for (auto* v : { &u_next, &u_curr, &u_prev, &Du, &D2u, &Du_prev, &kn, &v_lin, &Bu_plus_Cu,
+                         &gradVB, &gB, &gradVF, &gF, &gFG, &b_string,
+                         &u_next_H, &u_curr_H, &u_prev_H, &Du_H, &D2u_H, &Du_prev_H,
+                         &saved_curr, &saved_prev, &saved_curr_H, &saved_prev_H })
+            v->reserve(gridCapacity);
+        fretIndices.reserve(32);
+        fretAlpha.reserve(32);
+    }
+
+    /**
+     * Derive every quantity that depends on StringParams and the grid: material constants,
+     * H-polarization tension, CFL grid, buffer sizes, fret/finger geometry, Woodbury scalings,
+     * saddle filter and longitudinal resonator. Does not touch displacement state.
+     * Audio-thread safe after reserveCapacity() (all resizes stay within reserved capacity).
+     */
+    void configureGrid() noexcept
+    {
+        initialSigma1 = p.sigma1;
+
+        // Derived physical constants
+        const float A = 3.14159265358979323846f * p.r * p.r;
+        const float rBending = (p.r_stiffness > 0.0f) ? p.r_stiffness : p.r;
+        const float I = 3.14159265358979323846f * rBending * rBending * rBending * rBending * 0.25f;
+        rhoA = p.rho * A;
+        EI   = p.E * I;
+        EA   = p.E * A;
+
+        // H-polarization tension: T0_H = T0_V * (1 + delta)^2 => f_H = f_V * (1 + delta),
+        // producing the natural shimmer/beating (0.1..1.0 Hz) heard on real acoustic guitar.
+        const float delta = std::clamp(p.polarizationSplit, 0.0f, 0.010f);
+        T0_H = p.T0 * (1.0f + delta) * (1.0f + delta);
+
+        // Stability condition (Bilbao DAFx24 Eq. 47), must hold for BOTH polarizations:
+        const float maxT0 = std::max(p.T0, T0_H);
+        const float term1 = (maxT0 * k) / rhoA + 4.0f * p.sigma1;
+        const float hMinSq = (k * 0.5f) * (term1 + std::sqrt(term1 * term1 + (16.0f * EI) / rhoA));
+        const float hMin   = std::sqrt(hMinSq);
+
+        // N = floor(L / h_min). Capping N only enlarges h, which keeps the scheme stable.
+        N = static_cast<int>(std::floor(p.L / hMin));
+        N = std::clamp(N, 10, static_cast<int>(gridCapacity) + 1);
+        h = p.L / static_cast<float>(N);
+        N_pts = N - 1;
+
+        const auto n = static_cast<size_t>(N_pts);
+        for (auto* v : { &u_next, &u_curr, &u_prev, &Du, &D2u, &Du_prev, &kn, &v_lin, &Bu_plus_Cu,
+                         &gradVB, &gB, &gradVF, &gF, &gFG, &b_string,
+                         &u_next_H, &u_curr_H, &u_prev_H, &Du_H, &D2u_H, &Du_prev_H })
+            v->resize(n, 0.0f);
+
+        // Bone saddle terminating mechanical impedance filter (brightness-dependent cutoff)
+        const float saddleCutoff = std::min(3500.0f + 3500.0f * std::clamp(p.brightness, 0.05f, 1.0f), 0.45f * fs);
+        saddleBeta = std::exp(-2.0f * 3.14159265358979323846f * saddleCutoff / fs);
+
+        // Longitudinal string wave (P-wave compressional vibration), decays in ~20-30 ms
+        const float cL = std::sqrt(p.E / p.rho);
+        const float fL = std::clamp(cL / (2.0f * p.L), 300.0f, 4000.0f);
+        const float omegaL = 2.0f * 3.14159265358979323846f * fL;
+        const float decayTauL = 0.024f;
+        longitudinalR  = std::exp(-1.0f / (decayTauL * fs));
+        longitudinalB1 = -2.0f * longitudinalR * std::cos(omegaL / fs);
+        longitudinalB2 = longitudinalR * longitudinalR;
+
+        // Fret coordinates: only frets ahead of the fretting position towards the bridge
+        const int maxFrets = 20;
+        fretsM = std::max(0, maxFrets - p.fretNumber);
+        fretIndices.resize(static_cast<size_t>(fretsM));
+        fretAlpha.resize(static_cast<size_t>(fretsM));
+        for (int q = 1; q <= fretsM; ++q)
+        {
+            const float xq = p.L * (1.0f - std::pow(2.0f, -static_cast<float>(q) / 12.0f));
+            const float gridPos = xq / h;
+            const int idx = std::clamp(static_cast<int>(gridPos) - 1, 0, N_pts - 2);
+            fretIndices[static_cast<size_t>(q - 1)] = idx;
+            fretAlpha[static_cast<size_t>(q - 1)]   = std::clamp(gridPos - static_cast<float>(idx + 1), 0.0f, 1.0f);
+        }
+
+        // Finger interpolator coordinate
+        fingerIdx = std::clamp(static_cast<int>(p.xFG * p.L / h) - 1, 0, N_pts - 2);
+        fingerAlpha = std::clamp((p.xFG * p.L / h) - static_cast<float>(fingerIdx + 1), 0.0f, 1.0f);
+
+        // Diagonal scaling Lambda (Eq. 51)
+        lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
+        lambdaFinger = (k * k) / p.MFG;
+    }
+
     /** Fast 4x4 linear equation solver using Gaussian elimination with partial pivoting. */
     static std::array<float, 4> solve4x4(std::array<std::array<float, 4>, 4> a, std::array<float, 4> b) noexcept
     {
@@ -1242,6 +1200,9 @@ private:
     std::vector<float> b_string;
     std::vector<float> saved_curr;
     std::vector<float> saved_prev;
+    std::vector<float> saved_curr_H;
+    std::vector<float> saved_prev_H;
+    size_t gridCapacity = 0;
 
     float saddleBeta = 0.0f;
     float saddleFilterState = 0.0f;

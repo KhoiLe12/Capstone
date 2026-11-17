@@ -6,6 +6,16 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v62.f
+- **FDTD horizontal polarization restored to the output**: `FdtdString::tickPolar()` returned $F_H$, but `SynthEngine` summed only $F_V$, so the H plane was computed and thrown away. The bridge now sums $F_V + 0.35\,F_H$ (`kHorizontalSaddleCoupling`, matching the waveguide engine). Output is about +0.7 to +1.1 dB louder; pitch is unchanged (within ~1.3 cents).
+- **Audio-thread allocation fixes**:
+  - Body model switching no longer loads/prepares an IR in `processBlock`. Both IRs are preloaded into separate convolution engines in `prepareToPlay`; only the audible one runs, and a switch crossfades over 20 ms.
+  - FDTD grid capacity is sized from the sample rate ($f_s / (2 \cdot 70\text{ Hz})$, min 512) instead of a fixed 512. Nylon D2 needs 628 points at 96 kHz, so 88.2 kHz and above used to allocate on note-on.
+- **FDTD legato correctness**: `init()` and `legatoTransition()` share `configureGrid()`, which rebuilds the vector sizes, fret/finger indices, $\Lambda$, $T_{0,H}$, saddle filter and CFL ($\max(T_{0,V},T_{0,H})$). Before this, a pull-off that lengthened the grid wrote past `vector::size()`. Both polarizations are remapped. Picked and legato notes share `Voice::makeFdtdParams()`, which also fixes legato notes getting default fret clearance, coupling and brightness.
+- **Mute release fix**: releasing palm mute now restores the note's own open-string damping (register, material, fret) instead of a nylon-only formula.
+- **`bench_synth` event stress RTCheck** (+ `--events-only` flag): exercises note-on/legato/keyswitch/strum/engine/material/body-switch/reset paths inside the allocation guard at 44.1–192 kHz. It failed on v61.f (~2,500 heap ops per run) and passes on v62.f.
+- **Quality Gates**: `bench_synth: RTCheck PASS (0)` across all sweeps and the event stress test. FDTD 6-voice load at 32-sample blocks is 26.2% of deadline (v61.f on the same machine: 26.3%). `pluginval` not run: not installed on this machine.
+
 ### v61.f
 - **Official GuitarSet Dataset STFT Benchmark & Comparative Evaluation**:
   - Integrated the **official GuitarSet dataset** (ISMIR 2018, NYU MARL / Queen Mary University of London) directly into the synthesis verification pipeline.

@@ -15,15 +15,14 @@ The following calls are **strictly prohibited** inside `processBlock()`, `tick()
 ### Pre-Allocation Pattern
 All state vectors, grid points, reflection buffers, scratch memory, and FFT convolution structures must be pre-allocated during `init()`, `prepareToPlay()`, or constructors:
 ```cpp
-// Grid size capacity reserved in init():
-constexpr size_t kMaxGridSize = 512;
-u_next.reserve(kMaxGridSize);
-u_curr.reserve(kMaxGridSize);
-u_prev.reserve(kMaxGridSize);
-// Pre-allocated FDTD legato scratch buffers (v58.f):
-saved_curr.reserve(kMaxGridSize);
-saved_prev.reserve(kMaxGridSize);
+// FdtdString::reserveCapacity(), called from init(sampleRate) in prepareToPlay (v62.f):
+// N <= fs / (2 f0) for the lowest string, so size the grid from the sample rate.
+const size_t needed = std::max<size_t>(512, std::ceil(fs / (2.0f * kMinStringFreqHz)) + 8);
+for (auto* v : { &u_next, &u_curr, &u_prev, /* ...all grid + legato scratch vectors... */ })
+    v->reserve(needed);
+// configureGrid() then only resize()s within that capacity (and caps N as a backstop).
 ```
+Both body IR convolution engines are likewise loaded in `BodyResonance::init()`; switching body model only flips which engine is processed (see wiki 04).
 
 ### Denormal & NaN Protection
 Denormalized floating-point numbers collapse CPU throughput by switching the CPU into microcode emulation.
@@ -53,8 +52,11 @@ The repository includes a native C++ benchmark harness [`src/bench/BenchSynth.cp
 build/bench_synth.exe
 ```
 
+Quick allocation-only check (seconds): `./build/bench_synth --events-only`.
+
 ### Validation Metrics & Requirements
 1. **`[RTCheck Result]`**: Must report **`PASS (0)`** (zero heap allocations intercepted on simulated audio threads across all voice and block sweeps).
+   - **Event stress (v62.f)**: the timing sweeps trigger their notes *before* the guarded region, so they only cover steady-state rendering. The event stress test runs every event path *inside* the guarded region: note-ons on every string (including Drop-D D2), legato pull-offs that grow the FDTD grid, hammer-ons, palm/choke/strum keyswitches, engine/material/body-model switches, and an All-Notes-Off `reset()`. It runs at 44.1, 48, 88.2, 96 and 192 kHz with 32- and 512-sample blocks. On v61.f code it reported ~2,500 heap operations per run (body switches, plus FDTD grids beyond 512 points at ≥ 88.2 kHz).
 2. **Single-Instance Latency Sweep**:
    - Tests 1, 4, and 6 active voices across block sizes 32, 64, 128, 256, and 512 samples at $48\text{ kHz}$.
    - Bilbao FDTD 6-voice peak load must remain $\le 30\%$ of the audio deadline.
