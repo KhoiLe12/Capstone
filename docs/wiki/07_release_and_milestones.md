@@ -6,6 +6,16 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### Documentation pass (after v64.f, no code change)
+- Corrected claims that did not match the code or measurements:
+  - README version (was v55.f), parameter defaults (now preset 1), and CPU figures (now measured).
+  - Waveguide tuning: "±0.05 cents" claimed; measured +0.3 to +2.9 cents sharp.
+  - The waveguide "pitch settle" is not active.
+  - The modal bank is a hand-authored Modalys-style table, not IRCAM Modalys data; there is no "Body Decay" control.
+  - The wiki 01 bridge-sum diagram.
+- New "measured accuracy & known limitations" section in wiki 02: FDTD tuning ±1.3 cents E2–G5; upper-register sustain too short.
+- TODO.md: legato marked done; new "known issues" list. Competitive analysis: our column updated to v64.f.
+
 ### v64.f
 - **Sample-accurate MIDI**:
   - `SynthEngine::process()` takes timestamped events and applies each at its exact sample. `PluginProcessor` fills a fixed 512-entry event queue from the `MidiBuffer`, splitting the block if it overflows, so it never allocates.

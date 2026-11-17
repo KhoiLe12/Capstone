@@ -2,6 +2,8 @@
 
 ---
 
+> **Status note (v64.f):** the "Our VST" column has been updated to v64.f. The competitor columns and the PDF export (`COMPETITIVE_ANALYSIS.pdf`, a v29.f snapshot) have not been re-verified since v29.f.
+
 ## 1. Executive Summary & Market Positioning
 
 This project is an **all-acoustic physical modeling synthesizer** implementing both a **Dual-Polarization Digital Waveguide (DWG)** and a state-of-the-art **Bilbao Finite-Difference Time-Domain (FDTD)** engine with real-time soundboard impulse response (IR) convolution and 32-mode modal resonance.
@@ -22,17 +24,17 @@ The market divides into two distinct categories:
 
 ## 2. Comprehensive Feature Matrix: Current State vs. Market Leaders
 
-| Feature Domain | Feature Detail | **Our VST (Current v29.f)** | **AAS Strum GS-2** | **Ample Guitar (AGM/AGNL)** | **NI Session Guitarist** |
+| Feature Domain | Feature Detail | **Our VST (v64.f)** | **AAS Strum GS-2** | **Ample Guitar (AGM/AGNL)** | **NI Session Guitarist** |
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **Core DSP** | **Physical Modeling (Zero Samples)** | **YES** (DWG + FDTD) | **YES** | NO (Sampled) | NO (Sampled) |
 | | Dual Engine Switch (Waveguide vs. FDTD PDE) | **YES** | NO | NO | NO |
 | | Soundboard Impulse Response (IR) Convolution | **YES** (Nylon & Gibson) | NO (Modal only) | NO | YES |
-| | Modal Resonator Bank (IRCAM Modalys 32-mode) | **YES** | YES | NO | NO |
+| | Modal Resonator Bank (Modalys-style, 32-mode) | **YES** | YES | NO | NO |
 | | Pure Real-Time Synthesis (Instant load, <20 MB) | **YES** | YES | NO (10+ GB) | NO (8+ GB) |
 | **Articulations** | Open Plucks | **YES** | YES | YES | YES |
 | | Palm Muting (Hold Keyswitch `C1`) | **YES** | YES | YES | YES |
 | | Full Mute / Choke / Fret Slap (`D1`) | **YES** | YES | YES | YES |
-| | **Hammer-Ons & Pull-Offs (Legato)** | ❌ **Missing** | YES | YES | YES |
+| | **Hammer-Ons & Pull-Offs (Legato)** | **YES** (v56.f–v64.f, toggle) | YES | YES | YES |
 | | **Legato Slides (Fret Portamento)** | ❌ **Missing** | YES | YES | YES |
 | | **Natural Harmonics (Bell tones)** | ❌ **Missing** | YES | YES | YES |
 | | **Pitch Bend (Whammy / Fret Bend)** | ❌ **Missing** | YES | YES | YES |
@@ -53,7 +55,7 @@ The market divides into two distinct categories:
 | | **Alternate Tunings (Drop D, DADGAD, etc.)** | ❌ **Missing** | YES | YES | NO |
 | **UI & UX** | Real-Time Rotary Knobs + LED Badges | **YES** | YES | YES | YES |
 | | **Animated 6-String Interactive Fretboard** | ❌ **Missing** | YES | YES | NO |
-| | **Factory Preset Management (Browser)** | ❌ **Missing** | YES | YES | YES |
+| | **Factory Preset Management (Browser)** | **PARTIAL** (8 factory presets, no user save) | YES | YES | YES |
 
 ---
 
@@ -124,7 +126,8 @@ The market divides into two distinct categories:
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│  Current State: v29.f (FDTD + IR Body + 8th Strum)    │
+│  Written at v29.f. Done since: legato (v56-v64),       │
+│  factory presets (v59-v60). Rest of Phase 1-3 open.    │
 └──────────────────────────┬─────────────────────────────┘
                            │
                            ▼

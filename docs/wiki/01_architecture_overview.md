@@ -18,14 +18,14 @@ flowchart TD
         StringAssign --> V5["Voice 5 (High E: 329.6 Hz)"]
     end
 
-    Voices --> BridgeSum[Vertical Saddle Force Sum: totalForceV]
+    Voices --> BridgeSum["Saddle Force Sum: F_V + 0.35 F_H"]
     Voices --> ClickSum[Airborne Plectrum Radiation Sum: totalClick]
     
     BridgeSum --> Symp[Sympathetic Resonance Coupling Matrix]
     Symp --> PolyScale[Smooth Slewed Polyphonic Headroom Scale]
     PolyScale --> ReflNet[Symmetrical Soundboard Reflection Network]
     
-    ReflNet --> BodyIR["BodyResonance (Convolution / Modalys Bank)"]
+    ReflNet --> BodyIR["BodyResonance (IR Convolution / 32-Mode Modal Bank)"]
     BodyIR --> Summer((Sum))
     ClickSum --> Summer
     

@@ -14,7 +14,7 @@ This document tracks all planned, ongoing, and completed features across physica
 - [x] **Axial P-Wave Attack Snap** ($c_L = \sqrt{E/\rho}$ longitudinal transient).
 - [x] **Dynamic Phantom Harmonics Bloom** ($2f_0$ dynamic tension modulation).
 - [x] **Cross-Bridge Sympathetic String Resonance** (6-string open harmonic resonator bank with fretting damping).
-- [x] **Dual-Axis Saddle Polar Radiation**: Route $V$ (pumping) and $H$ (rocking) into distinct soundboard coupling channels.
+- [x] **Dual-Polarization Saddle Forces**: $F_V$ (pumping) $+ 0.35\,F_H$ (rocking) summed into the bridge drive. They are not separate body channels, and $F_H$ was silently dropped until v62.f.
 - [x] **Dynamic Phantom Harmonics Quadratic Scaler**: Scale tension bloom strictly with $E_{\text{pot}} \propto \text{disp}^2$.
 - [x] **Positional Damping Profile**: Fretted fingertip compliance vs. open bone nut ring-out.
 
@@ -25,7 +25,7 @@ This document tracks all planned, ongoing, and completed features across physica
 - [x] **Zero-Latency Partitioned Convolution Engine** (`juce::dsp::Convolution`).
 - [x] **Classical Nylon Studio Mic IR** (High-resolution stereo capture).
 - [x] **Gibson Dreadnought Acoustic IR** (Woody dreadnought transfer function).
-- [x] **32-Mode IRCAM Modalys Physical Resonator Bank** (Spruce/rosewood eigenmodes).
+- [x] **32-Mode Modalys-style Modal Resonator Bank** (hand-authored mode table from published guitar body mode ranges).
 - [x] **Stereo Mid/Side Spatializer & Microphone Field** (Continuously variable Width knob).
 - [x] **High-Frequency Wood Viscosity & Air Dispersion Roll-Off** (Gentle top-end acoustic dissipation above 10.5 kHz).
 - [x] **Soundboard Compliance Bloom / Soft Nonlinearity** (Wood cavity acoustic headroom compression under heavy strumming).
@@ -58,8 +58,7 @@ This document tracks all planned, ongoing, and completed features across physica
 - [x] **Full Muting & Fret Hand Slap Choke** (D1 hold/trigger keyswitch & DAW parameter).
 - [x] **Alternating 8th-Note Acoustic Pick Rake & Strumming** (E1 hold keyswitch with down/up stroke physics).
 - [x] **Physical 6-String Guitar Polyphony & Monophonic String Choking** (Prevents multi-fret collisions on single string).
-- [ ] **Legato Hammer-On & Pull-Off (HOPO)**:
-  - Triggering a new MIDI note on an already-ringing string without re-plucking: updates string length/fret position $L$ and introduces a small fingertip fret-collision transient.
+- [x] **Legato Hammer-On & Pull-Off (HOPO)** (v56.f–v64.f): overlapping notes on one string retune the vibrating string without a re-pluck. 40 ms chord window, `legato` on/off parameter.
 - [ ] **Continuous Pitch Slide / Glissando**:
   - Smooth fretboard glissando across fret obstacles.
 - [ ] **True Finger Vibrato (Pitch & Tension Modulation)**:
@@ -68,4 +67,13 @@ This document tracks all planned, ongoing, and completed features across physica
   - Rapid 4-finger fan strum articulation.
 - [ ] **Artificial & Natural Harmonics**:
   - Nodal touch at $1/2$ (12th fret), $1/3$ (7th fret), $1/4$ (5th fret) damping fundamental and ringing pure harmonics.
+
+---
+
+## 5. Known Issues & Calibration (measured v64.f)
+
+- [ ] **Waveguide tuning is sharp**: +2.9 cents at E2 down to +0.3 cents at C6, likely from the filters' phase delay at $f_0$ vs DC compensation (wiki 03).
+- [ ] **FDTD upper-register sustain too short**: C6 nylon reaches −40 dB in 0.31 s (wiki 02 §7). Recalibrate register damping against GuitarSet decay times.
+- [ ] **`pluginval` in CI**: the CMake `validate` target exists, but CI does not run it.
+- [ ] **Unit tests**: only `bench_synth` checks (allocation, timing, chord-vs-legato); no pitch/decay regression tests yet.
 

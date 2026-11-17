@@ -8,7 +8,7 @@
  *   - Physical exciter (finite contact pulse with wound vs plain string textures)
  *   - 1D waveguide with sub-sample pitch tuning
  *   - Inharmonicity / stiffness dispersion
- *   - Dynamic tension modulation
+ *   - Kirchhoff-Carrier tension modulation (FDTD engine)
  *   - Multi-port bridge velocity coupling
  *   - Physical acoustic choke with hand slap & fret contact transient
  *   - Stefan Bilbao FDTD (DAFx24) physical wave equation string model

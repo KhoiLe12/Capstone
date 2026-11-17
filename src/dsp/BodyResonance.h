@@ -11,7 +11,7 @@
  *      convolution with stereo small-diaphragm condenser microphone acoustic field.
  *   2. Gibson Acoustic (Studio Mic IR) - Authentic measured acoustic guitar pickup-to-mic
  *      transfer function IR capturing rich dreadnought wood bloom.
- *   3. Modal Resonator Bank - 32-mode IRCAM Modalys parallel biquad physical soundboard.
+ *   3. Modal Resonator Bank - 32-mode Modalys-style parallel biquad soundboard (hand-authored mode table).
  *
  * Macro Controls:
  *   - bodyType:     Selects between IR convolution and Modal Resonator Bank.

@@ -5,7 +5,7 @@
  * KarplusStrong — Advanced 1-D digital waveguide with:
  *   - Sub-sample allpass pitch tuning
  *   - Inharmonicity / stiffness dispersion allpass filter (metallic steel twang)
- *   - Dynamic tension modulation (pitch settle on hard plucks)
+ *   - (Tension-modulation pitch settle: state kept but currently inactive; see wiki 03)
  *   - Multi-port bridge velocity injection for sympathetic resonance
  *
  * Signal flow per tick(bridgeInjection):
@@ -16,7 +16,7 @@
  *                     Stiffness Dispersion Allpass (Inharmonicity)
  *                                │
  *                                ▼
- *                     Pitch-Tuning Allpass (+ Tension Modulation)
+ *                     Pitch-Tuning Allpass
  *                                │
  *                                ▼
  *                      [ + bridgeInjection ] (Sympathetic coupling)

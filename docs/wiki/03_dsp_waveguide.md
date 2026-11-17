@@ -6,7 +6,7 @@ Engine 0 implements an **Extended Karplus-Strong Digital Waveguide (DWG)**. It s
 
 While Engine 1 (Bilbao FDTD) numerically solves the full elastodynamic PDE along a physical spatial grid, Engine 0 represents wave propagation as lumped bidirectional delay lines terminated by reflection and loss filters.
 
-- **CPU Efficiency**: Consumes $< 10\%$ CPU deadline for 6 voices at block size 32 ($~2.7\%$ per 6-string track), allowing 140+ simultaneous polyphonic tracks in DAW multi-track stress tests.
+- **CPU Efficiency** (`bench_synth`, Apple M4, 48 kHz, body convolution included): ~10% of the deadline for 6 voices at 32-sample blocks, ~2.6% at 128. The multi-track stress test sustains ~70–80 six-string tracks at 128-sample blocks across all cores.
 - **Application**: Ideal for fast acoustic mockups, mobile/low-power platforms, and pristine, glassy nylon/steel articulations.
 
 ---
@@ -21,7 +21,7 @@ Because $D$ is rarely an integer, rounding to the nearest sample causes unaccept
 ### Fractional Delay Allpass Filter
 The delay line is partitioned into an integer delay $N = \lfloor D - \tau_\text{filters} \rfloor$ and a fractional delay $\eta \in [0, 1)$:
 $$A(z) = \frac{a + z^{-1}}{1 + a z^{-1}}, \quad a = \frac{1 - \eta}{1 + \eta}$$
-- Guarantees exact pitch accuracy within $\pm 0.05$ cents across all 12 semitones and micro-tunings.
+- **Measured tuning (v64.f)**: the engine is consistently **sharp**: +2.9 cents at E2, +1.5 at E3, +1.1 at E4, +0.7 at C5, +0.3 at C6. The figures are the same with the body removed, so the detuning is real, not a measurement artifact. It is not a constant-sample delay error. The likely cause is that the loss and dispersion filters' phase delay at $f_0$ differs from the DC group delay used for compensation; not yet fixed. (Earlier docs claimed ±0.05 cents; that was never measured.)
 - Unity gain $|A(e^{j\omega})| = 1.0$ at all frequencies; avoids numerical energy loss in the pitch-tuning stage.
 
 ---
@@ -49,10 +49,8 @@ $$H_\text{loss}(z) = (1 - S) + S z^{-1}$$
 - High frequencies decay exponentially faster than low fundamentals.
 - **DC Group Delay Compensation**: $H_\text{loss}(z)$ introduces an exact group delay of $S$ samples at $\omega = 0$, which is subtracted during allpass fractional pitch tuning.
 
-### Dynamic Tension Modulation (Pitch Settle)
-Hard plucks increase string elongation, momentarily raising string tension and pitch:
-$$\Delta f(t) = \Delta f_\text{peak} \cdot e^{-t / \tau_\text{settle}}$$
-Accurately reproduces the acoustic "pitch-drop settle" heard when digging hard into low bass strings.
+### Dynamic Tension Modulation (Pitch Settle): not active
+`KarplusStrong` keeps a `tensionOffset` state, but `trigger()` sets it to 0 and `tick()` never reads it, so the waveguide engine has **no** pitch settle. It was disabled to keep nylon tuning stable. Amplitude-dependent pitch glide exists only in the FDTD engine, through its Kirchhoff-Carrier nonlinearity.
 
 ---
 

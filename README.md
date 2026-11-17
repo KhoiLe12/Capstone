@@ -4,14 +4,14 @@ A physically modeled acoustic guitar synthesizer built with **JUCE** (C++17) and
 
 All sound is computed in real time from a simulation of the strings, bridge, and guitar body — **no samples or wavetables**.
 
-> **Current version:** v55.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
+> **Current version:** v64.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
 
 ---
 
 ## Signal Flow
 
 ```
-MIDI In ──► SynthEngine ── keyswitches (palm mute / choke / strum) ── 6-string allocator
+MIDI In ──► SynthEngine (sample-accurate) ── keyswitches (palm mute / choke / strum) ── legato ── 6-string allocator
                  │
                  ▼
    6 String Voices (E2 A2 D3 G3 B3 E4), each:
@@ -20,7 +20,7 @@ MIDI In ──► SynthEngine ── keyswitches (palm mute / choke / strum) ─
              0. Digital Waveguide — extended Karplus-Strong
              1. Bilbao FDTD       — stiff-string PDE with fret/finger collisions
                  │
-                 │  vertical bridge forces          airborne pick click
+                 │  bridge forces (V + 0.35·H)      airborne pick click
                  ▼                                         │
    Bridge sum + sympathetic open-string resonators         │
                  ▼                                         │
@@ -41,12 +41,18 @@ See [01 — Architecture Overview](docs/wiki/01_architecture_overview.md) for th
 
 ## String Engines
 
-| Engine | Model | Character | Cost (6 voices) |
+| Engine | Model | Character | Cost (6 voices, 48 kHz) |
 |---|---|---|---|
-| **Digital Waveguide** | Delay-line Karplus-Strong with allpass fractional tuning, stiffness dispersion allpass, frequency-dependent loop loss, and pluck pitch settle. | Clean, glassy, very cheap. | ~3% of deadline |
-| **Bilbao FDTD** | Finite-difference solution of the stiff damped string PDE (Bilbao et al., *Real-Time Guitar Synthesis*, DAFx24). Dual polarization (natural beating), Kirchhoff-Carrier pitch glide, fret / fretboard / finger collisions solved non-iteratively via a low-rank Woodbury system, phantom partials and longitudinal attack snap. | Rich, physical attack and fret interaction. | ~27% of deadline |
+| **Digital Waveguide** | Dual-polarization delay-line Karplus-Strong with allpass fractional tuning, stiffness dispersion allpass, and frequency-dependent loop loss. | Clean, glassy, very cheap. | ~10% at 32-sample blocks, ~2.6% at 128 |
+| **Bilbao FDTD** | Finite-difference solution of the stiff damped string PDE (Bilbao et al., *Real-Time Guitar Synthesis*, DAFx24). Dual polarization (natural beating), Kirchhoff-Carrier pitch glide, fret / fretboard / finger collisions solved non-iteratively via a low-rank Woodbury system, phantom partials and longitudinal attack snap. | Rich, physical attack and fret interaction. | ~26% at 32-sample blocks, ~19% at 128 |
 
-Strings can be **Nylon Classical** or **Steel Acoustic**, which switches density, Young's modulus, tension, and damping profiles.
+Strings can be **Nylon Classical** or **Steel Acoustic**, which switches density, Young's modulus, tension, and damping profiles. CPU figures are `bench_synth` means on an Apple M4 and include the body convolution.
+
+Measured tuning (v64.f, `render_audio`, one note per pitch):
+- **FDTD**: within ±1.3 cents from E2 to G5.
+- **Waveguide**: consistently sharp, from +2.9 cents at E2 down to +0.3 cents at C6.
+
+See the known limitations in [wiki 02](docs/wiki/02_dsp_bilbao_fdtd.md) and [wiki 03](docs/wiki/03_dsp_waveguide.md).
 
 Details: [02 — Bilbao FDTD](docs/wiki/02_dsp_bilbao_fdtd.md) · [03 — Waveguide](docs/wiki/03_dsp_waveguide.md)
 
@@ -85,19 +91,21 @@ Details: [05 — Articulations & Keyswitches](docs/wiki/05_articulations_and_key
 
 ## Parameters
 
+Defaults match factory preset 1, *Dreadnought Acoustic*, which is loaded on first launch. Eight factory presets are available from the header dropdown and the host's program list.
+
 | Parameter | Range | Default | Effect |
 |---|---|---|---|
-| **Decay** | 0.0 – 1.0 | 0.70 | String sustain (also shapes palm-mute length). |
-| **Brightness** | 0.0 – 1.0 | 0.60 | Hardness of the pick / nail contact. |
-| **Pick Position** | 0.05 – 0.50 | 0.23 | Pluck point as a fraction of string length (bridge ↔ 12th fret). |
-| **Stiffness** | 0.0 – 1.0 | 0.05 | Inharmonicity / dispersion. |
-| **Body Size** | 0.6 – 1.6 | 1.00 | Modal frequency scale (Modal Bank body). |
-| **Body Coupling** | 0.0 – 1.0 | 0.70 | 0 = dry bridge (solid-body), 1 = full acoustic body. |
-| **Stereo Width** | 0.0 – 1.0 | 0.70 | Soundboard reflection width (0 = mono). |
+| **Decay** | 0.0 – 1.0 | 0.78 | String sustain (also shapes palm-mute length). |
+| **Brightness** | 0.0 – 1.0 | 0.72 | Hardness of the pick / nail contact. |
+| **Pick Position** | 0.05 – 0.50 | 0.22 | Pluck point as a fraction of string length (bridge ↔ 12th fret). |
+| **Stiffness** | 0.0 – 1.0 | 0.28 | Inharmonicity / dispersion. |
+| **Body Size** | 0.6 – 1.6 | 1.15 | Modal frequency scale (Modal Bank body only). |
+| **Body Coupling** | 0.0 – 1.0 | 0.80 | 0 = dry bridge (solid-body), 1 = full acoustic body. |
+| **Stereo Width** | 0.0 – 1.0 | 0.75 | Soundboard reflection width (0 = mono). |
 | **Master Gain** | 0.0 – 1.0 | 0.80 | Output level. |
-| **Engine Model** | choice | Digital Waveguide | Digital Waveguide (DWG) / Bilbao FDTD (DAFx24). |
-| **String Material** | choice | Nylon Classical | Nylon Classical / Steel Acoustic. |
-| **Body Model** | choice | Classical Nylon (IR) | Classical Nylon (IR) / Gibson Acoustic (IR) / Modal Bank (32-Mode). |
+| **Engine Model** | choice | Bilbao FDTD | Digital Waveguide (DWG) / Bilbao FDTD (DAFx24). |
+| **String Material** | choice | Steel Acoustic | Nylon Classical / Steel Acoustic. |
+| **Body Model** | choice | Gibson Acoustic (IR) | Classical Nylon (IR) / Gibson Acoustic (IR) / Modal Bank (32-Mode). Switching crossfades over 20 ms. |
 | **Palm Mute** | toggle | off | Same as holding C1. |
 | **Full Mute** | toggle | off | Same as holding D1. |
 | **Strum 8th** | toggle | off | Same as holding E1. |
@@ -154,7 +162,7 @@ Then rescan plugins in your DAW. The standalone app can be launched with
 
 | Check | Command | Pass criterion |
 |---|---|---|
-| Real-time safety & latency | `./build/bench_synth` | `[RTCheck Result] PASS (0)` — zero heap allocations on the audio thread; 1/4/6-voice loads within deadline at 32–512 sample blocks |
+| Real-time safety & latency | `./build/bench_synth` (`--events-only` for the quick checks) | `[RTCheck Result] PASS (0)`: zero heap allocations on the audio thread, in steady-state sweeps and in an event stress test (note-ons, legato, keyswitches, engine/body switches) at 44.1–192 kHz. `[Timing Result] PASS`: sample-accurate MIDI and chord-vs-legato detection. 1/4/6-voice loads within deadline at 32–512 sample blocks. |
 | Plugin conformance | `cmake --build build --config Release --target validate` | `pluginval` strictness 8 returns `SUCCESS` (requires `pluginval` on `PATH` or in `tools/pluginval/`) |
 | Spectral comparison | `.venv/bin/python benchmarks/guitarset_eval.py [--plots]` | Multi-scale STFT distance vs. GuitarSet recordings, with real-take and naive-tone reference points. Not a realism score; see [wiki 06 §5](docs/wiki/06_realtime_safety_and_qa.md) |
 
@@ -174,7 +182,7 @@ src/
   dsp/       String engines, exciter, voice, sympathetic & body resonance, SynthEngine
   plugin/    JUCE AudioProcessor (parameters, MIDI) and editor (GUI)
   bench/     bench_synth and render_audio tools
-benchmarks/  Spectral evaluation script
+benchmarks/  GuitarSet spectral evaluation (guitarset_eval.py); legacy spectral_eval.py
 resources/   Source body impulse responses (embedded via src/dsp/EmbeddedIRs.h)
 docs/        Wiki and theoretical background
 JUCE/        JUCE framework (git submodule)

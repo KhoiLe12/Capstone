@@ -39,7 +39,7 @@ flowchart LR
     BridgeForce[Bridge Force Drive] --> BodySelect{Body Type Selector}
     BodySelect -->|Type 0: Classical Nylon IR| IRConv0[Partitioned Stereo IR Convolution]
     BodySelect -->|Type 1: Gibson Acoustic IR| IRConv1[Partitioned Stereo IR Convolution]
-    BodySelect -->|Type 2: Modal Bank| Modal32[32-Mode IRCAM Modalys Resonator Bank]
+    BodySelect -->|Type 2: Modal Bank| Modal32[32-Mode Modal Resonator Bank]
     
     IRConv0 --> WetMix[Wet / Dry Mixer]
     IRConv1 --> WetMix
@@ -58,8 +58,9 @@ flowchart LR
 - Only the audible engine is processed. On a switch, `setParameters()` clears the incoming body (`Convolution::reset()`, or zeroing the modal filters), unless it is still sounding as the outgoing half of an unfinished crossfade. Output then crossfades linearly over 20 ms; during the fade both bodies run.
 - `Convolution::reset()` only clears buffers (JUCE hands any retired engine to its background queue), so it is safe on the audio thread. The `bench_synth` event stress test checks this.
 
-### 2. 32-Mode IRCAM Modalys Parallel Resonator Bank
+### 2. 32-Mode Parallel Modal Resonator Bank (Modalys-style)
+The 32 modes (frequency, Q, gain, stereo tilt) are a **hand-authored table** in `BodyResonance.cpp`. They are not exported from IRCAM Modalys or a finite-element model. The comments cite typical guitar body mode ranges from Rossing (2010) and Fletcher & Rossing (1998). "Modalys-style" refers to the modal-synthesis approach.
 - Synthesizes the soundboard plate transfer function through 32 parallel second-order modal filters:
   $$H_\text{body}(s) = \sum_{m=1}^{32} \frac{g_m \omega_m}{s^2 + 2 \zeta_m \omega_m s + \omega_m^2}$$
-- Allows real-time continuous morphing of **Body Size** (transposing modal frequencies up/down) and **Body Decay** (adjusting wood air loss and damping).
+- **Body Size** (parameter) scales all modal frequencies continuously (parlor ↔ jumbo). A damping scale for the mode Q factors exists in `BodyResonance::setParameters()`, but it is fixed at 1.0 and not exposed as a parameter.
 

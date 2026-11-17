@@ -4,12 +4,13 @@
 #include "SympatheticResonance.h"
 
 /**
- * SynthEngine — Multi-Port Digital Waveguide Orchestrator & Modal Body Coupler.
+ * SynthEngine — 6-string voice orchestrator, bridge summing and body coupling.
  *
  * Architecture:
- *   - 12 polyphonic voices with physical string differentiation (wound vs plain)
- *   - Energy-conserving Multi-Port Bridge Scattering Junction
- *   - IRCAM Modalys-style 32-mode parallel soundboard model + IR engine
+ *   - 6 voices, one per physical guitar string (wound vs plain), with guitar-like string allocation
+ *   - Sample-accurate event handling, legato (hammer-on / pull-off) detection, strum engine
+ *   - Bridge sum (F_V + 0.35 F_H) -> sympathetic open-string resonators -> reflections -> body
+ *   - Body: two preloaded IR convolutions or a Modalys-style 32-mode parallel resonator bank
  *   - Articulations: Palm Muting (C1 / FL: C2), Full Muting & Fret Slap Choke (D1 / FL: D2)
  */
 class SynthEngine

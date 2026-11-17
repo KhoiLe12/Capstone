@@ -202,7 +202,7 @@ $$D(c) = (1 - c)^2, \quad W(c) = 0.75 \cdot \sqrt{c}, \quad c = \text{BodyCoupli
 
 ## 6. Modal Resonator Bank (IRCAM Modalys Formulation)
 
-In addition to empirical IR convolution, the synthesizer implements a 32-mode parallel modal soundboard derived from IRCAM Modalys finite-element measurements of spruce and cedar soundboards.
+In addition to empirical IR convolution, the synthesizer implements a 32-mode parallel modal soundboard in the style of IRCAM Modalys. The mode table (frequency, Q, gain, stereo tilt) is hand-authored from typical guitar body mode ranges reported by Rossing (2010) and Fletcher & Rossing (1998); it is not exported from Modalys or a finite-element model. Body damping scaling ($\text{bodyDamping}$ below) is currently fixed at 1.0.
 
 Each mode $i$ is realized as an exact 2nd-order resonant bandpass biquad:
 

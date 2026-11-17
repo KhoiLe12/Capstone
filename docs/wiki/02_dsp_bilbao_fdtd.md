@@ -92,7 +92,7 @@ $$u_\text{new}(i) = \left[ (1 - \text{frac}) \cdot u_\text{old}(\text{idx}_0) + 
 ### B. Dynamic Dispersion-Compensated Tension Calibration (v57.f)
 To prevent microtonal pitch drift during legato retuning, equilibrium tension $T_0$ is solved dynamically using the elastodynamic dispersion formula:
 $$T_0 = \rho A (2 L f_\text{tuned})^2 - \frac{\pi^2 E I}{L^2}$$
-Ensures identical fundamental pitch accuracy ($< 0.1\text{ Hz}$ error) between picked notes and legato hammer/pull notes.
+Picked and legato notes on the same pitch match closely: a G2→E2 pull-off measures 82.429 Hz against 82.431 Hz for a picked E2 (v62.f).
 
 ### C. Fret Contact & Pizzicato Excitation
 - **Hammer-On**: Injects a localized downward impact impulse into the first few grid points near the fretted nut:
@@ -104,4 +104,19 @@ Ensures identical fundamental pitch accuracy ($< 0.1\text{ Hz}$ error) between p
 ### D. Zero-Allocation Scratch Buffering (v58.f, v62.f)
 The remap snapshots ($u^n$, $u^{n-1}$ for V and H) live in `saved_*` scratch vectors reserved to the sample-rate grid capacity, so retuning never allocates. This is covered by the `bench_synth` event stress test (pull-offs that grow the grid, at 44.1–192 kHz).
 
+---
+
+## 7. Measured Accuracy & Known Limitations (v64.f)
+
+Measured with `render_audio` (one note per pitch, velocity 0.7, Gibson IR body, 44.1 kHz). FFT peak of the fundamental over 0.4–1.4 s; sustain is the time from peak until the 20 ms RMS envelope is 40 dB down.
+
+- **Tuning**: within ±1.3 cents from E2 to G5 on both materials. The per-string `centsOffsets` compensate grid dispersion on open strings only.
+- **Upper-register sustain is very short**:
+
+| Note | E2 | E3 | E4 | C5 | G5 | C6 | D6 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Nylon | 3.98 s | 2.10 s | 1.42 s | 0.82 s | 0.46 s | 0.31 s | 0.23 s |
+| Steel | > 5 s | 3.75 s | 2.57 s | 1.68 s | 0.90 s | 0.46 s | 0.42 s |
+
+  The cause is the register scaling in `Voice::makeFdtdParams()`: $\sigma_0 \propto (f/82.4)^{0.80}$ (nylon) or $^{0.65}$ (steel), plus the treble-weighted $\sigma_1$. Real guitars sustain high fretted notes noticeably longer. Recalibrating against GuitarSet decay times is an open task. Above ~G5, notes decay too fast to measure pitch reliably.
 
