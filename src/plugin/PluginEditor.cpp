@@ -65,10 +65,20 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     addAndMakeVisible(stringMaterialLabel);
 
     // Body Model Selection ComboBox
-    bodyModelBox.addItem("Classical Nylon (IR)", 1);
-    bodyModelBox.addItem("Gibson Acoustic (IR)", 2);
+    bodyModelBox.addItem("Classical - Contreras 1971", 1);
+    bodyModelBox.addItem("Legacy Body (IR)", 2);
     bodyModelBox.addItem("Modal Bank (32-Mode)", 3);
+    bodyModelBox.addItem("Flamenco - Conde 1964", 4);
+    bodyModelBox.addItem("Custom IR", 5);
     addAndMakeVisible(bodyModelBox);
+
+    irButton.setTooltip("Load your own guitar body impulse response (WAV/AIFF/FLAC), or clear it. "
+                        "The IR is saved inside your project.");
+    bodyModelBox.setTooltip("Body. Classical (Contreras 1971) and Flamenco (Conde 1964) are measured IRs from "
+                            "R. Mores, 'Archive for the acoustical documentation of ... guitars', Zenodo, "
+                            "doi:10.5281/zenodo.4604577, CC BY 4.0 (derived: deconvolved, trimmed, normalised).");
+    irButton.onClick = [this] { showIRMenu(); };
+    addAndMakeVisible(irButton);
 
     bodyModelAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         p.apvts, "bodyModel", bodyModelBox);
@@ -150,9 +160,10 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     setupKnob(widthKnob,      widthLabel,      "Width");
     setupKnob(gainKnob,       gainLabel,       "Gain");
 
+    refreshCustomIRItem();
     startTimerHz(30);
 
-    setSize(1080, 250);
+    setSize(1140, 250);
     setResizable(false, false);
 }
 
@@ -160,8 +171,89 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
 // Timer Callback (Real-time mute status polling)
 // ---------------------------------------------------------------------------
 
+void HybridSynthEditor::refreshCustomIRItem()
+{
+    const auto name = processorRef.getCustomIRName();
+    if (name == shownCustomIRName)
+        return;
+    shownCustomIRName = name;
+    bodyModelBox.changeItemText(HybridSynthProcessor::kCustomIRBodyIndex + 1,
+                                name.isEmpty() ? juce::String("Custom IR (none loaded)") : "Custom IR: " + name);
+}
+
+void HybridSynthEditor::showIRMenu()
+{
+    juce::PopupMenu menu;
+    const auto name = processorRef.getCustomIRName();
+    menu.addSectionHeader(name.isEmpty() ? juce::String("No custom IR loaded") : "Loaded: " + name);
+    menu.addItem(1, "Load IR file...");
+    menu.addItem(2, "Clear custom IR", name.isNotEmpty());
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&irButton),
+                       [safeThis = juce::Component::SafePointer<HybridSynthEditor>(this)](int result)
+                       {
+                           if (safeThis == nullptr) return;
+                           if (result == 1)
+                               safeThis->chooseIRFile();
+                           else if (result == 2)
+                           {
+                               safeThis->processorRef.clearCustomIR();
+                               safeThis->refreshCustomIRItem();
+                           }
+                       });
+}
+
+void HybridSynthEditor::chooseIRFile()
+{
+    irChooser = std::make_unique<juce::FileChooser>("Load guitar body impulse response",
+                                                    juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg");
+    irChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                           [safeThis = juce::Component::SafePointer<HybridSynthEditor>(this)](const juce::FileChooser& fc)
+                           {
+                               if (safeThis == nullptr) return;
+                               const auto file = fc.getResult();
+                               if (file == juce::File()) return; // cancelled
+
+                               const auto warning = safeThis->processorRef.getCustomIRFileWarning(file);
+                               if (warning.isEmpty())
+                               {
+                                   safeThis->loadIRFile(file);
+                                   return;
+                               }
+                               juce::AlertWindow::showAsync(
+                                   juce::MessageBoxOptions()
+                                       .withIconType(juce::MessageBoxIconType::WarningIcon)
+                                       .withTitle("This doesn't look like a body IR")
+                                       .withMessage("\"" + file.getFileName() + "\": " + warning
+                                                    + "\n\nAs a body IR it would likely ring or sound like feedback. "
+                                                      "(Its level is capped, so it cannot overload.)")
+                                       .withButton("Load anyway")
+                                       .withButton("Cancel"),
+                                   [safeThis, file](int result)
+                                   {
+                                       if (safeThis != nullptr && result == 1)
+                                           safeThis->loadIRFile(file);
+                                   });
+                           });
+}
+
+void HybridSynthEditor::loadIRFile(const juce::File& file)
+{
+    const auto error = processorRef.loadCustomIRFile(file);
+    if (error.isNotEmpty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Could not load IR", error);
+        return;
+    }
+    // Select the Custom IR body so the new IR is heard immediately
+    if (auto* param = processorRef.apvts.getParameter("bodyModel"))
+        param->setValueNotifyingHost(param->convertTo0to1(static_cast<float>(HybridSynthProcessor::kCustomIRBodyIndex)));
+    refreshCustomIRItem();
+}
+
 void HybridSynthEditor::timerCallback()
 {
+    refreshCustomIRItem();
+
     if (processorRef.getCurrentProgram() != presetBox.getSelectedItemIndex())
         presetBox.setSelectedItemIndex(processorRef.getCurrentProgram(), juce::dontSendNotification);
 
@@ -315,7 +407,9 @@ void HybridSynthEditor::resized()
     const int labelW = 44;
     bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
     strip.removeFromLeft(4);
-    bodyModelBox.setBounds(strip.removeFromLeft(130));
+    bodyModelBox.setBounds(strip.removeFromLeft(140));
+    strip.removeFromLeft(4);
+    irButton.setBounds(strip.removeFromLeft(44));
 
     strip.removeFromLeft(8);
     palmMuteToggle.setBounds(strip.removeFromLeft(115));

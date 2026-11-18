@@ -74,7 +74,9 @@ This document tracks all planned, ongoing, and completed features across physica
 
 - [x] **Waveguide tuning was sharp** (fixed v67.f): caused by the +0.18 Hz detune on the long-sustaining horizontal plane, not the filters. The detune now goes on the vertical plane; sustain is within ±0.05 cents (wiki 03).
 - [x] **FDTD upper-register sustain too short** (fixed v65.f): calibrated $\sigma_0$ against GuitarSet decay rates, and replaced the ring-out detector that cut high notes while loud (wiki 02 §7).
-- [ ] **IR notch at ~981 Hz**: both embedded body IRs dip 8–11 dB there, so B5 is ~10 dB quieter than its neighbours through the IR bodies (wiki 04).
+- [x] **IR notch at ~981 Hz / unknown-origin IRs** (v68.f): Classical and Flamenco are now measured IRs (Mores, CC BY 4.0). The notch remains only in *Legacy Body*, which is kept for older steel presets (wiki 04).
+- [x] **Custom IR loading** (v68.f): user IRs, embedded in the project state.
+- [ ] **Licensed steel-string body IR**: none found with a redistribution license; steel uses Legacy, Modal Bank or Custom IR.
 - [x] **High chords dropping notes** (fixed v65.f): joint chord string assignment, 22-fret neck, Strict Fretboard toggle (wiki 01).
 - [ ] **`pluginval` in CI**: the CMake `validate` target exists, but CI does not download or run pluginval. It runs locally on macOS since v66.f (wiki 06 §3).
 - [ ] **Unit tests**: only `bench_synth` checks (allocation, timing, chord-vs-legato); no pitch/decay regression tests yet.

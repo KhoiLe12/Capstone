@@ -130,13 +130,13 @@ To allow fast auditioning and seamless DAW session recall without manual 14-para
    - Program changes execute `param->setValueNotifyingHost(param->convertTo0to1(val))` across all APVTS parameters.
    - This atomically moves all attached rotary sliders, toggle buttons, and combo boxes in the custom GUI (`PluginEditor`) without thread contention or audio dropouts.
 3. **Curated Physical Modeling Factory Presets**:
-   - *Dreadnought Acoustic*: Steel, Gibson IR, full sustain, Bilbao FDTD.
-   - *Nylon Concert Classical*: Nylon, Classical IR, soft plectrum contact, Bilbao FDTD.
-   - *Flamenco Rasgueado*: Nylon, Classical IR, fast snappy attack, wide stereo.
-   - *Fingerstyle Auditorium*: Steel, Gibson IR, high sustain, Digital Waveguide.
+   - *Dreadnought Acoustic*: Steel, Legacy Body IR, full sustain, Bilbao FDTD.
+   - *Nylon Concert Classical*: Nylon, Classical (Contreras) IR, soft plectrum contact, Bilbao FDTD.
+   - *Flamenco Rasgueado*: Nylon, Flamenco (Conde 1964) IR, fast snappy attack, wide stereo.
+   - *Fingerstyle Auditorium*: Steel, Legacy Body IR, high sustain, Digital Waveguide.
    - *Vintage Parlor Blues*: Steel, 32-mode Modal Bank, woody grit, Bilbao FDTD.
    - *12-String Shimmer*: Steel, Modal Bank, jumbo body, maximum stereo width, DWG.
-   - *Percussive Palm Chops*: Steel, Gibson IR, palm mute active, tight acoustic chug.
+   - *Percussive Palm Chops*: Steel, Legacy Body IR, palm mute active, tight acoustic chug.
    - *Warm Jazz Archtop*: Nylon, Modal Bank, deep warmth, gentle soundhole position.
 4. **First-Launch Initialization Parity**:
    - The processor constructor explicitly executes `setCurrentProgram(0)` and sets APVTS layout defaults to match Preset 0 (*Dreadnought Acoustic*), guaranteeing that when the plugin is opened for the first time, all physical modeling DSP parameters match the displayed preset immediately.

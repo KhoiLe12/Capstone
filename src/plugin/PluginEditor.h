@@ -40,6 +40,15 @@ private:
     juce::Label    bodyModelLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bodyModelAttach;
 
+    // Custom IR: load / clear menu next to the body selector
+    juce::TextButton irButton { "IR..." };
+    std::unique_ptr<juce::FileChooser> irChooser;
+    juce::String shownCustomIRName { "-" };
+    void showIRMenu();
+    void chooseIRFile();
+    void loadIRFile(const juce::File& file);
+    void refreshCustomIRItem();
+
     // Palm Mute Articulation Toggle & Visual Status
     juce::ToggleButton palmMuteToggle;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> palmMuteAttach;

@@ -6,6 +6,21 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v68.f
+- **Measured body IRs**:
+  - *Classical – Contreras 1971* and *Flamenco – Conde 1964*, derived from R. Mores' guitar archive (Zenodo 10.5281/zenodo.4604577, CC BY 4.0). Hammer → near-field mics, anechoic lab, true stereo, 300 ms; chosen by listening from 6 candidates.
+  - Reproducible via `benchmarks/extract_mores_irs.py` + `resources/ir/make_embedded_irs.py` (the previous `EmbeddedIRs.h` had no generator). Credits in `resources/ir/ATTRIBUTION.md` and the README.
+- **Old IRs analysed**: "Classical Nylon" and "Gibson Acoustic" were essentially one IR (correlation 0.95) of unknown origin (added by an AI agent). The classical file was fake stereo (R = L delayed 16 samples). The fake-stereo file was removed. "Gibson" is kept as *Legacy Body* and is verified sample-for-sample identical to the old Gibson body, so steel presets are unchanged.
+- **Custom IR**: new **IR…** button (load WAV/AIFF/FLAC/Ogg, or clear), body option 4. Loaded on JUCE's background thread with no audio-thread allocation; up to 2 s; level-matched; embedded in the project state; `render_audio --irFile`.
+- **Custom IR safety** (found in DAW testing: a 12 s phrase recording loaded as an IR rang like feedback and drove the limiter 52% of the time):
+  - Custom IRs' peak response is capped at the loudest built-in's peak + 3 dB. Real IRs measure −3 to −0.6 dB and are untouched.
+  - A plausibility check (late peak / < 20 dB decay) warns with *Load anyway / Cancel*.
+  - New `bench_synth` regression; that recording now renders at −14.2 dBFS with no limiting.
+- **Body list**: Classical (0), Legacy (1), Modal (2), Flamenco (3, new), Custom (4, new). Old indices are unchanged. The *Flamenco Rasgueado* preset now uses the Flamenco body.
+- **Level matching**: all IRs are energy-normalised to the Legacy IR, plus measured trims (Classical +0.24 dB, Flamenco +2.36 dB); the built-ins render within 0.2 dB of each other.
+- **Startup fix**: the first body after `reset()` applies instantly (sessions no longer start with a 20 ms fade from Classical).
+- **Quality Gates**: see the v68.f commit (bench_synth RTCheck/Timing with 5 bodies + custom IR; pluginval VST3/AU).
+
 ### v67.f
 - **Waveguide tuning fixed**:
   - The sharpness (+4.8 cents at E2 in sustain, +1.0 at E4, +0.3 at C6) came from `KarplusStrong` tuning the horizontal polarization +0.18 Hz above $f_0$. That plane decays ~5× slower and dominates the sustain. With both planes on $f_0$ the loop measured within 0.02 cents, so the filter compensation was always correct.

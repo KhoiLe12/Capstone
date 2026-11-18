@@ -111,7 +111,14 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v67.f**
+### Current Version Status: **v68.f**
+- **v68.f**:
+  - Measured Classical (Contreras 1971) and Flamenco (Conde 1964) body IRs from the Mores archive (CC BY 4.0, attribution in `resources/ir/ATTRIBUTION.md`).
+  - Old IR kept as "Legacy Body".
+  - New Custom IR loading, embedded in the project state. See wiki 04.
+  - **Body model indices are saved state: append only.**
+
+**v67.f:**
 - **v67.f**: waveguide tuning fixed. The +0.18 Hz polarization detune moved from the sustaining horizontal plane to the vertical plane; sustain is within ±0.05 cents (wiki 03).
 
 **v66.f:**

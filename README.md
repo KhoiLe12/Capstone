@@ -4,7 +4,7 @@ A physically modeled acoustic guitar synthesizer built with **JUCE** (C++17) and
 
 All sound is computed in real time from a simulation of the strings, bridge, and guitar body — **no samples or wavetables**.
 
-> **Current version:** v67.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
+> **Current version:** v68.f · Detailed engineering docs live in the [LLM & Developer Wiki](docs/wiki/README.md).
 
 ---
 
@@ -28,7 +28,7 @@ MIDI In ──► SynthEngine (sample-accurate) ── keyswitches (palm mute / 
                  ▼                                         │
    Mirrored soundboard reflections (stereo width)          │
                  ▼                                         │
-   Body: Classical Nylon IR │ Gibson Acoustic IR │ 32-mode modal bank
+   Body: Classical IR │ Flamenco IR │ Legacy IR │ Custom IR │ 32-mode modal bank
                  ▼                                         │
                  └──────────────── sum ◄───────────────────┘
                                     ▼
@@ -62,7 +62,10 @@ Details: [02 — Bilbao FDTD](docs/wiki/02_dsp_bilbao_fdtd.md) · [03 — Wavegu
 
 - **Sympathetic resonance** — a bank of resonators tuned to the six open strings (fundamental + 2 overtones each) is driven by the summed bridge force. Strings that are currently played are excluded, and coupling is reduced under muting.
 - **Body models**
-  - *Classical Nylon (IR)* and *Gibson Acoustic (IR)* — embedded stereo impulse responses run through zero-latency partitioned convolution (`juce::dsp::Convolution`).
+  - *Classical – Contreras 1971* and *Flamenco – Conde 1964*: measured stereo body IRs (bridge force → microphone) from R. Mores' guitar archive (CC BY 4.0, see [Credits](#credits)).
+  - *Legacy Body (IR)*: the original IR, origin unknown (formerly labelled "Gibson Acoustic").
+  - *Custom IR*: load your own body IR (WAV/AIFF/FLAC/Ogg, up to 2 s) with the **IR…** button. It is saved inside your project.
+  - All IR bodies run through zero-latency partitioned convolution (`juce::dsp::Convolution`) and are level-matched.
   - *Modal Bank (32-Mode)* — parallel second-order resonators; **Body Size** shifts the mode frequencies (parlor ↔ jumbo).
 - **Body Coupling** blends the dry bridge signal (solid-body / DI) with the radiated body.
 - **Airborne pick click** — the plectrum snap is added *after* the body so it is not low-passed by the wood.
@@ -105,7 +108,7 @@ Defaults match factory preset 1, *Dreadnought Acoustic*, which is loaded on firs
 | **Master Gain** | 0.0 – 1.0 | 0.80 | Output level. |
 | **Engine Model** | choice | Bilbao FDTD | Digital Waveguide (DWG) / Bilbao FDTD (DAFx24). |
 | **String Material** | choice | Steel Acoustic | Nylon Classical / Steel Acoustic. |
-| **Body Model** | choice | Gibson Acoustic (IR) | Classical Nylon (IR) / Gibson Acoustic (IR) / Modal Bank (32-Mode). Switching crossfades over 20 ms. |
+| **Body Model** | choice | Legacy Body (IR) | Classical – Contreras 1971 / Legacy Body (IR) / Modal Bank (32-Mode) / Flamenco – Conde 1964 / Custom IR. Switching crossfades over 20 ms. |
 | **Palm Mute** | toggle | off | Same as holding C1. |
 | **Full Mute** | toggle | off | Same as holding D1. |
 | **Strum 8th** | toggle | off | Same as holding E1. |
@@ -184,7 +187,7 @@ src/
   plugin/    JUCE AudioProcessor (parameters, MIDI) and editor (GUI)
   bench/     bench_synth and render_audio tools
 benchmarks/  GuitarSet spectral evaluation (guitarset_eval.py); legacy spectral_eval.py
-resources/   Source body impulse responses (embedded via src/dsp/EmbeddedIRs.h)
+resources/   Body impulse responses + generator for src/dsp/EmbeddedIRs.h (see resources/ir/ATTRIBUTION.md)
 docs/        Wiki and theoretical background
 JUCE/        JUCE framework (git submodule)
 ```
@@ -198,3 +201,10 @@ JUCE/        JUCE framework (git submodule)
 - [Theoretical frameworks & references](docs/THEORETICAL_FRAMEWORKS.md)
 - [Feature roadmap](TODO.md) · [Competitive analysis](COMPETITIVE_ANALYSIS.md)
 - [AGENTS.md](AGENTS.md) — contributor and AI-agent workflow rules
+
+---
+
+## Credits
+
+The *Classical – Contreras 1971* and *Flamenco – Conde 1964* body impulse responses are derived from Robert Mores, *Archive for the acoustical documentation of classical Spanish guitars, flamenco guitars and romantic guitars from private and public collections – bridge mobility*, Zenodo, 2021, [doi:10.5281/zenodo.4604577](https://doi.org/10.5281/zenodo.4604577), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). They were changed by deconvolution, high-pass filtering, trimming and normalisation; see [`resources/ir/ATTRIBUTION.md`](resources/ir/ATTRIBUTION.md).
+

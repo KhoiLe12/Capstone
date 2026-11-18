@@ -37,6 +37,7 @@ int main(int argc, char* argv[])
     float noteSpacingSec = 0.0f; // Sequential note timing (for melodies / legato tests)
     bool forceRepluck = false;   // Disable legato detection to render picked re-strum comparison
     std::string outputPath = "synth_output.wav";
+    std::string irFilePath;
     std::string eventsFilePath = "";
 
     for (int i = 1; i < argc; ++i)
@@ -97,6 +98,11 @@ int main(int argc, char* argv[])
         else if (arg == "--bodyType" && i + 1 < argc)
         {
             bodyType = std::stof(argv[++i]);
+        }
+        else if (arg == "--irFile" && i + 1 < argc)
+        {
+            // Load an impulse response into the Custom IR body (selects body type 4)
+            irFilePath = argv[++i];
         }
         else if (arg == "--bodyMix" && i + 1 < argc)
         {
@@ -186,6 +192,22 @@ int main(int argc, char* argv[])
 
     SynthEngine engine;
     engine.init(sampleRate, blockSize);
+
+    if (!irFilePath.empty())
+    {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(juce::File(irFilePath)));
+        if (reader == nullptr)
+        {
+            std::cerr << "Error: could not read IR file: " << irFilePath << std::endl;
+            return 1;
+        }
+        juce::AudioBuffer<float> ir(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+        reader->read(&ir, 0, ir.getNumSamples(), 0, true, true);
+        engine.getBodyResonance().setCustomIR(ir, reader->sampleRate, true);
+        bodyType = 4.0f;
+    }
     engine.paramEngineType = engineType;
     engine.paramStringMaterial = stringMaterial;
     engine.paramBodyType = bodyType;

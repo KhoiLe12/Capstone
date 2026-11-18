@@ -1,5 +1,6 @@
 #include "plugin/PluginProcessor.h"
 #include "plugin/PluginEditor.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 
 // ---------------------------------------------------------------------------
 // Constructor — APVTS is constructed here with the parameter layout
@@ -79,11 +80,14 @@ HybridSynthProcessor::createParameterLayout()
         juce::StringArray{ "Nylon Classical", "Steel Acoustic" },
         1));
 
-    // Body Model: 0 = Classical Nylon (IR), 1 = Gibson Acoustic (IR), 2 = Modal Bank (32-Mode)
+    // Body Model (order is the saved index; append only): 0 = Classical (IR, measured), 1 = Legacy Body
+    // (IR, unknown origin, formerly "Gibson Acoustic"), 2 = Modal Bank, 3 = Flamenco (IR, measured),
+    // 4 = Custom IR (user file; sounds like Classical until one is loaded)
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ "bodyModel", 1 },
         "Body Model",
-        juce::StringArray{ "Classical Nylon (IR)", "Gibson Acoustic (IR)", "Modal Bank (32-Mode)" },
+        juce::StringArray{ "Classical - Contreras 1971 (IR)", "Legacy Body (IR)", "Modal Bank (32-Mode)",
+                           "Flamenco - Conde 1964 (IR)", "Custom IR" },
         1));
 
     // Stereo Width: acoustic soundboard & string stereo field (0 = mono, 0.7 = natural, 1.0 = wide studio)
@@ -140,11 +144,92 @@ HybridSynthProcessor::createParameterLayout()
 void HybridSynthProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     synth.init(static_cast<float>(sampleRate), samplesPerBlock);
+    applyCustomIRToEngine(true); // init() re-prepares the convolution engines
+    isPrepared.store(true);
 }
 
 void HybridSynthProcessor::releaseResources()
 {
+    isPrepared.store(false);
     synth.reset();
+}
+
+// ---------------------------------------------------------------------------
+// Custom IR
+// ---------------------------------------------------------------------------
+
+juce::String HybridSynthProcessor::loadCustomIRFile(const juce::File& file)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+    if (reader == nullptr)
+        return "Could not read \"" + file.getFileName() + "\" as audio (supported: WAV, AIFF, FLAC, Ogg).";
+    if (reader->lengthInSamples <= 0 || reader->numChannels == 0 || reader->sampleRate <= 0.0)
+        return "\"" + file.getFileName() + "\" contains no audio.";
+
+    const auto maxLen = static_cast<juce::int64>(BodyResonance::kMaxCustomIRSeconds * reader->sampleRate);
+    const int len = static_cast<int>(std::min(reader->lengthInSamples, maxLen));
+    const int channels = static_cast<int>(std::min<unsigned int>(reader->numChannels, 2u));
+    juce::AudioBuffer<float> ir(channels, len);
+    reader->read(&ir, 0, len, 0, true, channels > 1);
+
+    {
+        const juce::ScopedLock sl(customIRLock);
+        customIRBuffer = std::move(ir);
+        customIRSampleRate = reader->sampleRate;
+        customIRName = file.getFileName();
+    }
+    applyCustomIRToEngine(false);
+    return {};
+}
+
+juce::String HybridSynthProcessor::getCustomIRFileWarning(const juce::File& file) const
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+    if (reader == nullptr || reader->lengthInSamples <= 0 || reader->sampleRate <= 0.0)
+        return {}; // loadCustomIRFile reports unreadable files as errors
+
+    // Judge the part that would actually be used (the first kMaxCustomIRSeconds)
+    const auto maxLen = static_cast<juce::int64>(BodyResonance::kMaxCustomIRSeconds * reader->sampleRate);
+    const int len = static_cast<int>(std::min(reader->lengthInSamples, maxLen));
+    const int channels = static_cast<int>(std::min<unsigned int>(reader->numChannels, 2u));
+    juce::AudioBuffer<float> ir(channels, len);
+    reader->read(&ir, 0, len, 0, true, channels > 1);
+    return BodyResonance::describeIRProblems(ir, reader->sampleRate);
+}
+
+void HybridSynthProcessor::clearCustomIR()
+{
+    {
+        const juce::ScopedLock sl(customIRLock);
+        customIRBuffer.setSize(0, 0);
+        customIRSampleRate = 0.0;
+        customIRName.clear();
+    }
+    applyCustomIRToEngine(false);
+}
+
+bool HybridSynthProcessor::hasCustomIR() const
+{
+    const juce::ScopedLock sl(customIRLock);
+    return customIRBuffer.getNumSamples() > 0;
+}
+
+juce::String HybridSynthProcessor::getCustomIRName() const
+{
+    const juce::ScopedLock sl(customIRLock);
+    return customIRName;
+}
+
+void HybridSynthProcessor::applyCustomIRToEngine(bool prepareNow)
+{
+    // Never called on the audio thread. With prepareNow = false, JUCE's convolution loads the IR on
+    // its background thread and swaps it in while audio keeps running.
+    const juce::ScopedLock sl(customIRLock);
+    synth.getBodyResonance().setCustomIR(customIRBuffer, customIRSampleRate, prepareNow);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +332,7 @@ const std::vector<HybridSynthProcessor::FactoryPreset>& HybridSynthProcessor::ge
         // Name,                      decay, brt,   pick,  stiff, size,  mix,   eng, mat, body, width, gain,  palm,  full,  strum
         { "Dreadnought Acoustic",     0.78f, 0.72f, 0.22f, 0.28f, 1.15f, 0.80f, 1,   1,   1,    0.75f, 0.80f, false, false, false },
         { "Nylon Concert Classical",   0.75f, 0.48f, 0.28f, 0.04f, 1.00f, 0.75f, 1,   0,   0,    0.65f, 0.85f, false, false, false },
-        { "Flamenco Rasgueado",       0.55f, 0.82f, 0.14f, 0.06f, 0.85f, 0.65f, 1,   0,   0,    0.80f, 0.85f, false, false, false },
+        { "Flamenco Rasgueado",       0.55f, 0.82f, 0.14f, 0.06f, 0.85f, 0.65f, 1,   0,   3,    0.80f, 0.85f, false, false, false },
         { "Fingerstyle Auditorium",   0.85f, 0.65f, 0.25f, 0.18f, 1.05f, 0.72f, 0,   1,   1,    0.70f, 0.80f, false, false, false },
         { "Vintage Parlor Blues",     0.62f, 0.75f, 0.18f, 0.35f, 0.75f, 0.60f, 1,   1,   2,    0.50f, 0.82f, false, false, false },
         { "12-String Shimmer",        0.90f, 0.85f, 0.20f, 0.30f, 1.45f, 0.85f, 0,   1,   2,    1.00f, 0.78f, false, false, false },
@@ -330,6 +415,25 @@ void HybridSynthProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty("currentProgram", currentProgram, nullptr);
+
+    // Embed the custom IR (planar float32, base64) so the project is self-contained
+    {
+        const juce::ScopedLock sl(customIRLock);
+        if (customIRBuffer.getNumSamples() > 0)
+        {
+            juce::MemoryBlock samples;
+            for (int ch = 0; ch < customIRBuffer.getNumChannels(); ++ch)
+                samples.append(customIRBuffer.getReadPointer(ch),
+                               sizeof(float) * static_cast<size_t>(customIRBuffer.getNumSamples()));
+            juce::ValueTree ir("CUSTOM_IR");
+            ir.setProperty("name", customIRName, nullptr);
+            ir.setProperty("sampleRate", customIRSampleRate, nullptr);
+            ir.setProperty("channels", customIRBuffer.getNumChannels(), nullptr);
+            ir.setProperty("samples", customIRBuffer.getNumSamples(), nullptr);
+            ir.setProperty("data", samples.toBase64Encoding(), nullptr);
+            state.appendChild(ir, nullptr);
+        }
+    }
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -342,6 +446,36 @@ void HybridSynthProcessor::setStateInformation(const void* data, int sizeInBytes
         auto vt = juce::ValueTree::fromXml(*xmlState);
         if (vt.hasProperty("currentProgram"))
             currentProgram = static_cast<int>(vt.getProperty("currentProgram"));
+
+        // Custom IR travels in the state; detach it so it is not kept inside the APVTS tree
+        juce::AudioBuffer<float> restoredIR;
+        double restoredRate = 0.0;
+        juce::String restoredName;
+        if (auto ir = vt.getChildWithName("CUSTOM_IR"); ir.isValid())
+        {
+            const int channels = static_cast<int>(ir.getProperty("channels", 0));
+            const int samples  = static_cast<int>(ir.getProperty("samples", 0));
+            juce::MemoryBlock data;
+            if (channels >= 1 && channels <= 2 && samples > 0
+                && data.fromBase64Encoding(ir.getProperty("data").toString())
+                && data.getSize() == sizeof(float) * static_cast<size_t>(channels) * static_cast<size_t>(samples))
+            {
+                restoredIR.setSize(channels, samples);
+                for (int ch = 0; ch < channels; ++ch)
+                    restoredIR.copyFrom(ch, 0, static_cast<const float*>(data.getData()) + static_cast<size_t>(ch) * static_cast<size_t>(samples), samples);
+                restoredRate = static_cast<double>(ir.getProperty("sampleRate", 48000.0));
+                restoredName = ir.getProperty("name").toString();
+            }
+            vt.removeChild(ir, nullptr);
+        }
+        {
+            const juce::ScopedLock sl(customIRLock);
+            customIRBuffer = std::move(restoredIR);
+            customIRSampleRate = restoredRate;
+            customIRName = restoredName;
+        }
+        applyCustomIRToEngine(false);
+
         apvts.replaceState(vt);
 
         // Snap discrete parameters (bools, choices) to their exact restored value. A host may have

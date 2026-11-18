@@ -299,6 +299,21 @@ static size_t runEventStressScenario(float sampleRate, int blockSize)
     engine.paramEngineType = 1.0f;
     engine.paramBodyType   = 0.0f;
 
+    // Custom IR (stereo, 0.5 s decaying noise at 44.1 kHz) loaded before the guarded region, as the
+    // plugin does on the message thread; body type 4 then exercises the custom convolution engine.
+    {
+        juce::AudioBuffer<float> ir(2, 22050);
+        uint32_t rng = 0x1234567u;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < ir.getNumSamples(); ++i)
+            {
+                rng = rng * 1664525u + 1013904223u;
+                const float noise = static_cast<float>(static_cast<int32_t>(rng)) / 2147483648.0f;
+                ir.setSample(ch, i, noise * std::exp(-static_cast<float>(i) / 4000.0f));
+            }
+        engine.getBodyResonance().setCustomIR(ir, 44100.0, true);
+    }
+
     std::vector<float> bufferL(static_cast<size_t>(blockSize), 0.0f);
     std::vector<float> bufferR(static_cast<size_t>(blockSize), 0.0f);
 
@@ -322,7 +337,7 @@ static size_t runEventStressScenario(float sampleRate, int blockSize)
         for (int material = 0; material <= 1; ++material)
         {
             engine.paramStringMaterial = static_cast<float>(material);
-            for (int bodyType = 0; bodyType <= 2; ++bodyType)
+            for (int bodyType = 0; bodyType <= 4; ++bodyType)
             {
                 engine.paramBodyType = static_cast<float>(bodyType);
 
@@ -503,6 +518,76 @@ static bool runChordVsLegatoCheck(float sampleRate)
               << "  Hammer-on E3->F#3 after 100 ms     : " << hammer << " voice  (expect 1)\n"
               << "  Same with legato disabled          : " << noLeg  << " voices (expect 2)\n";
     return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Custom IR safety: a "recording" loaded as an IR (2 s of sustained harmonics of the played note,
+// the worst case for resonance) must not overload the output at full velocity (the soft limiter,
+// threshold 0.85, may act on < 1% of samples) and must be flagged by the plausibility check; a
+// realistic decaying IR must pass the check. Before the v68.f peak cap, a real phrase recording
+// loaded as an IR engaged the limiter on 52% of samples.
+// ---------------------------------------------------------------------------
+static bool runCustomIRSafetyCheck(float sampleRate)
+{
+    const int note = 52;
+    const float f0 = 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
+    struct Stats { double rmsDb; double limiterPct; };
+    auto render = [&](const juce::AudioBuffer<float>* ir, double irRate) {
+        SynthEngine eng;
+        eng.init(sampleRate, 512);
+        eng.paramEngineType = 1.0f;
+        eng.paramBodyType = 0.0f;
+        if (ir != nullptr)
+        {
+            eng.getBodyResonance().setCustomIR(*ir, irRate, true);
+            eng.paramBodyType = 4.0f;
+        }
+        const int total = static_cast<int>(2.0f * sampleRate);
+        std::vector<float> L(static_cast<size_t>(total)), R(static_cast<size_t>(total));
+        SynthEngine::Event on;
+        on.type = SynthEngine::Event::Type::NoteOn;
+        on.note = note;
+        on.velocity = 1.0f;
+        eng.process(L.data(), R.data(), total, &on, 1);
+        double sum = 0.0;
+        int limited = 0;
+        for (float v : L)
+        {
+            sum += static_cast<double>(v) * v;
+            if (std::abs(v) > 0.85f) ++limited;
+        }
+        return Stats { 10.0 * std::log10(sum / total + 1e-20), 100.0 * limited / total };
+    };
+
+    juce::AudioBuffer<float> tonal(1, 96000);   // 2 s at 48 kHz of sustained harmonics
+    for (int i = 0; i < tonal.getNumSamples(); ++i)
+    {
+        float v = 0.0f;
+        for (int k = 1; k <= 8; ++k)
+            v += std::sin(2.0f * 3.14159265f * f0 * static_cast<float>(k) * static_cast<float>(i) / 48000.0f) / static_cast<float>(k);
+        tonal.setSample(0, i, 0.3f * v);
+    }
+    juce::AudioBuffer<float> decaying(1, 14400); // 300 ms decaying noise, IR-like
+    uint32_t rng = 0xabcdefu;
+    for (int i = 0; i < decaying.getNumSamples(); ++i)
+    {
+        rng = rng * 1664525u + 1013904223u;
+        decaying.setSample(0, i, (static_cast<float>(static_cast<int32_t>(rng)) / 2147483648.0f) * std::exp(-static_cast<float>(i) / 1200.0f));
+    }
+
+    const Stats ref = render(nullptr, 0.0);
+    const Stats bad = render(&tonal, 48000.0);
+    const bool flagged = BodyResonance::describeIRProblems(tonal, 48000.0).isNotEmpty();
+    const bool realOk  = BodyResonance::describeIRProblems(decaying, 48000.0).isEmpty();
+    const bool noOverload = bad.limiterPct < 1.0;
+    std::cout << std::fixed << std::setprecision(1)
+              << "  Classical body, E3 at full velocity  : RMS " << ref.rmsDb << " dBFS, limiter on " << ref.limiterPct << "% of samples\n"
+              << "  Tonal 'recording' loaded as an IR    : RMS " << bad.rmsDb << " dBFS, limiter on " << bad.limiterPct
+              << "% of samples (limit 1%)  " << (noOverload ? "PASS" : "FAIL") << "\n"
+              << "  Plausibility check flags it          : " << (flagged ? "yes  PASS" : "no  FAIL") << "\n"
+              << "  Realistic decaying IR passes check   : " << (realOk ? "yes  PASS" : "no  FAIL") << "\n"
+              << std::defaultfloat << std::setprecision(6);
+    return noOverload && flagged && realOk;
 }
 
 static void printHeader(float sampleRate)
@@ -826,6 +911,9 @@ int main(int argc, char* argv[])
     std::cout << "---------------------------------------------------------------------------------------------------------\n"
               << " CHORD vs LEGATO DETECTION (48 kHz)\n";
     timingOk = runChordVsLegatoCheck(48000.0f) && timingOk;
+    std::cout << "---------------------------------------------------------------------------------------------------------\n"
+              << " CUSTOM IR SAFETY (48 kHz)\n";
+    timingOk = runCustomIRSafetyCheck(48000.0f) && timingOk;
     std::cout << "---------------------------------------------------------------------------------------------------------\n";
 
     if (eventsOnly)

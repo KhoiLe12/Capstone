@@ -36,23 +36,52 @@ The vertical bridge force drives the acoustic guitar soundboard, which transform
 
 ```mermaid
 flowchart LR
-    BridgeForce[Bridge Force Drive] --> BodySelect{Body Type Selector}
-    BodySelect -->|Type 0: Classical Nylon IR| IRConv0[Partitioned Stereo IR Convolution]
-    BodySelect -->|Type 1: Gibson Acoustic IR| IRConv1[Partitioned Stereo IR Convolution]
-    BodySelect -->|Type 2: Modal Bank| Modal32[32-Mode Modal Resonator Bank]
-    
-    IRConv0 --> WetMix[Wet / Dry Mixer]
-    IRConv1 --> WetMix
+    BridgeForce[Bridge Force Drive] --> BodySelect{Body Type}
+    BodySelect -->|0: Classical - Contreras 1971| IR0[Stereo IR Convolution]
+    BodySelect -->|1: Legacy Body| IR1[IR Convolution]
+    BodySelect -->|2: Modal Bank| Modal32[32-Mode Modal Resonator Bank]
+    BodySelect -->|3: Flamenco - Conde 1964| IR3[Stereo IR Convolution]
+    BodySelect -->|4: Custom IR| IR4[User IR Convolution]
+    IR0 --> WetMix[Wet / Dry Mixer + 10 kHz air roll-off]
+    IR1 --> WetMix
+    IR3 --> WetMix
+    IR4 --> WetMix
     Modal32 --> WetMix
-    WetMix --> BodyOut[Resonated Body Output]
+    WetMix --> BodyOut[Body Output]
 ```
 
-### 1. Partitioned Stereo IR Convolution
-- **Gibson Dreadnought Acoustic IR**: Deep, resonant lower-bout cavity mode ($A_0 \approx 105\text{ Hz}$) and woody soundboard plate resonance ($T_1 \approx 200\text{ Hz}$). Wet gain calibrated to $0.82\times$.
-- **Classical Nylon IR**: Prominent 210 Hz soundboard bloom with warm, intimate treble rolloff. Wet gain calibrated to $0.62\times$ to avoid soft-limiter saturation.
-- Uses partitioned low-latency frequency-domain FFT convolution (zero latency in audio thread).
-- Both embedded IRs are short: 2048 frames at 48 kHz ($\approx 43\text{ ms}$). Classical Nylon is stereo; Gibson is mono, used on both channels.
-- **Known issue: notch at ~981 Hz in both IRs.** Measured on the IR files: −10.7 dB (Classical) and −7.8 dB (Gibson) re. the 300–3000 Hz median. B5 (988 Hz) comes out ~10 dB quieter than A5 or C6 through either IR, but not with the modal bank or the dry signal. Two different guitars sharing a notch at the same frequency suggests a capture artifact (e.g. a mic-position comb), not a body property. Not yet corrected.
+The body-type index is the saved `bodyModel` parameter value. **Never reorder; only append.** 0–2 kept their positions in v68.f, so older presets and projects map to the same slots.
+
+### 1. IR Bodies (v68.f)
+| # | Body | Source | IR |
+| :-- | :--- | :--- | :--- |
+| 0 | **Classical – Contreras 1971** | Manuel Contreras, Madrid 1971, classical (cedar/Rio palisander), measured in an anechoic lab | true stereo, 300 ms, 48 kHz |
+| 1 | **Legacy Body** | Unknown origin (added Sept 2026 by an AI agent; formerly "Gibson Acoustic") | mono, 43 ms |
+| 3 | **Flamenco – Conde 1964** | Faustino Conde, Madrid 1964, flamenca negra (spruce/Rio palisander), anechoic lab | true stereo, 300 ms, 48 kHz |
+| 4 | **Custom IR** | user-loaded file (see below) | up to 2 s, mono or stereo |
+
+- **Measured IRs (0 and 3)** come from R. Mores' guitar archive (Zenodo, [doi:10.5281/zenodo.4604577](https://doi.org/10.5281/zenodo.4604577), **CC BY 4.0**). An impact hammer struck the bridge centre, and two microphones 10 cm above the top plate (bass side → L, treble side → R, 20 cm apart) recorded the result. The IR is the mic signal divided by the hammer force, which is exactly the synth's bridge-force → sound path.
+  - Usable bandwidth is 10–13 kHz; the body ring decays to −60 dB in ~190 ms.
+  - Derivation script: `benchmarks/extract_mores_irs.py`. Credits and the list of changes: `resources/ir/ATTRIBUTION.md`.
+- **Compared to the Legacy IR** (same phrase, long-term spectrum): about 11 dB less 80–160 Hz and 5–6 dB more 320–640 Hz, i.e. less boom and more woody low-mid. The leaner bass is partly the mic position: over the bridge rather than the soundhole, so the ~100 Hz air resonance is weaker. Above ~1 kHz the bodies are similar.
+- **Legacy Body** is the original IR with honest labelling. Analysis in v68.f showed that the former "Classical Nylon" and "Gibson Acoustic" files were essentially one IR (correlation 0.95), the "Classical Nylon" stereo file was a fake-stereo copy (R = L delayed 16 samples), and both had a ~981 Hz notch. The fake-stereo file was removed. Legacy renders sample-for-sample identical to the old "Gibson Acoustic", so steel presets are unchanged, and it keeps its 981 Hz notch.
+- **Level**: every IR is energy-normalised (white-input power) to the Legacy IR's energy and played with one wet gain (0.82). Built-ins carry a measured trim on top (Classical +0.24 dB, Flamenco +2.36 dB), so the three built-in IR bodies render within 0.2 dB of each other on the same phrase.
+- Partitioned zero-latency FFT convolution (`juce::dsp::Convolution`), one engine per IR body, followed by a gentle 10.5 kHz one-pole "air" roll-off.
+
+### Custom IR (v68.f)
+- **Loading**: the **IR…** button next to the body menu loads WAV / AIFF / FLAC / Ogg (or clears it), and the body switches to *Custom IR*. Files longer than 2 s are truncated with a 10 ms fade; any sample rate works (JUCE resamples); stereo stays stereo.
+- **Threading**: loading happens on the message thread. `juce::dsp::Convolution` builds the engine on its background thread and swaps it in while audio runs, so nothing allocates on the audio thread. Until an IR is loaded, *Custom IR* sounds like Classical.
+- **Level**: energy-normalised like the built-ins, so switching bodies keeps a comparable level.
+- **Peak cap (safety)**: energy matching only equalises *average* gain, so a peaky "IR" can still be dangerous. For example, a recording of a phrase loaded by mistake has a spectrum ~20 dB peakier than a real body; it rang like feedback at those pitches and drove the output limiter 52% of the time. After normalisation, a custom IR's peak magnitude response is therefore capped at the loudest built-in body's peak + `kCustomIRPeakHeadroomDb` (3 dB).
+  - Six measured Mores IRs sit at −3.0 to −0.6 dB on that scale, so real IRs are unaffected (verified bit-identical).
+  - The phrase recording sat at +21.4 dB; capped, it renders at −14.2 dBFS with no limiting.
+- **Plausibility check**: before loading, `BodyResonance::describeIRProblems()` checks that the file behaves like an IR: its 10 ms envelope peaks in the first quarter, and it decays ≥ 20 dB from the peak to the last fifth. If not, the editor explains why and offers **Load anyway / Cancel**.
+- **Regression test**: `bench_synth` *Custom IR safety*. A tonal worst-case "IR" (harmonics of the played note) at full velocity must keep the limiter under 1% of samples (measured 0.3%) and be flagged; a realistic decaying IR must pass the check.
+- **Persistence**: the IR audio is embedded in the plugin state (child `CUSTOM_IR`: name, sample rate, channels, planar float32 base64). Projects reopen with the same IR on any machine, even if the original file has moved. A state without that child clears the custom slot.
+- **Rendering**: `render_audio --irFile <path>` uses the same path (selects body 4).
+
+### Startup
+After `reset()`, the first body requested is applied instantly. Before v68.f every session started with a 20 ms crossfade from Classical into its saved body.
 
 ### Body Model Switching (v62.f)
 - Each IR has its own `juce::dsp::Convolution` engine, and **both are loaded in `init()` (`prepareToPlay`)**. Before v62.f a body change called `loadImpulseResponse()` + `prepare()` from `processBlock`, which allocated on the audio thread.

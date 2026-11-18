@@ -46,7 +46,7 @@ public:
         float bodyMix;
         int   engineModel;    // 0 = DWG, 1 = FDTD
         int   stringMaterial; // 0 = Nylon, 1 = Steel
-        int   bodyModel;      // 0 = Classical Nylon IR, 1 = Gibson Acoustic IR, 2 = Modal Bank
+        int   bodyModel;      // 0 = Classical IR, 1 = Legacy IR, 2 = Modal Bank, 3 = Flamenco IR (4 = Custom IR)
         float stereoWidth;
         float masterGain;
         bool  palmMute;
@@ -70,6 +70,21 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
+    // -----------------------------------------------------------------------
+    // Custom body IR (message thread). The IR audio is embedded in the plugin state, so projects
+    // reopen with the same IR on any machine even if the original file has moved.
+    // -----------------------------------------------------------------------
+    /** Load an audio file (WAV/AIFF/FLAC/...) as the Custom IR. Returns an error message, or {} on success. */
+    juce::String loadCustomIRFile(const juce::File& file);
+    /** Plausibility check before loading: a user-facing warning if the file does not look like an IR, else {}. */
+    juce::String getCustomIRFileWarning(const juce::File& file) const;
+    void clearCustomIR();
+    bool hasCustomIR() const;
+    juce::String getCustomIRName() const;
+
+    /** Index of the Custom IR choice in the "bodyModel" parameter. */
+    static constexpr int kCustomIRBodyIndex = 4;
+
     SynthEngine& getSynth() noexcept { return synth; }
     const SynthEngine& getSynth() const noexcept { return synth; }
 
@@ -81,6 +96,14 @@ public:
 private:
     SynthEngine synth;
     int currentProgram = 0;
+
+    // Custom IR copy (at most BodyResonance::kMaxCustomIRSeconds), guarded for message-thread use
+    mutable juce::CriticalSection customIRLock;
+    juce::AudioBuffer<float> customIRBuffer;
+    double customIRSampleRate = 0.0;
+    juce::String customIRName;
+    std::atomic<bool> isPrepared { false };
+    void applyCustomIRToEngine(bool prepareNow);
 
     // Fixed-capacity timestamped MIDI event queue for sample-accurate processing (no allocation)
     static constexpr int kMaxEventsPerSegment = 512;

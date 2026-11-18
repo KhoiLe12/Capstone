@@ -1,11 +1,12 @@
 #include "BodyResonance.h"
 #include "EmbeddedIRs.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 #include <algorithm>
 #include <iterator>
 
 // ---------------------------------------------------------------------------
-// 32-Mode Acoustic Guitar Body Dataset (IRCAM Modalys Physical Model)
+// 32-Mode Acoustic Guitar Body Modes (Modalys-style, hand-authored table)
 // ---------------------------------------------------------------------------
 // Literature-grounded modal eigenfrequencies, Q factors, and coupling weights
 // for a master-built spruce/rosewood acoustic guitar (Rossing 2010; Fletcher 1998).
@@ -70,6 +71,75 @@ BodyResonance::BodyResonance()
 {
 }
 
+namespace
+{
+    // Reference IR energy (sum of squares, white-input power) for all bodies: the energy of the
+    // legacy IR, so "Legacy Body (IR)" sounds exactly as the former "Gibson Acoustic (IR)" did.
+    constexpr double kReferenceIREnergy = 0.18036872893571854;
+    // Wet gain applied to every (energy-normalised) IR body; former Gibson IR scale.
+    constexpr float kIRWetScale = 0.82f;
+
+    juce::AudioBuffer<float> decodeEmbeddedWav(const void* data, size_t size, double& sampleRateOut)
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatReader> reader(
+            wav.createReaderFor(new juce::MemoryInputStream(data, size, false), true));
+        juce::AudioBuffer<float> buffer;
+        sampleRateOut = 48000.0;
+        if (reader != nullptr)
+        {
+            sampleRateOut = reader->sampleRate;
+            buffer.setSize(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+            reader->read(&buffer, 0, buffer.getNumSamples(), 0, true, true);
+        }
+        return buffer;
+    }
+}
+
+namespace
+{
+    // Peak of the magnitude response |H(f)| of an IR (channels averaged in power). Message thread only.
+    float peakMagnitudeResponse(const juce::AudioBuffer<float>& ir)
+    {
+        const int len = ir.getNumSamples();
+        if (len == 0 || ir.getNumChannels() == 0)
+            return 0.0f;
+        int order = 1;
+        while ((1 << order) < len) ++order;
+        juce::dsp::FFT fft(order);
+        const int n = 1 << order;
+        std::vector<float> power(static_cast<size_t>(n / 2 + 1), 0.0f);
+        std::vector<float> work(static_cast<size_t>(2 * n));
+        for (int ch = 0; ch < ir.getNumChannels(); ++ch)
+        {
+            std::fill(work.begin(), work.end(), 0.0f);
+            std::copy_n(ir.getReadPointer(ch), len, work.begin());
+            fft.performFrequencyOnlyForwardTransform(work.data(), true);
+            for (size_t k = 0; k < power.size(); ++k)
+                power[k] += work[k] * work[k] / static_cast<float>(ir.getNumChannels());
+        }
+        return std::sqrt(*std::max_element(power.begin(), power.end()));
+    }
+
+    // Loudest peak response among the built-in IR bodies after normalisation and trim (computed once)
+    float builtInPeakResponse();
+}
+
+void BodyResonance::normaliseIREnergy(juce::AudioBuffer<float>& ir)
+{
+    // Average per-channel energy so stereo and mono IRs of the same body match in level
+    double energy = 0.0;
+    for (int ch = 0; ch < ir.getNumChannels(); ++ch)
+    {
+        const float* d = ir.getReadPointer(ch);
+        for (int i = 0; i < ir.getNumSamples(); ++i)
+            energy += static_cast<double>(d[i]) * d[i];
+    }
+    energy /= std::max(1, ir.getNumChannels());
+    if (energy > 1e-20)
+        ir.applyGain(static_cast<float>(std::sqrt(kReferenceIREnergy / energy)));
+}
+
 void BodyResonance::init(float sr, int blockSize, float bodySize, float bodyDamping)
 {
     sampleRate     = sr;
@@ -80,7 +150,7 @@ void BodyResonance::init(float sr, int blockSize, float bodySize, float bodyDamp
     const auto n = static_cast<size_t>(maxBlockSize);
     dryBufferL.assign(n, 0.f);
     dryBufferR.assign(n, 0.f);
-    for (int t = 0; t < NUM_IR_BODIES; ++t)
+    for (int t = 0; t < NUM_BODY_TYPES; ++t)
     {
         convBufferL[t].assign(n, 0.f);
         convBufferR[t].assign(n, 0.f);
@@ -99,31 +169,152 @@ void BodyResonance::init(float sr, int blockSize, float bodySize, float bodyDamp
     reset();
 }
 
-void BodyResonance::loadInternalIRs()
+void BodyResonance::prepareConvolution(int type)
 {
-    // Called from init() only (prepareToPlay / message thread). Never on the audio thread.
-    // Classical Nylon: loaded as mono so JUCE sums both WAV channels into one symmetric IR,
-    // eliminating any L/R imbalance present in the source capture.
-    convolutions[ClassicalNylonIR].loadImpulseResponse(kClassicalNylonWav_data,
-                                                       kClassicalNylonWav_size,
-                                                       juce::dsp::Convolution::Stereo::no,
-                                                       juce::dsp::Convolution::Trim::no,
-                                                       0,
-                                                       juce::dsp::Convolution::Normalise::no);
-    convolutions[GibsonAcousticIR].loadImpulseResponse(kGibsonAcousticWav_data,
-                                                       kGibsonAcousticWav_size,
-                                                       juce::dsp::Convolution::Stereo::yes,
-                                                       juce::dsp::Convolution::Trim::no,
-                                                       0,
-                                                       juce::dsp::Convolution::Normalise::no);
-
-    // prepare() synchronously installs the pending IR so the engines are live before audio starts.
+    // prepare() synchronously installs any pending IR. Never call while the audio thread runs.
     juce::dsp::ProcessSpec spec;
     spec.sampleRate       = static_cast<double>(sampleRate);
     spec.maximumBlockSize = static_cast<juce::uint32>(maxBlockSize);
     spec.numChannels      = 2;
-    for (auto& conv : convolutions)
-        conv.prepare(spec);
+    convolutions[type].prepare(spec);
+}
+
+namespace
+{
+    // trimDb: level match to Legacy measured on rendered phrases (FDTD + waveguide, nylon + steel),
+    // on top of the energy normalisation. Classical = Contreras 1971, Flamenco = Conde 1964
+    // (Mores, Zenodo 10.5281/zenodo.4604577, CC BY 4.0; see resources/ir/ATTRIBUTION.md).
+    struct EmbeddedIR { int type; const uint8_t* data; size_t size; float trimDb; };
+    const EmbeddedIR kBuiltInIRs[] = {
+        { BodyResonance::ClassicalIR, kClassicalBodyWav_data, kClassicalBodyWav_size, 0.24f },
+        { BodyResonance::LegacyIR,    kLegacyBodyWav_data,    kLegacyBodyWav_size,    0.0f  },
+        { BodyResonance::FlamencoIR,  kFlamencoBodyWav_data,  kFlamencoBodyWav_size,  2.36f },
+    };
+
+    juce::AudioBuffer<float> prepareBuiltIn(const EmbeddedIR& b, double& irRate)
+    {
+        auto ir = decodeEmbeddedWav(b.data, b.size, irRate);
+        BodyResonance::normaliseIREnergy(ir);
+        ir.applyGain(juce::Decibels::decibelsToGain(b.trimDb));
+        return ir;
+    }
+
+    float builtInPeakResponse()
+    {
+        static const float peak = []
+        {
+            float p = 0.0f;
+            for (const auto& b : kBuiltInIRs)
+            {
+                double rate = 48000.0;
+                p = std::max(p, peakMagnitudeResponse(prepareBuiltIn(b, rate)));
+            }
+            return p;
+        }();
+        return peak;
+    }
+}
+
+juce::String BodyResonance::describeIRProblems(const juce::AudioBuffer<float>& ir, double irSampleRate)
+{
+    const int len = ir.getNumSamples();
+    if (len == 0 || ir.getNumChannels() == 0 || irSampleRate <= 0.0)
+        return "The file contains no audio.";
+
+    // 10 ms RMS envelope of the channel-averaged signal
+    const int frame = std::max(1, static_cast<int>(0.010 * irSampleRate));
+    std::vector<float> env;
+    for (int start = 0; start + frame <= len; start += frame)
+    {
+        double sum = 0.0;
+        for (int ch = 0; ch < ir.getNumChannels(); ++ch)
+        {
+            const float* d = ir.getReadPointer(ch) + start;
+            for (int i = 0; i < frame; ++i)
+                sum += static_cast<double>(d[i]) * d[i];
+        }
+        env.push_back(static_cast<float>(std::sqrt(sum / (frame * ir.getNumChannels())) + 1e-12));
+    }
+    if (env.size() < 10)
+        return {}; // under 100 ms: too short to judge, accept
+
+    const auto peakIt = std::max_element(env.begin(), env.end());
+    const auto peakIndex = static_cast<size_t>(std::distance(env.begin(), peakIt));
+    const size_t tailStart = env.size() - std::max<size_t>(1, env.size() / 5);
+    double tail = 0.0;
+    for (size_t i = tailStart; i < env.size(); ++i)
+        tail += static_cast<double>(env[i]) * env[i];
+    tail = std::sqrt(tail / static_cast<double>(env.size() - tailStart));
+    const double decayDb = 20.0 * std::log10(*peakIt / (tail + 1e-12));
+
+    if (peakIndex > env.size() / 4)
+        return "Its loudest point is late in the file, not at the start. An impulse response begins with "
+               "a sharp peak and then dies away; this looks more like a recording.";
+    if (decayDb < 20.0)
+        return "Its level barely decays (only " + juce::String(decayDb, 1) + " dB from start to end). An "
+               "impulse response dies away; this looks more like a recording or a full mix.";
+    return {};
+}
+
+void BodyResonance::loadInternalIRs()
+{
+    // Called from init() only (prepareToPlay / message thread). Never on the audio thread.
+    for (const auto& b : kBuiltInIRs)
+    {
+        double irRate = 48000.0;
+        auto ir = prepareBuiltIn(b, irRate);
+        const auto stereo = ir.getNumChannels() >= 2 ? juce::dsp::Convolution::Stereo::yes
+                                                     : juce::dsp::Convolution::Stereo::no;
+        convolutions[b.type].loadImpulseResponse(std::move(ir), irRate, stereo,
+                                                 juce::dsp::Convolution::Trim::no,
+                                                 juce::dsp::Convolution::Normalise::no);
+        prepareConvolution(b.type);
+    }
+    prepareConvolution(CustomIR); // keeps a previously loaded custom IR; the processor re-applies it
+}
+
+void BodyResonance::setCustomIR(const juce::AudioBuffer<float>& source, double irSampleRate, bool prepareNow)
+{
+    if (source.getNumSamples() == 0 || source.getNumChannels() == 0 || irSampleRate <= 0.0)
+    {
+        customIRLoaded.store(false);
+        return;
+    }
+
+    // Truncate to the maximum length with a 10 ms raised-cosine fade, keep at most two channels
+    const int maxLen = static_cast<int>(kMaxCustomIRSeconds * irSampleRate);
+    const int len = std::min(source.getNumSamples(), maxLen);
+    const int channels = std::min(source.getNumChannels(), 2);
+    juce::AudioBuffer<float> ir(channels, len);
+    for (int ch = 0; ch < channels; ++ch)
+        ir.copyFrom(ch, 0, source, ch, 0, len);
+    if (source.getNumSamples() > maxLen)
+    {
+        const int fade = std::min(len, static_cast<int>(0.010 * irSampleRate));
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            float* d = ir.getWritePointer(ch);
+            for (int i = 0; i < fade; ++i)
+                d[len - fade + i] *= 0.5f * (1.0f + std::cos(juce::MathConstants<float>::pi * static_cast<float>(i) / static_cast<float>(fade)));
+        }
+    }
+    normaliseIREnergy(ir);
+
+    // Safety cap: energy matching equalises average gain only. A peaky "IR" (e.g. a recording of
+    // sustained notes, whose spectrum is ~20 dB peakier than a real body) would otherwise ring and
+    // overload at those pitches. Limit its peak response to the loudest built-in's peak + headroom.
+    const float peak = peakMagnitudeResponse(ir);
+    const float cap = builtInPeakResponse() * juce::Decibels::decibelsToGain(kCustomIRPeakHeadroomDb);
+    if (peak > cap && peak > 0.0f)
+        ir.applyGain(cap / peak);
+
+    const auto stereo = channels >= 2 ? juce::dsp::Convolution::Stereo::yes : juce::dsp::Convolution::Stereo::no;
+    convolutions[CustomIR].loadImpulseResponse(std::move(ir), irSampleRate, stereo,
+                                               juce::dsp::Convolution::Trim::no,
+                                               juce::dsp::Convolution::Normalise::no);
+    if (prepareNow)
+        prepareConvolution(CustomIR);
+    customIRLoaded.store(true);
 }
 
 void BodyResonance::setParameters(float bodySize, float bodyDamping, float bodyCoupling, int bodyType)
@@ -131,8 +322,18 @@ void BodyResonance::setParameters(float bodySize, float bodyDamping, float bodyC
     // Audio-thread safe: only scalar state changes and zeroing of fixed-size modal state.
     currentCoupling = std::clamp(bodyCoupling, 0.0f, 1.0f);
 
-    bodyType = std::clamp(bodyType, 0, 2);
-    if (bodyType != currentBodyType)
+    bodyType = std::clamp(bodyType, 0, NUM_BODY_TYPES - 1);
+    if (bodyType == CustomIR && ! customIRLoaded.load())
+        bodyType = ClassicalIR; // nothing loaded yet: sound like the default body
+    if (bodyType != currentBodyType && freshStart)
+    {
+        // Nothing has been processed since reset(): take the requested body directly. Otherwise
+        // every session would open with a 20 ms crossfade from the default (Classical) body.
+        currentBodyType  = bodyType;
+        previousBodyType = bodyType;
+        fadeSamplesLeft  = 0;
+    }
+    else if (bodyType != currentBodyType)
     {
         // An engine that is still audible (the outgoing body of an unfinished crossfade) keeps its
         // state; any other body was idle and is cleared before fading in, so no stale tail leaks.
@@ -203,9 +404,9 @@ void BodyResonance::processBlock(float* channelL, float* channelR, int numSample
         std::copy(channelR + offset, channelR + offset + n, dryBufferR.begin());
 
         // Only the audible IR engines run: the current body, plus the outgoing one during a crossfade.
-        for (int t = 0; t < NUM_IR_BODIES; ++t)
+        for (int t = 0; t < NUM_BODY_TYPES; ++t)
         {
-            if (t != currentBodyType && !(fadeSamplesLeft > 0 && t == previousBodyType))
+            if (! isIRBody(t) || (t != currentBodyType && !(fadeSamplesLeft > 0 && t == previousBodyType)))
                 continue;
 
             std::copy(dryBufferL.begin(), dryBufferL.begin() + n, convBufferL[t].begin());
@@ -241,6 +442,7 @@ void BodyResonance::processBlock(float* channelL, float* channelR, int numSample
 
         offset += n;
     }
+    freshStart = false;
 }
 
 void BodyResonance::renderBody(int type, int i, float inL, float inR, float& outL, float& outR) noexcept
@@ -257,10 +459,8 @@ void BodyResonance::renderBody(int type, int i, float inL, float inR, float& out
     const float dryFactor = 1.0f - currentCoupling;
     const float dryGain   = dryFactor * dryFactor;
 
-    // Level-balanced radiation: Classical Nylon IR has a pronounced ~4x body peak at 210 Hz,
-    // Gibson a broader ~2.8x dreadnought spread; 0.62 vs 0.82 balances perceived level.
-    const float irScale = (type == ClassicalNylonIR) ? 0.62f : 0.82f;
-    const float wetGain = irScale * std::sqrt(currentCoupling);
+    // All IRs are energy-normalised to the same reference at load, so one wet gain fits all
+    const float wetGain = kIRWetScale * std::sqrt(currentCoupling);
 
     const auto idx = static_cast<size_t>(i);
     const float mixL = dryGain * inL + wetGain * convBufferL[type][idx];
@@ -329,10 +529,11 @@ void BodyResonance::reset() noexcept
     std::fill_n(crossDelayL, CROSS_DELAY_LEN, 0.f);
     std::fill_n(crossDelayR, CROSS_DELAY_LEN, 0.f);
     crossDelayIdx = 0;
-    std::fill_n(airFilterL, NUM_IR_BODIES, 0.0f);
-    std::fill_n(airFilterR, NUM_IR_BODIES, 0.0f);
+    std::fill_n(airFilterL, NUM_BODY_TYPES, 0.0f);
+    std::fill_n(airFilterR, NUM_BODY_TYPES, 0.0f);
     fadeSamplesLeft = 0;
     previousBodyType = currentBodyType;
+    freshStart = true;
     for (auto& conv : convolutions)
         conv.reset();
 }

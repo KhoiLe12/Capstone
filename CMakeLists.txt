@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 67.0.0)
+project(HybridSynth VERSION 68.0.0)
 
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
 
@@ -109,6 +109,7 @@ target_compile_definitions(bench_synth
 target_link_libraries(bench_synth
     PRIVATE
         juce::juce_audio_basics
+        juce::juce_audio_formats
         juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags

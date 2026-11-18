@@ -115,7 +115,7 @@ STFT sizes $N \in \{2048, 1024, 512, 256, 128\}$, hop $N/4$, averaged over sizes
 - **Combined** = SC + log-L1.
 
 ### Method
-- **Re-synthesis from annotations**: every test renders the annotated notes of its window (onsets, durations, simultaneous chord notes) through `render_audio --eventsFile`. Settings: steel strings, Gibson IR, body mix 0.75. Velocity is not annotated, so all notes use 0.80.
+- **Re-synthesis from annotations**: every test renders the annotated notes of its window (onsets, durations, simultaneous chord notes) through `render_audio --eventsFile`. Settings: steel strings, Legacy Body IR (formerly "Gibson"), body mix 0.75. Velocity is not annotated, so all notes use 0.80.
 - **Alignment and level**: synth output is aligned to the reference by envelope cross-correlation and RMS-normalised, so scores compare spectro-temporal shape rather than latency or loudness.
 - **Isolated notes are chosen automatically** from all 360 takes. A note qualifies if it is within ±15 cents of a MIDI pitch (the synth has no fine-tune or pitch bend), held ≥ 1.0 s, with no other note starting from 0.3 s before to the end of the 1.5 s window, and none still sounding at the onset. Only pitches with clean notes in **two different takes** are tested (currently 12 pitches, MIDI 51–74).
 - **Phrases**: the first 5–6 s of four takes (SS1 comp and solo, BN1 comp, Rock1 comp). These contain bends and off-grid pitches (mean 9–20 cents from the nearest MIDI note) that the synth cannot reproduce.
