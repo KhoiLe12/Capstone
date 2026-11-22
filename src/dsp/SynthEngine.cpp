@@ -165,15 +165,13 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
                         const int minOpen = (heldStr == 0) ? 38 : openMidi[heldStr];
                         const int fret = midiNote - minOpen;
 
-                        // Case 1: Same natural string: full span up to 12 semitones
-                        const bool sameNaturalString = (assignStringForNote(midiNote, false) == heldStr);
+                        // Physical Hammer-On / Pull-Off Invariant:
+                        // A true acoustic legato transition occurs strictly along the SAME physical string.
+                        // Notes on different natural strings belong to separate open/fretted strings, enabling
+                        // rich polyphonic acoustic voicings (chords, dyads, double-stops) without dropping notes.
+                        const bool samePhysicalString = (naturalStringForNote(midiNote) == heldStr);
 
-                        // Case 2: Adjacent string boundary crossover (e.g. C3 to D3 on string 1):
-                        // Valid hammer-on / pull-off if physically reachable on the held string (fret 0..kMaxFret)
-                        // within a comfortable melodic fretting reach (interval <= 3 semitones):
-                        const bool reachableLegatoOnHeldString = (fret >= 0 && fret <= kMaxFret && interval <= 3);
-
-                        if (sameNaturalString || reachableLegatoOnHeldString)
+                        if (samePhysicalString && fret >= 0 && fret <= kMaxFret)
                         {
                             legatoVoice = heldVoiceIdx;
                         }
@@ -243,7 +241,7 @@ void SynthEngine::noteOnChord(const Event* const* chordEvents, int count)
     }
 
     // Simultaneous notes are a chord, never a legato transition
-    assignChordStrings(notes, count, !paramStrictFretboard, true, strings);
+    assignChordStrings(notes, count, !paramStrictFretboard, false, strings);
 
     for (int i = 0; i < count; ++i)
         if (strings[i] >= 0)
@@ -320,7 +318,8 @@ namespace
                 }
             }
             const int span = (hi >= 0) ? (hi - lo) : 0;
-            const int score[5] = { physical, placed, -ringingUsed, -span, -fretSum };
+            // Ergonomic physical priority: physical fret count, placed note count, compact hand span, low fretboard register, then tie-break with ringing strings kept
+            const int score[5] = { physical, placed, -span, -fretSum, -ringingUsed };
             bool better = !haveBest;
             for (int k = 0; k < 5 && !better; ++k)
             {
@@ -839,7 +838,15 @@ int SynthEngine::assignStringForNote(int note, bool allowOffBoard) const noexcep
     if (!voices[s].isActive())
         return s;
 
-    // 3. String s is currently active (either physically held or decaying in release).
+    // 2b. If the note on natural string s is not currently held down (i.e. merely decaying in release),
+    // fretting string s with the new note naturally stops the release tail and sounds the note at its
+    // authentic physical position instead of contorting the melody onto high frets of other strings.
+    const int oldNote = voices[s].getMidiNote();
+    const bool oldHeld = (oldNote >= 0 && oldNote < 128 && heldNotes[oldNote] > 0.001f);
+    if (!oldHeld)
+        return s;
+
+    // 3. String s is currently physically held down by the player.
     // Search for an idle physical string that can voice this note (fret <= kMaxFret).
     // This preserves ringing chord tails and prevents violent buffer re-trigger clobbering clicks!
     int bestAlt = -1;

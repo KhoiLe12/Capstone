@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(HybridSynth VERSION 70.0.0)
+project(HybridSynth VERSION 73.0.0)
 
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build" FORCE)
 
@@ -169,6 +169,8 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(render_audio PRIVATE -mavx2 -mfma)
     endif()
 endif()
+
+
 
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,31 @@
 | **Pinch Harmonics** | Plectrum release followed immediately ($\sim 2\text{ ms}$) by localized thumb-flesh damping at non-integer nodal position. | Planned physical implementation | **$< +0.2\%$** | Fully optimal. |
 | **String Bending** | Lateral string deflection over fret wire increases longitudinal string elongation $\Delta L(t)$ and nominal tension $T_0(t) = T_0 + EA \frac{\Delta L}{L}$. | Planned physical implementation | **$\sim +0.0\%$** (modulates nominal tension parameter $T_0$ already present in Bilbao loop) | Fully optimal. Smooth continuous pitch bends without spatial grid resizing. |
 | **Flamenco Golpe (Body Knocks)** | Direct mechanical soundboard impact force $f_\text{golpe}(t)$ injected into bridge/body IR convolution engine in parallel with string force. | Planned physical implementation | **$< +0.1\%$** (direct summation into convolution input buffer) | Fully optimal. Directly excites authentic measured body IR wood/cavity modes. |
-| **Dynamic Nonlinear Plectrum** | Dynamic elastoplastic contact force $f_\text{pick}(t) = K [y - u]_+^\alpha + R \frac{d}{dt}[y - u]_+$ interacting with node $x_\text{pick}$. | Planned migration from static displacement + bandpass clack | **$+2.0\%\text{--}4.5\%$** (solving 1 nonlinear contact force term per voice per sample) | High real-time viability using Sherman-Morrison explicit projection. |
+| **Dynamic Nonlinear Plectrum** | Dynamic elastoplastic contact force $f_\text{pick}(t) = K [y - u]_+ + R \frac{d}{dt}[y - u]_+$ interacting with node $x_\text{pick}$. | **Implemented (v71.f)** | **$+0.0\%$ measured** (`bench_synth`: 26.48% @ 48k block 32) | Fully optimal. Solved explicitly in closed-form without iterations; unzips Helmholtz corner upon slip. |
+
+### 0.1 Continuous Nonlinear Plectrum Contact Model (v71.f, Literature Review §6)
+
+Prior to v71.f, string excitation initialized the spatial grid with an instantaneous static triangular displacement shape $u(x, 0)$ released with Helmholtz slip offset, accompanied by a synthetic parallel airborne dipole pressure and bandpass filter network in `Voice.cpp`. 
+
+In **v71.f**, this heuristic shortcut was completely replaced with a first-principles continuous elastoplastic unilateral plectrum-string contact solver:
+1. **Dynamic Plectrum Kinematics**:
+   The plectrum tip moves with physical stroke velocity $v_p$ across coordinate $x_p$ over transit duration $T_\text{contact} \approx 1.2\text{--}2.5\text{ ms}$:
+   $$y_p(t) = y_p(t - k) + v_p k$$
+2. **Elastoplastic Unilateral Contact Force**:
+   With quadratic B-spline spatial distribution $J(x)$ centered over 3 nodes around $x_p$, string displacement under the pick is $u_p(t) = \sum_j J_j u_j(t)$. The relative normal penetration is $\eta(t) = \text{sgn} \cdot [y_p(t) + \Delta y_\text{ridge}(t) - u_p(t)]$.
+   The contact force between pick and string is:
+   $$f_p(t) = K_p [\eta(t)]_+ + R_p \frac{d\eta}{dt} [\eta(t)]_+$$
+   where $K_p \approx 13000\text{--}32000\text{ N/m}$ and $R_p \approx 1.35\text{ N}\cdot\text{s/m}$.
+3. **Exact Analytical Non-Iterative Solution**:
+   At discrete time step $n+1$, with grid compliance $S_p = \sum_j \lambda_\text{string}[j] J_j^2$:
+   $$\eta^{n+1} = \frac{\eta_\text{free}^{n+1} + S_p \frac{R_p}{k} \eta^n}{1 + S_p \left(K_p + \frac{R_p}{k}\right)}$$
+   Solved unconditionally in $O(1)$ scalar math with zero iterations.
+4. **Wound-String Winding Ridge Texture**:
+   Round wire winding coils ($d_\text{ridge} \approx 0.28\text{ mm}$) induce physical surface corrugation $\Delta y_\text{ridge}(t) = A_\text{ridge} \sin(\theta_\text{ridge})$, dynamically modulating contact force in real time and synthesizing authentic winding rasp directly within the string PDE.
+5. **Helmholtz Release Unzipping**:
+   When restoring string tension exceeds the Coulomb/bevel slip threshold $F_\text{slip} \approx 0.75\text{--}2.0\text{ N}$, the plectrum releases the string. Contact force $f_p$ drops to 0 instantly, unzipping the accumulated corner and naturally launching the traveling Helmholtz wave packet into the bridge and soundboard.
+6. **Airborne Shortcut Elimination**:
+   Synthetic Ricker wavelets, post-filter bandpass resonators, and artificial noise bursts in `Voice.cpp` are completely eliminated.
 
 ---
 
@@ -65,13 +89,15 @@ The synthesizer features 4 distinct physical playing articulations, modeled via 
   - When notes overlap during monophonic lead lines, the synthesizer automatically executes a seamless acoustic legato transition on the vibrating string.
   - Ascending overlapping intervals execute **Hammer-Ons**; descending overlapping intervals execute **Pull-Offs**.
   - **Note-Off Handover**: Sustained legato transitions gracefully ignore the earlier note's Note-Off message, transferring voice ownership to the new pitch without cutoffs.
-- **Cross-Boundary Fretting Reach (v58.f)**:
-  - In standard guitar string allocation, adjacent scale notes often span default string boundaries (e.g. $C_4 \to D_4$, $F \to G$, $A \to B$).
-  - When exactly 1 note is actively held on physical string $s$, the engine allows cross-boundary notes to hammer on or pull off on string $s$ if physically reachable ($0 \le \text{fret} \le 19$) within a melodic fretting span ($\text{interval} \le 3$ semitones).
-- **Chord Protection via a 40 ms Chord Window (v58.f, revised v64.f)**:
-  - Legato transitions require the held note to have started at least **40 ms** earlier (`kLegatoChordWindowSec`). Notes closer together than that, such as a rolled chord played live on a keyboard, always play as a chord. Each hammer-on restarts the window, so legato runs faster than 25 notes/s are re-picked.
+- **Single-String Physical Invariant (v72.f)**:
+  - On a real acoustic guitar, a hammer-on or pull-off occurs strictly along the *same* physical string.
+  - In v72.f, cross-boundary string stealing was removed: notes that naturally belong to different physical strings (`naturalStringForNote(midiNote) != heldStr`) are recognized as distinct polyphonic voices and played on separate strings, preserving harmonies, dyads, double-stops, and rolled chords.
+- **Chord Protection via a 75 ms Chord Window (v72.f)**:
+  - Legato transitions require the held note to have started at least **75 ms** earlier (`kLegatoChordWindowSec`). Notes closer together than that, such as a rolled chord played live on a keyboard or DAW piano roll with natural human timing spread (typically 10–60 ms), always play as polyphonic chords.
   - Note onsets are sample-accurate (v64.f), so the window is independent of host buffer size.
-  - v58.f–v63.f used a 160-sample (~3.5 ms) window. That was too short for live playing: in a chord rolled 8 ms apart (E3, G3, C3), G3 hammered onto E3's string and E3 disappeared (−85 dB). `bench_synth` now checks this case.
+  - v58.f–v71.f used a 40 ms window, which proved too tight for human keyboard performances and rolled chord spreads, occasionally swallowing the earlier notes into legato runs.
+- **Plectrum Contact Silence & Stealing Guard (v72.f)**:
+  - During dynamic elastoplastic plectrum-string contact ($1.2\text{--}2.5\text{ ms}$) and early onset transients ($< 75\text{ ms}$), the voice is protected from silence-detection auto-fading and cannot be stolen as the "quietest voice".
 - **Chords and the fretboard (v65.f)**: simultaneous notes are assigned to strings jointly over a 22-fret neck. **Strict Fretboard** decides what happens to notes no guitarist could finger at the same time: drop them (on) or play them on a free string past the fretboard (off, default). Details in wiki 01 §2.
 - **Legato toggle (v64.f)**: the `legato` parameter ("Legato (HO/PO)", default on) switches hammer-on / pull-off detection off entirely, for rhythm parts with slow arpeggiated chords.
   - Simultaneous chord voicings drawn at the same piano roll tick have 0 ms onset difference, guaranteeing chord notes are never stolen or collapsed into legato runs.

@@ -59,14 +59,15 @@ Unlike standard electronic synthesizers with generic round-robin voice stealing,
 - A note goes to its natural first-position string. If that string is busy, it goes to an idle string that can fret it within the **22-fret** neck (`kMaxFret`; 19 before v65.f), choosing the lowest fret.
 - If no idle string can fret it: with **Strict Fretboard** off, an idle string past the fretboard is used; otherwise the natural string is re-plucked.
 
-**Simultaneous notes** (same sample, e.g. a piano-roll chord; v65.f, `assignChordStrings`):
+**Simultaneous notes** (same sample, e.g. a piano-roll chord; v65.f/v73.f, `assignChordStrings`):
 - Assigned **jointly** by exhaustive search over note→string maps: at most 13,327 for 6 notes, stack-only, audio-thread safe. In priority order, it maximises:
   1. notes at a physical position (fret 0–22);
   2. notes placed at all (only with Strict Fretboard off);
-  3. untouched ringing strings;
-  4. a compact hand span;
-  5. low frets.
-- The auto-strum uses the same solver.
+  3. a compact hand span (`-span`, human fretting ergonomics);
+  4. low frets (`-fretSum`, standard guitar chord voicings);
+  5. untouched ringing strings (`-ringingUsed`, tie-breaker only; prior to v73.f, this preceded hand span, causing chord transitions like C $\to$ C# to contort across 11 frets and drop the top F note).
+- The auto-strum and `noteOnChord` both use this solver without artificial avoidance of released strings (`avoidRinging = false`), preserving consistent acoustic voicings.
+- Single notes (`assignStringForNote`) reuse their natural string immediately when the previous note on that string is no longer held down (`heldNotes[oldNote] <= 0.001f`), naturally damping release tails and preserving melodic register.
 - Before v65.f, notes were placed greedily in arrival order with a 19-fret limit, and a note with no free string re-plucked an occupied one. C5–E5–G5–B5–D6 (FL: C6–E6–G6–B6–D7) played only E5 and D6.
 - Within one sample, note-offs and keyswitches are applied before the chord's note-ons, so a keyswitch on the same tick affects the chord.
 - **Strict Fretboard** (`strictFretboard`, default off):

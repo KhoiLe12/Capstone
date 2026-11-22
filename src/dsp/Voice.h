@@ -108,7 +108,9 @@ public:
     int   getSamplesSinceNoteOn() const noexcept { return samplesSinceNoteOn; }
     float getEnergy()   const noexcept
     {
-        const float eng = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
+        float eng = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
+        if (engineType == EngineType::BilbaoFdtd && (fdtdString.isPlectrumContactActive() || samplesSinceNoteOn < static_cast<int>(0.075f * sampleRate)))
+            eng = std::max(eng, 1.0f);
         return eng * (releasing ? releaseGain : (choking ? chokeGain : 1.0f));
     }
 
@@ -224,11 +226,15 @@ private:
     int   fdtdSilenceCheckCounter = 0;
     bool fdtdIsSilent() noexcept
     {
+        if (fdtdString.isPlectrumContactActive() || samplesSinceNoteOn < static_cast<int>(0.075f * sampleRate))
+            return false;
         if (++fdtdSilenceCheckCounter < kFdtdSilenceCheckInterval)
             return false;
         fdtdSilenceCheckCounter = 0;
         const float energy = fdtdString.computeDiscreteEnergy();
         fdtdPeakEnergy = std::max(fdtdPeakEnergy, energy);
+        if (fdtdPeakEnergy < 1e-9f)
+            return false;
         return energy <= fdtdPeakEnergy * kFdtdSilenceRatio;
     }
     void resetFdtdSilenceReference() noexcept

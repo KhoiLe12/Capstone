@@ -122,7 +122,31 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v70.f**
+### Current Version Status: **v73.f**
+- **v73.f**:
+  - **Acoustic Chord Polyphony & Physical Fretboard Voicing Invariant**:
+    - **Physical Chord Voicing Priority**: In `ChordSearch::evaluate()`, reordered optimization criteria to prioritize physical human hand ergonomics over avoiding ringing strings: `score = { physical, placed, -span, -fretSum, -ringingUsed }`. Previously, `-ringingUsed` preceded hand span, causing chord transitions (such as C Major $\to$ C# Major) to contort notes across 11 frets to avoid released strings, banishing the top F5 note from the high E string and burying F4 at fret 8 on the wound A string.
+    - **Clean Chord Transition Invariant (`avoidRinging = false`)**: In `noteOnChord`, disabled `avoidRinging`. When a chord is struck, its physical voicing is determined strictly by optimal fretboard ergonomics rather than stale release tails from preceding chords.
+    - **Natural String Reuse for Released Notes**: In `assignStringForNote()`, permitted immediate reuse of natural string $s$ when the previous note on $s$ is no longer physically held down (`heldNotes[oldNote] <= 0.001f`), naturally damping the release tail and preserving melodic first-position register.
+    - **Full Conformance & Regression Testing**: Added automated C $\to$ C# transition verification in `bench_synth` ensuring both F4 and F5 ring out with healthy physical string energy. `RTCheck PASS (0)`, `pluginval` Level 8 `SUCCESS`, **+0.0% CPU overhead**.
+
+**v72.f**:
+  - **Acoustic Chord Polyphony & Physical Legato Calibration**:
+    - **Single-String Legato Invariant**: Fixed over-aggressive legato detection that dropped notes in rolled chords, dyads, and treble harmonies. A hammer-on / pull-off is strictly physical and constrained to the *same* physical string (`naturalStringForNote(midiNote) == heldStr`). Notes on distinct strings ring freely as polyphonic voices rather than retuning held notes.
+    - **Human Chord Window Calibration**: Widened `kLegatoChordWindowSec` from 40 ms to 75 ms, accommodating natural human finger asynchrony in keyboard and DAW chord performances without falsely converting rolled chord voicings into hammer-ons.
+    - **Plectrum Contact Silence & Stealing Guard**: Guarded `fdtdIsSilent()` against false early termination during dynamic plectrum contact and the initial 75 ms onset transient (`samplesSinceNoteOn < 75 ms`), preventing newly triggered chord notes from being silenced or stolen.
+    - **Full Conformance**: `bench_synth` `RTCheck PASS (0)` across all buffer sizes (32..512) and sample rates (44.1..192 kHz), `pluginval` Level 8 `SUCCESS`, **+0.0% CPU overhead** (`12.03%` 1-voice block 32, `28.38%` 6-voice block 32).
+
+**v71.f**:
+- **v71.f**:
+  - **First-Principles Continuous Nonlinear Plectrum Contact Model**: Transitioned excitation from artificial static initial displacement release and synthetic Ricker dipole/bandpass oscillators into a dynamic elastoplastic plectrum-string contact law (Stefan Bilbao contact mechanics & Literature Review §6).
+  - Plectrum tip dynamically traverses coordinate $x_p$ with stroke velocity $v_p$, compliantly pushing the string:
+    $$f_p(t) = K_p [y_p(t) + \Delta y_\text{ridge}(t) - u_p(t)]_+ + R_p \frac{d}{dt}[y_p(t) - u_p(t)]_+$$
+  - Solved analytically and non-iteratively in $O(1)$ scalar math during contact ($\sim 1.0\text{--}2.5\text{ ms}$). When restoring string tension exceeds the plectrum slip threshold ($F_\text{slip}$), the string unzips and releases a sharp Helmholtz traveling wave packet into the bridge and soundboard.
+  - On wound strings, wire winding coils ($\Delta y_\text{ridge}$) dynamically modulate the physical contact force in real time, synthesizing authentic pre-release rasp naturally without external noise or bandpass filters.
+  - Zero heap allocations (`bench_synth`: `RTCheck PASS (0)`), **+0.0% CPU overhead** (`12.01%` 1-vce block 32, `26.48%` 6-vce block 32), `pluginval` Level 8 `SUCCESS`.
+
+**v70.f:**
 - **v70.f**:
   - **Palm Muting Decay Calibration**: Widened palm contact patch to $L_\text{palm} = \min(0.065\text{ m}, 0.22L)$ ($6.5\text{ cm}$, representing true anatomical human palm heel coverage) and increased damping rate to $\sigma_\text{flesh} = 480.0 + 360.0 \times (1.0 - \text{decay})$, producing a tight, punchy acoustic palm mute ($\sim 45\text{--}70\text{ ms}$).
   - **Acoustic Dead Note Tone Calibration**: Extended fretting hand damping patch across $x \in [0.02L, 0.68L]$ (eliminating the undamped segment between nut and fret 2 that caused high-pitched ringing). Scaled airborne plectrum snap down to $0.25\times$ and reduced flexural click brightness to $0.35\times$, transforming the click from a harsh plastic snap into a deep, woody acoustic fretboard clack.

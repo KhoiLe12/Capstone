@@ -84,10 +84,11 @@ public:
 
     /**
      * Chord window: a new note only becomes a hammer-on / pull-off if the single held note started
-     * at least this long before it. Rolled keyboard chords spread their notes over ~10-40 ms; a
-     * legato note 40 ms after the previous one is already 25 notes/s, faster than any real run.
+     * at least this long before it. Rolled keyboard chords spread their notes over ~10-60 ms; a
+     * legato note 75 ms after the previous one captures deliberate melodic hammer-ons (100+ ms)
+     * without swallowing rolled chord voicings.
      */
-    static constexpr float kLegatoChordWindowSec = 0.040f;
+    static constexpr float kLegatoChordWindowSec = 0.075f;
 
     /** Number of string voices currently sounding (for tests and UI). */
     int getNumActiveVoices() const noexcept
@@ -97,6 +98,20 @@ public:
             if (v.isActive()) ++n;
         return n;
     }
+
+    const Voice& getVoice(int stringIndex) const noexcept
+    {
+        return voices[stringIndex >= 0 && stringIndex < NUM_VOICES ? stringIndex : 0];
+    }
+
+    /**
+     * Joint best-fit assignment of up to 6 simultaneous notes to distinct strings. Maximises, in
+     * order: notes at a physical position (fret 0..kMaxFret), notes placed at all (only if
+     * allowOffBoard), untouched ringing strings (if avoidRinging), compact hand span, low frets.
+     * outString[i] = string for notes[i], or -1 if unplaced. Exhaustive search (<= 13,327 maps).
+     */
+    void assignChordStrings(const int* notes, int count, bool allowOffBoard, bool avoidRinging,
+                            int* outString) const noexcept;
     static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24 / FL: C2) Hold Keyswitch
     static constexpr int KEYSWITCH_FULL_MUTE = 26; ///< D1 (MIDI Note 26 / FL: D2) Hold/Choke Keyswitch
     static constexpr int KEYSWITCH_STRUM_8TH = 28; ///< E1 (MIDI Note 28 / FL: E2) 8th-Note Strum Keyswitch
@@ -202,14 +217,6 @@ private:
     /** Trigger one note on physical string s with the current articulation state. */
     void startNoteOnString(int midiNote, float velocity, int s, float brightness, float pickPos);
 
-    /**
-     * Joint best-fit assignment of up to 6 simultaneous notes to distinct strings. Maximises, in
-     * order: notes at a physical position (fret 0..kMaxFret), notes placed at all (only if
-     * allowOffBoard), untouched ringing strings (if avoidRinging), compact hand span, low frets.
-     * outString[i] = string for notes[i], or -1 if unplaced. Exhaustive search (<= 13,327 maps).
-     */
-    void assignChordStrings(const int* notes, int count, bool allowOffBoard, bool avoidRinging,
-                            int* outString) const noexcept;
     static int stringMinOpen(int s) noexcept { return s == 0 ? 38 : kOpenMidi[s]; }
     /** First-position string for a note (E2..G#2 -> 0, A2.. -> 1, D3.. -> 2, G3.. -> 3, B3.. -> 4, E4+ -> 5). */
     static int naturalStringForNote(int note) noexcept

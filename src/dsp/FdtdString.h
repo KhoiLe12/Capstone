@@ -120,6 +120,9 @@ public:
         accumulatedLoss = 0.0f;
         pluckDurSamples = 0;
         pluckSampleCount = 0;
+        pickContactActive = false;
+        pickElapsedSamples = 0;
+        pickEtaPrev = 0.0f;
         saddleFilterState = 0.0f;
         saddleFilterState2 = 0.0f;
         rampSamplesLeft = 0;
@@ -289,7 +292,112 @@ public:
         const float xLoc = std::clamp(xLocFraction, 0.05f, 0.95f) * p.L;
         // Peak displacement from statics: u_peak = F * x * (L - x) / (T0 * L)
         const float uPeak = (forceNewtons * xLoc * (p.L - xLoc)) / (p.T0 * p.L);
-        pluckDisplacement(xLocFraction, uPeak);
+        startPlectrumContact(xLocFraction, -uPeak);
+    }
+
+    /** Return true if plectrum is currently in dynamic contact with the string. */
+    bool isPlectrumContactActive() const noexcept { return pickContactActive; }
+
+    /** Excite string via continuous nonlinear elastoplastic plectrum contact (v71.f, Literature Review §6). */
+    void startPlectrumContact(float xLocFraction, float peakDisplacementMeters, float brightness = 0.5f, float humanAngle = 0.0f)
+    {
+        const float xLoc = std::clamp(xLocFraction, 0.05f, 0.95f) * p.L;
+        const float b = std::clamp(brightness, 0.05f, 1.0f);
+
+        // Center contact node index (clamped strictly within interior grid points)
+        pickContactIdx = std::clamp(static_cast<int>(xLoc / h) - 1, 1, N_pts - 2);
+        const float xCenter = static_cast<float>(pickContactIdx + 1) * h;
+        const float dx = (xLoc - xCenter) / h; // relative offset in [-0.5, 0.5]
+
+        // 3-point quadratic B-spline spatial distribution: sum(weights) == 1.0
+        pickContactWeights[0] = 0.5f * (0.5f - dx) * (0.5f - dx);
+        pickContactWeights[1] = 0.75f - dx * dx;
+        pickContactWeights[2] = 0.5f * (0.5f + dx) * (0.5f + dx);
+
+        // Precompute discrete grid compliance Sp = sum_j (lambdaString[j] * weights[j]^2)
+        pickSp = 0.0f;
+        for (int j = 0; j < 3; ++j)
+        {
+            const size_t idx = static_cast<size_t>(pickContactIdx - 1 + j);
+            const float lam = (k * k / (rhoA * h)) * c0_vec[idx];
+            pickSp += lam * pickContactWeights[j] * pickContactWeights[j];
+        }
+
+        // Target stroke deflection and kinematics
+        pickTargetY = peakDisplacementMeters;
+        pickCurrentY = 0.0f;
+        pickEtaPrev = 0.0f;
+        pickElapsedSamples = 0;
+
+        // Contact transit duration:
+        // Bright/stiff pick or high velocity -> faster transit (~1.2 - 1.8 ms);
+        // Dark/warm flesh -> softer, slower contact (~2.2 - 3.2 ms).
+        const float contactDurSec = (0.0012f + 0.0010f * (1.0f - b));
+        pickMaxSamples = std::max(12, static_cast<int>(contactDurSec * fs));
+        pickVelocity = pickTargetY / static_cast<float>(pickMaxSamples);
+
+        // Material contact stiffness & damping (Stefan Bilbao contact law):
+        // Steel Tortex pick: Kp ~ 22000 - 32000 N/m; Nylon fingernail/flesh: Kp ~ 11000 - 18000 N/m
+        const bool isSteel = (p.rho > 3000.0f);
+        const float baseKp = isSteel ? 24000.0f : 13000.0f;
+        pickKp = baseKp * (0.75f + 0.50f * b);
+        pickRp = 1.35f * (0.50f + 0.60f * (1.0f - b));
+
+        // Plectrum slip force threshold (Coulomb / bevel slip limit):
+        // When restoring string tension exceeds the plectrum grip, the string unzips and slips off the edge.
+        const float velNorm = std::abs(peakDisplacementMeters) / 0.0015f;
+        pickSlipForce = (0.75f + 1.25f * std::clamp(velNorm, 0.2f, 1.5f)) * (0.75f + 0.50f * b);
+
+        // Pluck angle projection (vertical vs horizontal):
+        // Pick angle is ~36 degrees to soundboard normal (+/- organic human stroke angle variation)
+        const float angleRad = std::clamp(0.628f + 0.10f * humanAngle, 0.40f, 0.85f);
+        pickCosTheta = std::cos(angleRad);
+        pickSinTheta = std::sin(angleRad);
+
+        // Wound string winding ridge micro-texture:
+        // As plectrum edge slides across round wire winding coils, contact height undergoes micro-corrugation
+        if (p.woundFactor > 0.05f)
+        {
+            const float ridgePitch = 0.00028f; // ~0.28 mm wire winding pitch
+            const float vp = std::abs(pickVelocity) * fs;
+            pickRidgePhase = 0.0f;
+            pickRidgePhaseInc = 2.0f * 3.1415926535f * (vp / ridgePitch) * k;
+            pickRidgeAmp = 0.000030f * p.woundFactor * (0.35f + 0.65f * b);
+            pickRidgeDurSamples = pickMaxSamples;
+        }
+        else
+        {
+            pickRidgeDurSamples = 0;
+            pickRidgeAmp = 0.0f;
+            pickRidgePhase = 0.0f;
+            pickRidgePhaseInc = 0.0f;
+        }
+
+        // Plectrum contact is now actively engaged
+        pickContactActive = true;
+
+        // Reset DC blocker & transient state cleanly at note start
+        dcBlockerState = 0.0f;
+        prevRawForce   = 0.0f;
+        dcBlockerStateH = 0.0f;
+        prevRawForceH  = 0.0f;
+        saddleFilterState = 0.0f;
+        saddleFilterState2 = 0.0f;
+        saddleFilterStateH = 0.0f;
+        saddleFilterState2H = 0.0f;
+        rampSamplesLeft = 0;
+        rampTotalSamples = 0;
+        scrapeSamplesLeft = 0;
+        scrapeTotalSamples = 0;
+        lastScrapeForce = 0.0f;
+
+        // Axial longitudinal P-wave impulse (sharper release imparts crisper P-wave)
+        longitudinalImpulse = std::abs(peakDisplacementMeters) * p.longitudinalAttack * (0.8f + 1.2f * b);
+        longitudinalS1 = 0.0f;
+        longitudinalS2 = 0.0f;
+        dcBlockerStatePhantom = 0.0f;
+        prevRawForcePhantom = 0.0f;
+        saddleFilterPhantom = 0.0f;
     }
 
     /** Excite string with physical acoustic fingertip flesh contour and brightness. */
@@ -426,6 +534,8 @@ public:
     /** Advance simulation by 1 audio sample and return bridge displacement/force. */
     float tick() noexcept
     {
+        float contactForceH = 0.0f;
+
         // 1. Current external plucking force f_e^n (Eq. 5)
         float fe = 0.0f;
         if (pluckSampleCount < pluckDurSamples && pluckDurSamples > 0)
@@ -814,6 +924,55 @@ public:
         else psi[2] = 0.0f;
         } // end of else (full 4x4 Woodbury solver)
 
+        // ── Dynamic Nonlinear Plectrum Contact Force (v71.f, Literature Review §6) ──
+        if (pickContactActive)
+        {
+            pickCurrentY += pickVelocity;
+            pickElapsedSamples++;
+
+            float yEff = pickCurrentY;
+            if (pickRidgeDurSamples > 0 && pickElapsedSamples < pickRidgeDurSamples)
+            {
+                const float ridgeEnv = std::sin(3.1415926535f * static_cast<float>(pickElapsedSamples) / static_cast<float>(pickRidgeDurSamples));
+                yEff += pickRidgeAmp * std::sin(pickRidgePhase) * ridgeEnv;
+                pickRidgePhase += pickRidgePhaseInc;
+                if (pickRidgePhase >= 6.2831853f) pickRidgePhase -= 6.2831853f;
+            }
+
+            // String displacement under the plectrum contact zone
+            float u_p = 0.0f;
+            for (int j = 0; j < 3; ++j)
+                u_p += pickContactWeights[j] * u_next[static_cast<size_t>(pickContactIdx - 1 + j)];
+
+            const float sgn = (pickTargetY < 0.0f) ? -1.0f : 1.0f;
+            const float eta = sgn * (yEff - u_p);
+
+            const float denom = 1.0f + pickSp * (pickKp + pickRp * fs);
+            const float eta_curr = (eta + pickSp * (pickRp * fs) * pickEtaPrev) / denom;
+            float fp = (pickKp + pickRp * fs) * eta_curr - (pickRp * fs) * pickEtaPrev;
+            if (fp < 0.0f) fp = 0.0f;
+
+            if (fp >= pickSlipForce || (sgn * pickCurrentY >= sgn * pickTargetY) || pickElapsedSamples >= pickMaxSamples)
+            {
+                // Plectrum slips off string edge: sharp Helmholtz release transient
+                pickContactActive = false;
+                pickEtaPrev = 0.0f;
+            }
+            else if (eta > 0.0f)
+            {
+                pickEtaPrev = eta_curr;
+                const float fV = sgn * fp * pickCosTheta;
+                contactForceH  = sgn * fp * pickSinTheta;
+
+                for (int j = 0; j < 3; ++j)
+                {
+                    const size_t idx = static_cast<size_t>(pickContactIdx - 1 + j);
+                    const float lam = (k * k / (rhoA * h)) * c0_vec[idx];
+                    u_next[idx] += lam * pickContactWeights[j] * fV;
+                }
+            }
+        }
+
         // 9. Audio output drawn at the bridge boundary x = L (penultimate interior point)
 
         // Force on the bridge saddle is proportional to spatial slope: u[N-1] / h
@@ -922,6 +1081,16 @@ public:
                                        - c3 * Du_prev_H[static_cast<size_t>(i)]);
 
             u_next_H[static_cast<size_t>(i)] = Bu_H + Cu_H;
+        }
+
+        if (contactForceH != 0.0f)
+        {
+            for (int j = 0; j < 3; ++j)
+            {
+                const size_t idx = static_cast<size_t>(pickContactIdx - 1 + j);
+                const float lam = (k * k / (rhoA * h)) * c0_vec[idx];
+                u_next_H[idx] += lam * pickContactWeights[j] * contactForceH;
+            }
         }
 
         // H bridge force + DC blocker
@@ -1315,6 +1484,27 @@ private:
 
     float lambdaString = 0.0f;
     float lambdaFinger = 0.0f;
+
+    // Dynamic Nonlinear Plectrum Contact Model (v71.f)
+    bool  pickContactActive   = false;
+    int   pickContactIdx      = 0;
+    float pickContactWeights[3] { 0.25f, 0.50f, 0.25f };
+    float pickTargetY         = 0.0f;
+    float pickCurrentY        = 0.0f;
+    float pickVelocity        = 0.0f;
+    float pickKp              = 24000.0f;
+    float pickRp              = 1.35f;
+    float pickSp              = 0.0f;
+    float pickSlipForce       = 1.2f;
+    float pickEtaPrev         = 0.0f;
+    float pickCosTheta        = 0.866f;
+    float pickSinTheta        = 0.500f;
+    float pickRidgePhase      = 0.0f;
+    float pickRidgePhaseInc   = 0.0f;
+    float pickRidgeAmp        = 0.0f;
+    int   pickRidgeDurSamples = 0;
+    int   pickMaxSamples      = 0;
+    int   pickElapsedSamples  = 0;
 
     // Pluck parameters
     int pluckIdx = 0;

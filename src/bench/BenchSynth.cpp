@@ -501,6 +501,8 @@ static bool runChordVsLegatoCheck(float sampleRate)
     };
 
     const int rolled  = voicesAfter({ { 0.000f, 52 }, { 0.008f, 55 }, { 0.016f, 48 } }, true);
+    const int dyad    = voicesAfter({ { 0.000f, 52 }, { 0.045f, 55 } }, true);
+    const int treble  = voicesAfter({ { 0.000f, 64 }, { 0.045f, 67 }, { 0.090f, 71 } }, true);
     const int hammer  = voicesAfter({ { 0.000f, 52 }, { 0.100f, 54 } }, true);
     const int noLeg   = voicesAfter({ { 0.000f, 52 }, { 0.100f, 54 } }, false);
     // Simultaneous piano-roll chords: joint string assignment
@@ -513,11 +515,54 @@ static bool runChordVsLegatoCheck(float sampleRate)
               << "  C5-E5-G5-B5-D6, strict fretboard off: " << highFree << " voices (expect 5)\n"
               << "  C5-E5-G5-B5-D6, strict fretboard on : " << highStr  << " voices (expect 4: B5 and D6 both need the high E)\n";
 
-    const bool ok = (rolled == 3) && (hammer == 1) && (noLeg == 2) && (openCv == 5) && (highFree == 5) && (highStr == 4);
+    const bool ok = (rolled == 3) && (dyad == 2) && (treble == 3) && (hammer == 1) && (noLeg == 2) && (openCv == 5) && (highFree == 5) && (highStr == 4);
     std::cout << "  Rolled chord E3-G3-C3 (8 ms apart)  : " << rolled << " voices (expect 3)\n"
+              << "  Dyad E3+G3 (45 ms apart, minor 3rd) : " << dyad   << " voices (expect 2)\n"
+              << "  Treble triad E4+G4+B4 (45 ms spread): " << treble << " voices (expect 3)\n"
               << "  Hammer-on E3->F#3 after 100 ms     : " << hammer << " voice  (expect 1)\n"
               << "  Same with legato disabled          : " << noLeg  << " voices (expect 2)\n";
-    return ok;
+
+    // Consecutive chord transition: C Major -> C# Major (must not drop F notes or distort fingering)
+    SynthEngine cToCsEngine;
+    cToCsEngine.init(sampleRate, 512);
+    cToCsEngine.paramEngineType = 1.0f; // FDTD
+    std::vector<float> bufL(512, 0.0f), bufR(512, 0.0f);
+    // 1. Play C chord { 48, 52, 55, 60, 64 }
+    std::vector<SynthEngine::Event> cEvs;
+    for (int n : { 48, 52, 55, 60, 64 })
+        cEvs.push_back({ 0, SynthEngine::Event::Type::NoteOn, n, 0.8f, -1.f, -1.f });
+    cToCsEngine.process(bufL.data(), bufR.data(), 512, cEvs.data(), (int)cEvs.size());
+    // 2. Play 0.5s of audio
+    for (int b = 0; b < static_cast<int>(0.5f * sampleRate / 512); ++b)
+        cToCsEngine.process(bufL.data(), bufR.data(), 512, nullptr, 0);
+    // 3. Transition to C# Major chord { 49, 53, 56, 61, 65 } with NoteOffs and NoteOns
+    std::vector<SynthEngine::Event> csEvs;
+    for (int n : { 48, 52, 55, 60, 64 })
+        csEvs.push_back({ 0, SynthEngine::Event::Type::NoteOff, n, 0.0f, -1.f, -1.f });
+    for (int n : { 49, 53, 56, 61, 65 })
+        csEvs.push_back({ 0, SynthEngine::Event::Type::NoteOn, n, 0.8f, -1.f, -1.f });
+    cToCsEngine.process(bufL.data(), bufR.data(), 512, csEvs.data(), (int)csEvs.size());
+    for (int b = 0; b < static_cast<int>(0.3f * sampleRate / 512); ++b)
+        cToCsEngine.process(bufL.data(), bufR.data(), 512, nullptr, 0);
+
+    const int csVoices = cToCsEngine.getNumActiveVoices();
+    bool hasF4 = false, hasF5 = false;
+    for (int s = 0; s < 6; ++s)
+    {
+        if (cToCsEngine.getVoice(s).isActive())
+        {
+            if (cToCsEngine.getVoice(s).getMidiNote() == 53 && cToCsEngine.getVoice(s).getEnergy() > 0.5f)
+                hasF4 = true;
+            if (cToCsEngine.getVoice(s).getMidiNote() == 65 && cToCsEngine.getVoice(s).getEnergy() > 0.5f)
+                hasF5 = true;
+        }
+    }
+    const bool chordTransitionOk = (csVoices == 5 && hasF4 && hasF5);
+    std::cout << "  C -> C# chord transition (5 notes) : " << csVoices << " voices (F4="
+              << (hasF4 ? "yes" : "no") << ", F5=" << (hasF5 ? "yes" : "no") << ")  "
+              << (chordTransitionOk ? "PASS" : "FAIL") << "\n";
+
+    return ok && chordTransitionOk;
 }
 
 // ---------------------------------------------------------------------------

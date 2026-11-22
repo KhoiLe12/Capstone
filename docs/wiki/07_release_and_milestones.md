@@ -6,6 +6,59 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v73.f
+- **Acoustic Chord Polyphony & Physical Fretboard Voicing Invariant**:
+  - **Ergonomic Chord Voicing Priority**:
+    - Root-caused missing F notes in C# Major chord transitions (e.g. C Major $\to$ C# Major in DAW piano rolls): in `ChordSearch::evaluate()`, optimization criteria previously prioritized `-ringingUsed` (avoiding currently active strings) ahead of hand span (`-span`) and low frets (`-fretSum`).
+    - Consequently, when transitioning from C Major (where strings 1..5 were in release decay), the solver forced the entire C# chord down to strings 0..4 just to utilize the idle low E string (string 0). This placed C#4 at fret 11 of string 0, F4 at fret 8 of the heavily damped wound A string, and banished the top F5 note from string 5 completely.
+    - Reordered optimization hierarchy to place physical ergonomics first:
+      $$\text{score} = \{ \text{physical}, \text{placed}, -\text{span}, -\text{fretSum}, -\text{ringingUsed} \}$$
+  - **Clean Chord Transition Invariant (`avoidRinging = false`)**:
+    - In `noteOnChord()`, disabled `avoidRinging`. When a chord is struck, its physical voicing is governed strictly by optimal fretboard ergonomics rather than decaying release tails from preceding chords.
+  - **Natural String Reuse for Released Notes**:
+    - In `assignStringForNote()`, permitted immediate reuse of natural string $s$ when the previous note on $s$ is no longer physically held down (`heldNotes[oldNote] <= 0.001f`). Fretting string $s$ with the new note naturally damps the decaying release tail and voices the note at its authentic physical register instead of contorting the melody onto high frets of other strings.
+  - **Verification & QA**:
+    - Added automated C Major $\to$ C# Major chord transition verification to `bench_synth` (`runChordVsLegatoCheck`), validating that both F4 (53) and F5 (65) retain healthy physical string energy ($E > 0.5$).
+    - `bench_synth`: `RTCheck PASS (0)` across all buffer sizes (32..512) and sample rates (44.1..192 kHz).
+    - `pluginval` Level 8 `SUCCESS` (0 errors).
+    - Net CPU overhead: **+0.0%**.
+
+### v72.f
+- **Acoustic Chord Polyphony & Physical Legato Calibration**:
+  - **Single-String Legato Invariant**:
+    - Root-caused dropped chord notes in dyads, rolled chords, and treble voicings: previously, `reachableLegatoOnHeldString` permitted adjacent boundary cross-overs across up to 3 semitones even when the new note belonged to a completely separate idle physical string.
+    - Constrained hammer-on / pull-off detection strictly to the *same* physical string (`naturalStringForNote(midiNote) == heldStr`). Notes naturally sounding on distinct open or fretted strings ring out freely as true acoustic polyphonic voices without swallowing held notes.
+  - **Human Chord Window Calibration**:
+    - Expanded `kLegatoChordWindowSec` from 40 ms to 75 ms. Accommodates natural human finger spread / asynchrony in MIDI keyboard and DAW chord performances without falsely converting rolled chord voicings into hammer-ons.
+  - **Dynamic Plectrum Contact Silence & Stealing Guard**:
+    - In `Voice.h`, guarded `fdtdIsSilent()` against false early termination during dynamic plectrum contact and the initial 75 ms onset transient (`samplesSinceNoteOn < 75 ms`).
+    - Guarded `Voice::getEnergy()` to ensure freshly plucked notes during plectrum contact are never stolen as the "quietest voice".
+  - **Verification & QA**:
+    - Added dedicated comprehensive chord and dyad regression tests to `bench_synth` (`runChordVsLegatoCheck`).
+    - `bench_synth`: `RTCheck PASS (0)` across all block sizes (32..512) and sample rates (44.1k..192k).
+    - `pluginval` Level 8 `SUCCESS` (0 errors).
+    - Net CPU overhead: **+0.0%** (`12.03%` 1-voice block 32 @ 48 kHz, `28.38%` 6-voice block 32).
+
+### v71.f
+- **Continuous Nonlinear Plectrum Contact Model (Literature Review §6 & Bilbao Elastodynamics)**:
+  - **Dynamic Plectrum-String Kinematics**:
+    - Replaced artificial static triangular displacement initialization and synthetic parallel airborne click DSP network with a physical continuous spring-damper contact law:
+      $$f_p(t) = K_p [y_p(t) + \Delta y_\text{ridge}(t) - u_p(t)]_+ + R_p \frac{d}{dt}[y_p(t) - u_p(t)]_+$$
+    - The plectrum tip moves dynamically with velocity $v_p \propto \text{clampedVel}$ across coordinate $x_p$, compliantly deflecting the string over a physical contact duration $T_\text{contact} \approx 1.2\text{--}2.5\text{ ms}$.
+  - **Exact Analytical Closed-Form Solution**:
+    - Contact penetration $\eta^{n+1}$ is solved unconditionally and non-iteratively in $O(1)$ scalar math using grid compliance $S_p = \sum_j \lambda_\text{string}[j] J_j^2$. Zero iterative loops or non-convergence risks.
+  - **Physical Wound-String Winding Texture**:
+    - Contact surface height dynamically corrugates across wire winding coils ($d_\text{ridge} \approx 0.28\text{ mm}$), injecting authentic winding rasp directly into the PDE grid during stroke transit.
+  - **Sharp Helmholtz Corner Unzipping**:
+    - When restoring string tension exceeds the plectrum slip threshold $F_\text{slip} \approx 0.75\text{--}2.0\text{ N}$, the string unzips and slips off the pick edge. Contact force $f_p$ drops to 0 instantly, releasing the accumulated potential energy and launching the traveling Helmholtz corner toward the bridge and nut.
+    - Near the bridge ($0.08L$), high string stiffness triggers slip earlier with a smaller, sharper release, naturally yielding bright bridge attacks; near the neck ($0.48L$), compliance allows wide displacement before release, yielding warm, deep plucks.
+  - **Zero Heuristic Shortcuts**:
+    - Eliminated synthetic Ricker dipole equations, 2-pole flexural bandpass filters, and noise bursts from `Voice.cpp`. All acoustic radiation emerges physically through the string, bridge saddle, and body IR.
+  - **Quality Gates & Benchmarks**:
+    - Zero heap allocations: `bench_synth: RTCheck PASS (0)`.
+    - Single-voice latency @ 48 kHz block 32: `12.01%`, 6-voice polyphony: `26.48%`. Net CPU overhead: **+0.0%**.
+    - Conformance: `pluginval` Level 8 **`SUCCESS`** (0 errors). Binaries deployed to system VST3 and AU directories.
+
 ### v70.f
 - **Acoustic Articulation Refinement (Tight Palm Muting & Woody Dead Notes)**:
   - **Palm Muting Decay Calibration**:

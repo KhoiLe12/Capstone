@@ -85,110 +85,15 @@ void Voice::noteOn(int note, float vel,
         const float lengthScale = std::clamp(std::sqrt(p.L / 0.65f), 0.60f, 1.0f);
         const float peakDisp = (-0.0004f - 0.00125f * clampedVel) * lengthScale;
         const float clampedPickPos = std::clamp(pickPosition + pickJitter, 0.08f, 0.48f);
-        fdtdString.pluckDisplacement(clampedPickPos, peakDisp, effBrightness, humanAngle);
+        fdtdString.startPlectrumContact(clampedPickPos, peakDisp, effBrightness, humanAngle);
         resetFdtdSilenceReference();
 
-        // ── Direct Airborne Plectrum Physical Radiation (v50.f) ───────────────
-        // Physical model of:
-        // 1. Acoustic dipole shock wave (finite-width Ricker/bipolar pressure snap)
-        // 2. Dual plectrum flexural resonators (Mode 1 body flex + Mode 2 tip clack)
-        //    - Steel: Celluloid/Tortex flatpick modes (~4.2 kHz and ~7.2 kHz)
-        //    - Nylon: Keratin fingernail + fingerpad modes (~2.8 kHz and ~4.8 kHz)
-        // 3. String pick position sensitivity: plucking near the bridge (stiff boundary)
-        //    sharpens the dipole release wave and boosts the snap.
-        // 4. Wound string pre-release winding ridge micro-texture (accelerating micro-chirp).
-        {
-            // Pick position stiffness scale:
-            // Bridge position (0.08) -> stiff, sharp snap (+20%)
-            // Soundhole (0.23) -> nominal
-            // Neck / 12th fret (0.45) -> cushioned, softer release (-18%)
-            const float posStiffness = 1.0f + 0.85f * (0.24f - clampedPickPos);
-            const float woundBonus   = 1.0f + 0.55f * p.woundFactor;
-
-            // Mute mode amplitude & contour scaling:
-            const float muteClickScale = (muteMode == KarplusStrong::MuteMode::Palm) ? 0.32f :
-                                         (muteMode == KarplusStrong::MuteMode::Full) ? 0.25f : 1.0f;
-
-            // Direct airborne pick brightness scaling for muted articulations:
-            // Fretting hand flesh cushions the pick release, eliminating piercing 7.2 kHz tortex clicks
-            const float clickBrightness = (muteMode == KarplusStrong::MuteMode::Full) ? effBrightness * 0.35f :
-                                          (muteMode == KarplusStrong::MuteMode::Palm) ? effBrightness * 0.55f : effBrightness;
-
-            // Amplitude scaling: calibrated to natural -18 dB to -22 dB acoustic ratio
-            pickClickAmp = clampedVel * clickBrightness * (isSteel ? 0.115f : 0.085f) * woundBonus * posStiffness * muteClickScale;
-
-            const float clickDurSec = isSteel ? (0.009f + 0.006f * clickBrightness)
-                                              : (0.007f + 0.005f * clickBrightness);
-            pickClickSamplesLeft    = static_cast<int>(clickDurSec * sampleRate);
-            pickClickElapsed        = 0;
-
-            // Ultra-high frequency edge air bite decay (~6-9 ms)
-            pickEdgeDecayRate       = 3.8f / (clickDurSec * sampleRate);
-            pickEdgeHPState         = 0.0f;
-
-            // Dipole shock wave geometry (acoustic pressure doublet)
-            // Bridge pluck -> faster, narrower shock (~0.12 ms); Neck pluck -> wider (~0.22 ms)
-            const float sigmaSec    = (isSteel ? 0.00014f : 0.00019f) * (1.15f - 0.35f * clickBrightness) / std::max(0.6f, posStiffness);
-            pickDipoleSigma         = std::max(2.5f, sigmaSec * sampleRate);
-            if (muteMode == KarplusStrong::MuteMode::Palm)
-                pickDipoleSigma *= 1.45f;
-            else if (muteMode == KarplusStrong::MuteMode::Full)
-                pickDipoleSigma *= 1.85f;
-            pickDipoleCenter        = 2.2f * pickDipoleSigma; // peak occurs shortly after release starts
-
-            // Material flexural eigenmodes:
-            // Steel flatpick: Mode 1 ~ 4200 Hz (Q~7.5), Mode 2 ~ 7200 Hz (Q~5.5)
-            // Nylon fingernail: Mode 1 ~ 2800 Hz (Q~3.8), Mode 2 ~ 4800 Hz (Q~3.0)
-            const float f1 = (isSteel ? 4200.0f : 2800.0f) * (0.92f + 0.16f * clickBrightness) * (0.95f + 0.10f * posStiffness);
-            const float Q1 = isSteel ? 7.5f : 3.8f;
-            const float f2 = (isSteel ? 7200.0f : 4800.0f) * (0.90f + 0.20f * clickBrightness);
-            const float Q2 = isSteel ? 5.5f : 3.0f;
-
-            // Configure 2-pole bandpass resonator 1 (unity peak gain)
-            const float w1 = 2.0f * kPi * std::clamp(f1, 200.0f, sampleRate * 0.45f) / sampleRate;
-            const float bw1 = f1 / Q1;
-            const float r1 = std::clamp(std::exp(-kPi * bw1 / sampleRate), 0.1f, 0.995f);
-            pickRes1_b0 = (1.0f - r1 * r1) * 0.5f;
-            pickRes1_a1 = -2.0f * r1 * std::cos(w1);
-            pickRes1_a2 = r1 * r1;
-            pickRes1_x1 = 0.0f; pickRes1_x2 = 0.0f;
-            pickRes1_y1 = 0.0f; pickRes1_y2 = 0.0f;
-
-            // Configure 2-pole bandpass resonator 2 (unity peak gain)
-            const float w2 = 2.0f * kPi * std::clamp(f2, 400.0f, sampleRate * 0.45f) / sampleRate;
-            const float bw2 = f2 / Q2;
-            const float r2 = std::clamp(std::exp(-kPi * bw2 / sampleRate), 0.1f, 0.995f);
-            pickRes2_b0 = (1.0f - r2 * r2) * 0.5f;
-            pickRes2_a1 = -2.0f * r2 * std::cos(w2);
-            pickRes2_a2 = r2 * r2;
-            pickRes2_x1 = 0.0f; pickRes2_x2 = 0.0f;
-            pickRes2_y1 = 0.0f; pickRes2_y2 = 0.0f;
-
-            // Wound string pre-release winding ridge micro-texture:
-            if (p.woundFactor > 0.05f)
-            {
-                const float ridgeDurSec = 0.003f + 0.004f * p.woundFactor;
-                pickRidgeDurSamples = static_cast<int>(ridgeDurSec * sampleRate);
-                pickRidgeAmp = clampedVel * (0.35f + 0.65f * effBrightness) * p.woundFactor * 0.45f;
-                pickRidgePhase = 0.0f;
-                pickRidgePhaseInc = 2.0f * kPi * 1800.0f / sampleRate;
-                // Chirp accelerates from 1800 Hz to ~3400 Hz by release time
-                pickRidgeChirpRate = (2.0f * kPi * (3400.0f - 1800.0f) / sampleRate) / static_cast<float>(std::max(1, pickRidgeDurSamples));
-            }
-            else
-            {
-                pickRidgeDurSamples = 0;
-                pickRidgeAmp = 0.0f;
-            }
-
-            pickClickRng = static_cast<uint32_t>(0xDEAD1234u)
-                           ^ static_cast<uint32_t>(note * 7919)
-                           ^ static_cast<uint32_t>(clampedVel * 65535.0f)
-                           ^ static_cast<uint32_t>(s * 31337);
-        }
-
-        // Note: Full mute ("X" note / percussive dead note) is simulated physically
-        // by the string's calibrated effSigma0/effSigma1 loss, allowing natural acoustic body excitation.
+        // First-Principles Dynamic Plectrum Contact Model (v71.f, Literature Review §6):
+        // All plectrum-string elastoplastic contact mechanics, winding ridge micro-textures,
+        // and Helmholtz release transients are computed directly within the FDTD elastodynamic solver.
+        // Zero synthetic airborne Ricker dipole & bandpass filter shortcuts.
+        pickClickSamplesLeft = 0;
+        pickClickAmp         = 0.0f;
         return;
     }
 
