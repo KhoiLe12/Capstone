@@ -192,11 +192,11 @@ void KarplusStrong::updateLoopGains() noexcept
         // Extended low-frequency body resonance time on wound bass strings gives an open,
         // resonant acoustic "chug" (~120-180ms) instead of a pinched, synthetic click.
         // Plain treble strings have light, crisp acoustic "plink" (~50-80ms).
-        const float tauV = ((0.035f + 0.025f * woundFactor) + currentDecay * (0.045f + 0.045f * woundFactor)) * velDampScale * humanJitter;
-        const float tauH = ((0.045f + 0.030f * woundFactor) + currentDecay * (0.055f + 0.055f * woundFactor)) * velDampScale * humanJitter;
+        const float tauV = ((0.020f + 0.015f * woundFactor) + currentDecay * (0.024f + 0.020f * woundFactor)) * velDampScale * humanJitter;
+        const float tauH = ((0.025f + 0.018f * woundFactor) + currentDecay * (0.030f + 0.025f * woundFactor)) * velDampScale * humanJitter;
 
-        loopGainV = std::min(0.96f, std::exp(-1.0f / (f0 * tauV)));
-        loopGainH = std::min(0.98f, std::exp(-1.0f / (f0 * tauH)));
+        loopGainV = std::min(0.92f, std::exp(-1.0f / (f0 * tauV)));
+        loopGainH = std::min(0.94f, std::exp(-1.0f / (f0 * tauH)));
 
         const float baseCutoff = 1100.0f - woundFactor * 450.0f; // 650 Hz (bass chug) -> 1100 Hz (treble)
         const float saddleCutoff = std::clamp(baseCutoff * (0.85f + 0.30f * vel) * humanJitter, 450.0f, 1800.0f);

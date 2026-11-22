@@ -70,6 +70,8 @@ public:
         float xFG     = 0.25f;        ///< Finger coordinate along string (fraction of L)
     };
 
+    enum class MuteMode { Open, Palm, Full };
+
     FdtdString() = default;
 
     /** Lowest fundamental the grid capacity must hold (Drop-D D2 = 73.4 Hz, with margin). */
@@ -81,17 +83,19 @@ public:
      */
     void init(float sampleRateHz)
     {
-        init(sampleRateHz, StringParams());
+        init(sampleRateHz, StringParams(), MuteMode::Open);
     }
 
     /**
      * Configure grid for new string parameters. Allocates only if the sample rate requires more
      * capacity than previously reserved, so after init(sampleRate) it is audio-thread safe.
      */
-    void init(float sampleRateHz, const StringParams& params)
+    void init(float sampleRateHz, const StringParams& params, MuteMode muteMode = MuteMode::Open, float decay = 0.8f)
     {
         fs = sampleRateHz;
         k  = 1.0f / fs;
+        currentMuteMode = muteMode;
+        currentDecay = decay;
         reserveCapacity();
         p = params;
         configureGrid();
@@ -255,6 +259,17 @@ public:
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
     bool isFingerEngaged() const noexcept { return fingerEngaged; }
 
+    /** Dynamically switch playing articulation mode (Open, Palm, or Full mute dead notes). */
+    void setMuteMode(MuteMode mode, float decay = -1.0f) noexcept
+    {
+        currentMuteMode = mode;
+        if (decay >= 0.0f)
+            currentDecay = decay;
+        updateDampingProfile();
+    }
+
+    MuteMode getMuteMode() const noexcept { return currentMuteMode; }
+
     /** Dynamically update loss parameters for palm muting, choking or release mid-note. */
     void setDamping(float sigma0, float sigma1 = -1.0f) noexcept
     {
@@ -265,6 +280,7 @@ public:
         else
             p.sigma1 = initialSigma1;
         lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
+        updateDampingProfile();
     }
 
     /** Excite string by releasing from static triangular pluck displacement (authentic acoustic pluck). */
@@ -458,11 +474,9 @@ public:
 
         // 4. Compute Non-linear Potentials and Gradients (SAV, Eq. 54-55)
         // Pre-compute unconstrained linear update: v_lin = Bu^n + Cu^{n-1} - u^{n-1}
-        const float c0 = 1.0f / (1.0f + p.sigma0 * k);
         const float c1 = (p.T0 * k * k) / rhoA;
         const float c2 = (EI * k * k) / rhoA;
         const float c3 = 2.0f * p.sigma1 * k;
-        const float c4 = (p.sigma0 * k - 1.0f);
 
         float minU = 1e6f;
         for (int i = 0; i < N_pts; ++i)
@@ -470,8 +484,11 @@ public:
             const float u_val = u_curr[static_cast<size_t>(i)];
             if (u_val < minU) minU = u_val;
 
-            const float Bu_i = c0 * (2.0f * u_val + c1 * Du[static_cast<size_t>(i)] - c2 * D2u[static_cast<size_t>(i)] + c3 * Du[static_cast<size_t>(i)]);
-            const float Cu_i = c0 * (c4 * u_prev[static_cast<size_t>(i)] - c3 * Du_prev[static_cast<size_t>(i)]);
+            const float c0_i = c0_vec[static_cast<size_t>(i)];
+            const float c4_i = c4_vec[static_cast<size_t>(i)];
+
+            const float Bu_i = c0_i * (2.0f * u_val + (c1 + c3) * Du[static_cast<size_t>(i)] - c2 * D2u[static_cast<size_t>(i)]);
+            const float Cu_i = c0_i * (c4_i * u_prev[static_cast<size_t>(i)] - c3 * Du_prev[static_cast<size_t>(i)]);
             Bu_plus_Cu[static_cast<size_t>(i)] = Bu_i + Cu_i;
             v_lin[static_cast<size_t>(i)] = Bu_i + Cu_i - u_prev[static_cast<size_t>(i)];
         }
@@ -895,11 +912,14 @@ public:
 
         for (int i = 0; i < N_pts; ++i)
         {
-            const float Bu_H = c0 * (2.0f * u_curr_H[static_cast<size_t>(i)]
-                                     + (c1_H + c3) * Du_H[static_cast<size_t>(i)]
-                                     - c2          * D2u_H[static_cast<size_t>(i)]);
-            const float Cu_H = c0 * (c4 * u_prev_H[static_cast<size_t>(i)]
-                                     - c3 * Du_prev_H[static_cast<size_t>(i)]);
+            const float c0_i = c0_vec[static_cast<size_t>(i)];
+            const float c4_i = c4_vec[static_cast<size_t>(i)];
+
+            const float Bu_H = c0_i * (2.0f * u_curr_H[static_cast<size_t>(i)]
+                                       + (c1_H + c3) * Du_H[static_cast<size_t>(i)]
+                                       - c2          * D2u_H[static_cast<size_t>(i)]);
+            const float Cu_H = c0_i * (c4_i * u_prev_H[static_cast<size_t>(i)]
+                                       - c3 * Du_prev_H[static_cast<size_t>(i)]);
 
             u_next_H[static_cast<size_t>(i)] = Bu_H + Cu_H;
         }
@@ -1033,7 +1053,8 @@ private:
         for (auto* v : { &u_next, &u_curr, &u_prev, &Du, &D2u, &Du_prev, &kn, &v_lin, &Bu_plus_Cu,
                          &gradVB, &gB, &gradVF, &gF, &gFG, &b_string,
                          &u_next_H, &u_curr_H, &u_prev_H, &Du_H, &D2u_H, &Du_prev_H,
-                         &saved_curr, &saved_prev, &saved_curr_H, &saved_prev_H })
+                         &saved_curr, &saved_prev, &saved_curr_H, &saved_prev_H,
+                         &sigma0_vec, &c0_vec, &c4_vec })
             v->reserve(gridCapacity);
         fretIndices.reserve(32);
         fretAlpha.reserve(32);
@@ -1077,8 +1098,11 @@ private:
         const auto n = static_cast<size_t>(N_pts);
         for (auto* v : { &u_next, &u_curr, &u_prev, &Du, &D2u, &Du_prev, &kn, &v_lin, &Bu_plus_Cu,
                          &gradVB, &gB, &gradVF, &gF, &gFG, &b_string,
-                         &u_next_H, &u_curr_H, &u_prev_H, &Du_H, &D2u_H, &Du_prev_H })
+                         &u_next_H, &u_curr_H, &u_prev_H, &Du_H, &D2u_H, &Du_prev_H,
+                         &sigma0_vec, &c0_vec, &c4_vec })
             v->resize(n, 0.0f);
+
+        updateDampingProfile();
 
         // Bone saddle terminating mechanical impedance filter (brightness-dependent cutoff)
         const float saddleCutoff = std::min(3500.0f + 3500.0f * std::clamp(p.brightness, 0.05f, 1.0f), 0.45f * fs);
@@ -1114,6 +1138,80 @@ private:
         // Diagonal scaling Lambda (Eq. 51)
         lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
         lambdaFinger = (k * k) / p.MFG;
+    }
+
+    /**
+     * Compute spatial damping profile sigma0(x) and per-node coefficients c0[i], c4[i].
+     * First-principles modeling of palm muting (localized bridge damping) and
+     * dead notes (broad fretting-hand neck damping).
+     * Audio-thread safe: zero heap allocations (operates on pre-resized vectors).
+     */
+    void updateDampingProfile() noexcept
+    {
+        if (N_pts <= 0 || sigma0_vec.size() < static_cast<size_t>(N_pts))
+            return;
+
+        if (currentMuteMode == MuteMode::Palm)
+        {
+            // Palm Muting: localized fleshy palm contact across the last 5.5-7.5 cm near bridge
+            const float palmLength = std::min(0.065f, 0.22f * p.L);
+            const float xPalmStart = p.L - palmLength;
+            const float palmDampingRate = 480.0f + 360.0f * (1.0f - currentDecay);
+
+            for (int i = 0; i < N_pts; ++i)
+            {
+                const float x = static_cast<float>(i + 1) * h;
+                if (x <= xPalmStart)
+                {
+                    sigma0_vec[static_cast<size_t>(i)] = p.sigma0;
+                }
+                else
+                {
+                    const float frac = (x - xPalmStart) / (p.L - xPalmStart);
+                    const float w = 0.5f * (1.0f - std::cos(3.14159265358979323846f * frac));
+                    sigma0_vec[static_cast<size_t>(i)] = p.sigma0 + palmDampingRate * w;
+                }
+            }
+        }
+        else if (currentMuteMode == MuteMode::Full)
+        {
+            // Dead Notes ("X" notes): broad spatial damping patch across the entire neck (frets 1 to 14)
+            // Starts right at the nut boundary (x1 = 0.02L) to eliminate any short undamped high-frequency ringing
+            const float x1 = 0.02f * p.L;
+            const float x2 = 0.68f * p.L;
+            constexpr float handDampingRate = 850.0f;
+
+            for (int i = 0; i < N_pts; ++i)
+            {
+                const float x = static_cast<float>(i + 1) * h;
+                if (x >= x1 && x <= x2)
+                {
+                    const float frac = (x - x1) / (x2 - x1);
+                    const float w = std::sin(3.14159265358979323846f * frac);
+                    sigma0_vec[static_cast<size_t>(i)] = p.sigma0 + handDampingRate * w;
+                }
+                else
+                {
+                    sigma0_vec[static_cast<size_t>(i)] = p.sigma0;
+                }
+            }
+        }
+        else
+        {
+            // Open String: uniform intrinsic material loss
+            for (int i = 0; i < N_pts; ++i)
+            {
+                sigma0_vec[static_cast<size_t>(i)] = p.sigma0;
+            }
+        }
+
+        // Precompute coefficients c0[i] and c4[i]
+        for (int i = 0; i < N_pts; ++i)
+        {
+            const float s0 = sigma0_vec[static_cast<size_t>(i)];
+            c0_vec[static_cast<size_t>(i)] = 1.0f / (1.0f + s0 * k);
+            c4_vec[static_cast<size_t>(i)] = s0 * k - 1.0f;
+        }
     }
 
     /** Fast 4x4 linear equation solver using Gaussian elimination with partial pivoting. */
@@ -1202,6 +1300,11 @@ private:
     std::vector<float> saved_prev;
     std::vector<float> saved_curr_H;
     std::vector<float> saved_prev_H;
+    std::vector<float> sigma0_vec;
+    std::vector<float> c0_vec;
+    std::vector<float> c4_vec;
+    MuteMode currentMuteMode = MuteMode::Open;
+    float currentDecay = 0.80f;
     size_t gridCapacity = 0;
 
     float saddleBeta = 0.0f;

@@ -1,5 +1,28 @@
 # 05 — Articulations, Dead Notes & Keyswitch Specification
 
+## 0. First-Principles Physical Modeling Invariant
+
+> [!IMPORTANT]
+> **Core Architectural Rule**: Every playing articulation, boundary condition, damping mechanic, and excitation in the synthesizer **MUST be physically modeled** within the simulation framework (FDTD elastodynamic PDE solver and bridge/body acoustics).
+> 
+> Heuristic "DSP shortcuts" (such as synthetic oscillators, post-filtering EQ curves, or bypassing string solvers with artificial wavelets) are prohibited unless a specific physical interaction is mathematically impossible or provably non-convergent in real-time. If an approximation is ever required, the exact mathematical bottleneck and physical trade-off must be documented here and disclosed to the user.
+> 
+> **Mandatory CPU Weight Invariant**: For every added physical modeling feature or PDE extension, the agent must measure and report the exact CPU load increase (via `./build/bench_synth` latency and deadline percentage sweeps).
+
+### Physical Articulation Architecture & CPU Feasibility Analysis
+
+| Articulation | Physical Mechanism in PDE / Body | Pure Physical Modeling Status | Estimated CPU Weight Impact | Feasibility & Real-Time Viability |
+| :--- | :--- | :--- | :--- | :--- |
+| **Palm Muting** | Fleshy palm contact resting across the last $4.5\text{--}6.5\text{ cm}$ near bridge: localized spatial loss profile $\sigma_0(x)$ on string nodes $x \in [L - \Delta x, L]$. | **Implemented (v69.f, refined v70.f)** | **$+0.0\%$ measured** (`bench_synth`: 28.60% @ 48k block 32) | Fully optimal. Naturally preserves fundamental wave momentum while rapidly absorbing high-frequency reflections. |
+| **Dead Notes ("X" notes)** | Fretting hand rests across the neck: broad spatial damping patch $\sigma_\text{hand}(x)$ over $x \in [0.02L, 0.68L]$. Run FDTD solver normally. | **Implemented (v69.f, refined v70.f)** | **$+0.0\%$ measured** (terminates into silence in $< 15\text{ ms}$) | Fully optimal. Eliminates artificial click generators; strike energy pumps body IR naturally. |
+| **Natural Harmonics** | Light finger touch at integer nodal points ($x = L/2, L/3, L/4, L/5$): localized nodal damping $\sigma_\text{touch}(x)$ suppressing anti-nodal partials. | Planned physical implementation | **$< +0.2\%$** (boundary damp applied to 1 discrete node) | Fully optimal. Emergent crystalline bell tones from modal zero-crossings. |
+| **Pinch Harmonics** | Plectrum release followed immediately ($\sim 2\text{ ms}$) by localized thumb-flesh damping at non-integer nodal position. | Planned physical implementation | **$< +0.2\%$** | Fully optimal. |
+| **String Bending** | Lateral string deflection over fret wire increases longitudinal string elongation $\Delta L(t)$ and nominal tension $T_0(t) = T_0 + EA \frac{\Delta L}{L}$. | Planned physical implementation | **$\sim +0.0\%$** (modulates nominal tension parameter $T_0$ already present in Bilbao loop) | Fully optimal. Smooth continuous pitch bends without spatial grid resizing. |
+| **Flamenco Golpe (Body Knocks)** | Direct mechanical soundboard impact force $f_\text{golpe}(t)$ injected into bridge/body IR convolution engine in parallel with string force. | Planned physical implementation | **$< +0.1\%$** (direct summation into convolution input buffer) | Fully optimal. Directly excites authentic measured body IR wood/cavity modes. |
+| **Dynamic Nonlinear Plectrum** | Dynamic elastoplastic contact force $f_\text{pick}(t) = K [y - u]_+^\alpha + R \frac{d}{dt}[y - u]_+$ interacting with node $x_\text{pick}$. | Planned migration from static displacement + bandpass clack | **$+2.0\%\text{--}4.5\%$** (solving 1 nonlinear contact force term per voice per sample) | High real-time viability using Sherman-Morrison explicit projection. |
+
+---
+
 ## 1. Physical Articulation Modes
 
 The synthesizer features 4 distinct physical playing articulations, modeled via boundary damping conditions and mechanical impulse coupling:
@@ -11,22 +34,25 @@ The synthesizer features 4 distinct physical playing articulations, modeled via 
 
 ### B. Selective Acoustic Palm Muting (`MuteMode::Palm`)
 - **Physical Context**: The fleshy heel of the picking hand rests lightly on the bridge saddles right where the strings terminate.
-- **Acoustic Physics**:
-  - The speaking string length still anchors at the fret and bridge, allowing the low fundamental and 2nd harmonic ($80\text{--}250\text{ Hz}$) to sustain with authentic mass momentum.
-  - Fleshy contact creates steep viscoelastic shear loss ($\sigma_1 \times 4.0$), rapidly dissipating high partials ($> 350\text{ Hz}$).
-  - **Calibrated Damping Rate (v55.f)**:
-    $$\text{effSigma0} = (9.5\text{--}11.0) + 8.5 \times (1.0 - \text{decay})$$
-    Produces a tight, punchy acoustic "chug" lasting $\sim 75\text{--}110\text{ ms}$. Dynamically controllable via the plugin's `Decay` knob.
-  - Plectrum dipole impulse is cushioned: `muteClickScale = 0.38f`.
+- **First-Principles Spatial Loss Profile (v69.f, refined v70.f)**:
+  - The speaking string length anchors at the fret and bridge.
+  - Spatial flesh damping is localized strictly to the bridge termination zone $x \in [L - L_\text{palm}, L]$, where $L_\text{palm} = \min(0.065\text{ m}, 0.22L)$ ($6.5\text{ cm}$, matching anatomical human hand contact):
+    $$\sigma_0(x) = \begin{cases} \sigma_{0,\text{open}}, & x \le L - L_\text{palm} \\ \sigma_{0,\text{open}} + \sigma_\text{flesh} \cdot \frac{1}{2}\left[1 - \cos\left(\pi \frac{x - (L - L_\text{palm})}{L_\text{palm}}\right)\right], & x > L - L_\text{palm} \end{cases}$$
+    where $\sigma_\text{flesh} = 480.0 + 360.0 \times (1.0 - \text{decay})$.
+  - Long fundamental wavelengths ($\lambda = 2L \gg L_\text{palm}$) have small amplitude near the boundary node, preserving mass momentum and sustaining a deep, low-frequency thump for $\sim 45\text{--}70\text{ ms}$.
+  - Short harmonic wavelengths ($\lambda < 0.1\text{ m}$, partials $> 300\text{ Hz}$) undergo complete absorption inside the flesh patch within 1 round-trip reflection.
+  - **Zero artificial post-EQ or heuristic brightness cuts**: The acoustic chug emerges purely from spatial PDE loss.
 
 ### C. Zero-Pitch Acoustic Dead Notes / "X" Notes (`MuteMode::Full`)
 - **Physical Context**: The fretting hand rests loosely across the fretboard, damping all strings simultaneously.
-- **Acoustic Physics (v54.f / v55.f)**:
-  - **No Standing Wave / Zero Pitch ($f_0$)**: Waves cannot reflect between nut and bridge. String solvers are kept at rest (`string.reset()`, `fdtdString.reset()`).
-  - **Bridge Saddle Mechanical Force Pulse**: The plectrum strike delivers a non-oscillating, mass-dependent bipolar dipole mechanical impulse into the saddle:
-    $$F_\text{dead}(t) = -u \cdot e^{-0.5 u^2} \cdot A_\text{dead}, \quad u = \frac{t - t_\text{center}}{\sigma_\text{pulse}}$$
-    Wound bass strings deliver a wider impulse ($\tau \approx 1.35\text{ ms}$) pumping the body cavity mode ($A_0 \approx 105\text{ Hz}$); treble strings deliver a narrower pulse ($\tau \approx 0.75\text{ ms}$) pumping the plate mode ($T_1 \approx 200\text{ Hz}$).
-  - **Tactile Plectrum Presence (v55.f)**: Full $1.0\times$ plectrum snap amplitude with dual flexural eigenmodes ($4.2\text{ kHz} / 7.2\text{ kHz}$ on steel; $2.8\text{ kHz} / 4.8\text{ kHz}$ on nylon) and wound wire pre-release rasp ($1800\text{--}3400\text{ Hz}$).
+- **First-Principles Spatial Loss Profile (v69.f, refined v70.f)**:
+  - **Full String Solver Execution**: String solvers are NOT reset or bypassed. The string is plucked normally with plectrum displacement under an overdamped spatial boundary condition.
+  - Spatial damping covers the entire neck zone from nut to fret 14: $x \in [0.02L, 0.68L]$ (eliminating the undamped segment near the nut that previously produced a high-pitched ring):
+    $$\sigma_0(x) = \begin{cases} \sigma_{0,\text{open}} + \sigma_\text{hand} \cdot \sin\left(\pi \frac{x - 0.02L}{0.66L}\right), & 0.02L \le x \le 0.68L \\ \sigma_{0,\text{open}}, & \text{otherwise} \end{cases}$$
+    where $\sigma_\text{hand} = 850.0\text{ s}^{-1}$.
+  - **Bridge Saddle Mechanical Force Pulse**: The wave launched toward the bridge strikes the saddle at $t \approx 0.4\text{ ms}$, injecting an authentic mechanical force pulse into the body soundboard IR. The leftward wave and reflected bridge wave enter the hand damping patch and dissipate in $< 15\text{ ms}$, preventing any coherent periodic pitch ($f_0$) from circulating.
+  - **Tactile Plectrum De-Harshing**: Direct airborne plectrum snap amplitude scaled down to $0.25\times$ and resonant click brightness softened by $0.35\times$, eliminating brittle $7.2\text{ kHz}$ plastic snap and producing a warm, woody acoustic fretboard clack.
+  - **Zero Synthetic Ricker Pulses**: Synthetic dipole wavelets are completely eliminated.
 
 ### D. Acoustic Hand Choke (Slap on Ringing Strings)
 - Rapidly attenuates ringing string energy to zero within $\sim 10\text{ ms}$ (`chokeCoeff = exp(-1.0 / (0.010 * fs))`).

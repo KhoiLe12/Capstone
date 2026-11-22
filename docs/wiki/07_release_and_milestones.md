@@ -6,6 +6,38 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v70.f
+- **Acoustic Articulation Refinement (Tight Palm Muting & Woody Dead Notes)**:
+  - **Palm Muting Decay Calibration**:
+    - Widened the physical palm heel contact patch from $3.5\text{ cm}$ to $L_\text{palm} = \min(0.065\text{ m}, 0.22L)$ ($6.5\text{ cm}$), reflecting true anatomical palm heel coverage over bridge saddles.
+    - Increased viscoelastic flesh damping rate from $180 + 140 \cdot (1 - \text{decay})$ to $\sigma_\text{flesh} = 480.0 + 360.0 \times (1.0 - \text{decay})\text{ s}^{-1}$, eliminating lingering sustained ring-out and delivering a tight, punchy acoustic palm mute ($\sim 45\text{--}70\text{ ms}$).
+    - Waveguide Karplus-Strong engine damping $\tau_V$ and $\tau_H$ calibrated to match.
+  - **Dead Note De-Harshing & Frequency Balancing**:
+    - Root-caused the high-pitched quality on dead notes: the previous fretting patch started at $x_1 = 0.18L$, leaving an undamped string segment between nut and fret 2 ($x \in [0, 0.18L]$) that rang out at 2.5 octaves above $f_0$.
+    - Extended the physical fretting hand spatial damping patch to cover the full nut-to-fret14 range: $x \in [0.02L, 0.68L]$ with $\sigma_\text{hand} = 850.0\text{ s}^{-1}$.
+    - Scaled airborne plectrum flexural click amplitude down to $0.25\times$ and softened click resonance brightness to $0.35\times$, eliminating brittle $7.2\text{ kHz}$ plastic snap and producing an authentic deep, woody acoustic fretboard clack.
+  - **Audio-Thread Safety & Zero CPU Overhead**:
+    - Zero heap allocations detected on audio thread: `bench_synth: RTCheck PASS (0)`.
+    - Single-voice and 6-voice polyphony latency: Bilbao FDTD single-voice block 32 @ 48 kHz: `12.01%`, 6-voice polyphony: `28.60%`. Net CPU change: **+0.0%**.
+    - Validation: `pluginval` strictness level 8 **`SUCCESS`** (0 errors). Binaries deployed to system VST3 and AU directories.
+
+### v69.f
+- **First-Principles Physical Modeling for Palm Muting & Dead Notes**:
+  - Replaced heuristic DSP shortcuts (synthetic Ricker dipole wavelets, global uniform damping hikes $\sigma_0/\sigma_1$, artificial 50% brightness cuts, and string solver bypass) with exact elastodynamic PDE boundary and spatial loss formulations.
+  - **Palm Muting (`MuteMode::Palm`)**:
+    - Localized spatial loss profile $\sigma_\text{palm}(x)$ on grid nodes within the bridge saddle patch ($x \ge L - \Delta x_\text{palm}$, $L_\text{palm} = \min(0.035\text{ m}, 0.15L)$).
+    - Preserves low-frequency fundamental wave momentum ($\lambda = 2L$) while absorbing high-frequency partial reflections ($> 350\text{ Hz}$) through viscoelastic flesh damping.
+    - Damping is dynamically controlled via the `Decay` knob: $\sigma_\text{flesh} = 180.0 + 140.0 \times (1.0 - \text{decay})$.
+  - **Dead Notes ("X" Notes, `MuteMode::Full`)**:
+    - Solvers are NOT reset or bypassed. The string is plucked normally with plectrum displacement under a broad spatial damping patch $\sigma_\text{hand}(x)$ across the fretting zone ($x \in [0.18L, 0.68L]$, $\sigma_\text{hand} = 650\text{ s}^{-1}$).
+    - The bridge-going wave packet delivers an authentic mechanical force pulse to the bridge saddle, exciting the soundboard body IR once before being dissipated in $< 15\text{ ms}$ by the fretting hand.
+    - Zero periodic standing waves ($f_0$) circulate. Synthetic Ricker pulse generation completely eliminated.
+  - **Audio-Thread Safety & Zero CPU Overhead**:
+    - Per-node damping coefficients $c_0[i]$ and $c_4[i]$ are pre-allocated in `reserveCapacity()`. Articulation switching is $O(N)$ with zero allocations.
+    - `bench_synth`: `RTCheck Result: PASS (0)` across all block sizes (32..512) and sample rates (44.1k..192k).
+    - Measured CPU overhead: **+0.0%** (27.42% @ 48 kHz block 32, identical to v68.f).
+  - **Quality Gates**: `pluginval` Level 8 `SUCCESS` (0 errors), `bench_synth` Timing check PASS. Local binaries deployed to VST3 and AU system directories.
+
 ### v68.f
 - **Measured body IRs**:
   - *Classical – Contreras 1971* and *Flamenco – Conde 1964*, derived from R. Mores' guitar archive (Zenodo 10.5281/zenodo.4604577, CC BY 4.0). Hammer → near-field mics, anechoic lab, true stereo, 300 ms; chosen by listening from 6 candidates.

@@ -52,12 +52,19 @@ During multi-voice polyphony (up to 384 concurrent vibrating string segments in 
 
 We employ an **adaptive dual-path solver**:
 - **Fast Path (Free Vibration — 98% of audio frames)**:
-  When the string is not colliding with frets or finger barriers, the contact forces $\psi = 0$. The update reduces to an explicit finite difference stencil:
-  $$u^{n+1} = \frac{1}{1 + \sigma_0 k} \left[ B u^n + C u^{n-1} \right]$$
+  When the string is not colliding with frets or finger barriers, the contact forces $\psi = 0$. The update reduces to an explicit finite difference stencil with localized spatial damping:
+  $$u_i^{n+1} = c_0[i] \left[ 2 u_i^n + (c_1 + c_3) Du_i^n - c_2 D^2 u_i^n + c_4[i] u_i^{n-1} - c_3 Du_i^{n-1} \right]$$
+  where $c_0[i] = \frac{1}{1 + \sigma_0[i] k}$ and $c_4[i] = \sigma_0[i] k - 1$.
   Written as plain scalar loops (left to compiler auto-vectorization; there are no explicit SIMD intrinsics), with $O(1)$ `std::vector::swap` state rotation (zero array copies).
   The Kirchhoff-Carrier tension term is still applied here through a rank-1 (Sherman-Morrison) update.
 - **Non-Linear Contact Path (Fret / Finger Collision)**:
   When any grid point dips below the fret crown height $m_0$, or the finger is engaged and in contact, the full **$4 \times 4$ Woodbury system** (fretboard, frets, finger, Kirchhoff-Carrier) is solved directly, with no nonlinear iteration loops.
+
+### 4.1 First-Principles Spatial Damping Profile $\sigma_0(x)$ (v69.f, refined v70.f)
+To eliminate artificial post-filters, brightness cuts, and solver-bypass wavelets:
+1. **Palm Muting**: Fleshy heel rests across the last $4.5\text{--}6.5\text{ cm}$ near the bridge ($x \ge L - L_\text{palm}$, $L_\text{palm} = \min(0.065\text{ m}, 0.22L)$). Within this patch, $\sigma_0[i] = \sigma_{0,\text{open}} + \sigma_\text{flesh} \cdot \frac{1}{2}\left[1 - \cos\left(\pi \frac{x - (L - L_\text{palm})}{L_\text{palm}}\right)\right]$, where $\sigma_\text{flesh} = 480.0 + 360.0 \times (1.0 - \text{decay})$. Low fundamental frequencies ($\lambda \gg L_\text{palm}$) sustain with full mass momentum, while high partials dissipate rapidly.
+2. **Dead Notes ("X" notes)**: Fretting hand rests loosely across the fretboard covering the full nut-to-fret-14 range ($x \in [0.02L, 0.68L]$) with heavy damping $\sigma_\text{hand} = 850.0\text{ s}^{-1}$. Pluck displacement launches traveling wave packets; the bridge-going wave strikes the saddle, exciting the soundboard body IR once before being dissipated in $< 15\text{ ms}$ by the fretting hand. Airborne tortex clack amplitude is scaled down to $0.25\times$ with $0.35\times$ brightness to yield a deep, woody acoustic thud. Zero synthetic dipole pulses.
+3. **Audio-Thread Safety & Efficiency**: $c_0[i]$ and $c_4[i]$ vectors are pre-allocated in `reserveCapacity()`. Switching articulations is $O(N)$ with zero allocations and measured $+0.0\%$ CPU overhead.
 
 ---
 

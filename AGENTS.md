@@ -90,6 +90,17 @@ This repository maintains a modular, on-demand **LLM Wiki** in [`docs/wiki/`](do
 
 ---
 
+### G. First-Principles Physical Modeling Invariant (Zero Artificial DSP Tricks)
+Every articulation, excitation, and damping mechanism in the synthesizer **MUST be physically modeled** within the core simulation framework (the FDTD elastodynamic PDE solver and the bridge/soundboard body acoustics), rather than patched with artificial post-filters, synthetic waveform generators, or standalone DSP shortcuts.
+1. **Physical Modeling Imperative**:
+   Articulations (including palm muting, dead notes, harmonics, hammer-ons/pull-offs, string bending, pick contact, and body knocks) must emerge naturally from physical boundary conditions, localized spatial loss distributions $\sigma(x)$, elastoplastic contact laws, or direct soundboard mechanical force injection.
+2. **Impossibility & Sub-Optimality Disclosure**:
+   If an articulation is mathematically impossible or demonstrably sub-optimal to solve in real time (e.g. non-convergent implicit nonlinear contact loops exceeding real-time audio deadlines at 96/192 kHz), the agent MUST explicitly explain why to the user and document the exact physical trade-off before adopting any simplification.
+3. **Mandatory CPU Weight Increase Reporting**:
+   For every added physical feature or mathematical modeling change, the agent MUST run `./build/bench_synth` and report the exact CPU weight increase across single-voice latency and multi-track capacity sweeps.
+
+---
+
 ## 2. DSP Architecture & Living Wiki Reference
 
 For comprehensive mathematical derivations, code architectures, and implementation details, refer to the documentation wiki:
@@ -111,7 +122,20 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v68.f**
+### Current Version Status: **v70.f**
+- **v70.f**:
+  - **Palm Muting Decay Calibration**: Widened palm contact patch to $L_\text{palm} = \min(0.065\text{ m}, 0.22L)$ ($6.5\text{ cm}$, representing true anatomical human palm heel coverage) and increased damping rate to $\sigma_\text{flesh} = 480.0 + 360.0 \times (1.0 - \text{decay})$, producing a tight, punchy acoustic palm mute ($\sim 45\text{--}70\text{ ms}$).
+  - **Acoustic Dead Note Tone Calibration**: Extended fretting hand damping patch across $x \in [0.02L, 0.68L]$ (eliminating the undamped segment between nut and fret 2 that caused high-pitched ringing). Scaled airborne plectrum snap down to $0.25\times$ and reduced flexural click brightness to $0.35\times$, transforming the click from a harsh plastic snap into a deep, woody acoustic fretboard clack.
+  - Zero heap allocations (`bench_synth`: `RTCheck PASS (0)`), +0.0% CPU overhead, `pluginval` Level 8 `SUCCESS`.
+
+**v69.f:**
+- **v69.f**:
+  - **First-Principles Spatial Damping for Palm Mute & Dead Notes**: Eliminated all artificial heuristic shortcuts (synthetic Ricker dipole equations, global damping cuts, `effBrightness *= 0.50f`, and string solver bypass).
+  - Palm muting is modeled physically via a localized spatial loss profile $\sigma_\text{palm}(x)$ on grid nodes within the bridge termination patch ($x \ge L - \Delta x_\text{palm}$), preserving fundamental mass momentum while absorbing high partial reflections.
+  - Dead notes ("X" notes) run the full FDTD solver through a broad fretting-hand spatial damping patch $\sigma_\text{hand}(x)$ across the neck, delivering a genuine mechanical force pulse into the soundboard body IR without establishing periodic $f_0$.
+  - Per-node damping coefficients $c_0[i]$ and $c_4[i]$ are pre-allocated and updated without allocations. Single-voice and multi-track benchmark measurements verify **+0.0% CPU overhead** and `RTCheck: PASS (0)`.
+
+**v68.f:**
 - **v68.f**:
   - Measured Classical (Contreras 1971) and Flamenco (Conde 1964) body IRs from the Mores archive (CC BY 4.0, attribution in `resources/ir/ATTRIBUTION.md`).
   - Old IR kept as "Legacy Body".

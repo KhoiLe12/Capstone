@@ -108,7 +108,6 @@ public:
     int   getSamplesSinceNoteOn() const noexcept { return samplesSinceNoteOn; }
     float getEnergy()   const noexcept
     {
-        if (isDeadNotePulse) return deadPulseAmp * 0.5f;
         const float eng = (engineType == EngineType::BilbaoFdtd) ? fdtdString.getEnergy() : string.getEnergy();
         return eng * (releasing ? releaseGain : (choking ? chokeGain : 1.0f));
     }
@@ -145,16 +144,6 @@ private:
     float chokeGain        = 1.0f;
     float chokeCoeff       = 0.99f;
     int   chokeSamplesLeft = 0;
-
-    // Dead-note ("X" note) mechanical bridge saddle dipole impulse:
-    // Models the non-oscillating physical impact of a plectrum plucking an overdamped string,
-    // exciting the soundboard body IR cavity (A0/T1 modes) with ZERO periodic pitch f0.
-    bool     isDeadNotePulse       = false;
-    float    deadPulseAmp          = 0.0f;
-    float    deadPulseSigma        = 50.0f;
-    float    deadPulseCenter       = 100.0f;
-    int      deadPulseElapsed      = 0;
-    int      deadPulseDuration     = 0;
 
     // Choke hand slap mechanical dipole impulse into bridge saddle
     bool     slapActive            = false;
@@ -220,8 +209,6 @@ private:
     static constexpr float kFdtdNylonRegisterExponent = 0.0f;
     float fdtdOpenSigma0 = 1.0f;
     float fdtdOpenSigma1 = 4.5e-4f;
-    float fdtdPalmSigma0 = 10.5f;
-    float fdtdPalmSigma1 = 3.2e-3f;
     float fdtdBrightness = 0.60f;
 
     /**
