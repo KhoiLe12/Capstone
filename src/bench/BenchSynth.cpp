@@ -373,6 +373,10 @@ static size_t runEventStressScenario(float sampleRate, int blockSize)
                 for (int note : { 40, 47, 52, 55, 59, 64 }) engine.noteOff(note);
                 run(step * 2);
 
+                // Golpe soundboard knock
+                engine.noteOn(SynthEngine::KEYSWITCH_GOLPE, 0.9f); run(step);
+                engine.noteOff(SynthEngine::KEYSWITCH_GOLPE);      run(step);
+
                 // Same-tick chords through the event path (joint string assignment), strict and free
                 for (bool strict : { false, true })
                 {
@@ -562,7 +566,57 @@ static bool runChordVsLegatoCheck(float sampleRate)
               << (hasF4 ? "yes" : "no") << ", F5=" << (hasF5 ? "yes" : "no") << ")  "
               << (chordTransitionOk ? "PASS" : "FAIL") << "\n";
 
-    return ok && chordTransitionOk;
+    // Flamenco Golpe / Soundboard Knock verification (MIDI 29 / F1)
+    SynthEngine golpeEng;
+    golpeEng.init(sampleRate, 512);
+    golpeEng.paramBodyType = 3.0f; // Flamenco body
+    golpeEng.paramBodyMix = 0.85f;
+    std::vector<float> gL(512, 0.0f), gR(512, 0.0f);
+    SynthEngine::Event golpeEv = { 0, SynthEngine::Event::Type::NoteOn, SynthEngine::KEYSWITCH_GOLPE, 0.9f, -1.f, -1.f };
+    golpeEng.process(gL.data(), gR.data(), 512, &golpeEv, 1);
+    float golpePeak = 0.0f;
+    for (int i = 0; i < 512; ++i)
+        golpePeak = std::max(golpePeak, std::max(std::abs(gL[i]), std::abs(gR[i])));
+    const bool golpeOk = (golpePeak > 0.05f && golpePeak < 0.999f && golpeEng.getNumActiveVoices() == 0);
+    std::cout << "  Flamenco Golpe knock (MIDI 29, F1)  : Peak " << golpePeak << " ("
+              << (20.0f * std::log10(golpePeak + 1e-9f)) << " dBFS, 0 strings stolen)  "
+              << (golpeOk ? "PASS" : "FAIL") << "\n";
+
+    // Simultaneous Chord + Golpe verification: soundboard knock must remain fully audible during chords
+    SynthEngine chordGolpeEng;
+    chordGolpeEng.init(sampleRate, 512);
+    chordGolpeEng.paramBodyType = 3.0f;
+    chordGolpeEng.paramBodyMix = 0.85f;
+    std::vector<float> cgL(512, 0.0f), cgR(512, 0.0f);
+    SynthEngine::Event simEvs[6] = {
+        { 0, SynthEngine::Event::Type::NoteOn, 48, 0.8f, -1.f, -1.f },
+        { 0, SynthEngine::Event::Type::NoteOn, 52, 0.8f, -1.f, -1.f },
+        { 0, SynthEngine::Event::Type::NoteOn, 55, 0.8f, -1.f, -1.f },
+        { 0, SynthEngine::Event::Type::NoteOn, 60, 0.8f, -1.f, -1.f },
+        { 0, SynthEngine::Event::Type::NoteOn, 64, 0.8f, -1.f, -1.f },
+        { 0, SynthEngine::Event::Type::NoteOn, SynthEngine::KEYSWITCH_GOLPE, 0.9f, -1.f, -1.f }
+    };
+    chordGolpeEng.process(cgL.data(), cgR.data(), 512, simEvs, 6);
+
+    SynthEngine chordOnlyEng;
+    chordOnlyEng.init(sampleRate, 512);
+    chordOnlyEng.paramBodyType = 3.0f;
+    chordOnlyEng.paramBodyMix = 0.85f;
+    std::vector<float> coL(512, 0.0f), coR(512, 0.0f);
+    chordOnlyEng.process(coL.data(), coR.data(), 512, simEvs, 5);
+
+    float chordPeak = 0.0f, diffPeak = 0.0f;
+    for (int i = 0; i < 512; ++i)
+    {
+        chordPeak = std::max(chordPeak, std::abs(coL[static_cast<size_t>(i)]));
+        diffPeak = std::max(diffPeak, std::abs(cgL[static_cast<size_t>(i)] - coL[static_cast<size_t>(i)]));
+    }
+    const bool simOk = (diffPeak > 0.40f && chordGolpeEng.getNumActiveVoices() == 5);
+    std::cout << "  Simultaneous Chord + Golpe (5-vce)  : Golpe impact diff " << diffPeak << " ("
+              << (20.0f * std::log10(diffPeak + 1e-9f)) << " dBFS)  "
+              << (simOk ? "PASS" : "FAIL") << "\n";
+
+    return ok && chordTransitionOk && golpeOk && simOk;
 }
 
 // ---------------------------------------------------------------------------

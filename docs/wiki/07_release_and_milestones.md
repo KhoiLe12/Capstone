@@ -6,6 +6,29 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v75.f
+- **Flamenco Golpe (Soundboard Thumb Knock) Engine & Acoustic Chord Headroom Isolation**:
+  - **First-Principles Viscoelastic Soundboard Impact**:
+    - Synthesizes authentic flamenco thumb-heel strikes directly on the spruce top plate (Literature Review §6).
+    - Normalized compressive contact pulse: $\text{contactPulse} = 2.67 \sin^2(\pi \tau) e^{-2.2\tau}$ over duration $T_c \approx 2.4\text{--}3.4\text{ ms}$ (viscoelastic thumb flesh compliance). Smooth onset and offset guarantees zero DC bias or boundary clicks.
+  - **Acoustic Headroom Isolation During Chords**:
+    - Root-caused why the golpe was masked/inaudible during chord playing: previously, `golpeBodyForce` was summed into `totalForceV` *before* multiplying by `smoothedPolyScale`. When playing a 5- or 6-note chord, `smoothedPolyScale` ($\approx 0.45\text{--}0.51$) cut the golpe soundboard drive by half ($-6.5\text{ dB}$) right as the chord reached maximum level.
+    - Decoupled soundboard mechanical drive:
+      $$\text{monoBridge} = (\text{stringBridgeForce} \times \text{smoothedPolyScale}) + F_\text{body}$$
+      The golpe excites the top plate with full energy regardless of how many strings are fretted.
+  - **Dual-Path Acoustic Radiation & Wood Presence**:
+    - *Global Soundboard Body Drive*: Direct normal force $F_\text{body} = 4.8 v^{1.2} \times \text{contactPulse}$ injected into the soundboard bus, naturally driving the Helmholtz air cavity ($A_0 \approx 100\text{--}105\text{ Hz}$) and fundamental wood plate dipole ($T(1, 1) \approx 195\text{--}205\text{ Hz}$) through the zero-latency body IR without saddle lowpass roll-off.
+    - *Tactile Wood & Tap Plate Contact Presence*: Combined deep flexural plate wave ($180\text{ Hz}$) with high-frequency spruce contact crackle ($1400\text{ Hz}$, $e^{-8\tau}$), providing the crisp acoustic snap of thumb flesh/nail meeting the soundboard that cuts cleanly through ringing chords.
+    - *Sympathetic String Coupling*: Soundboard shockwave back-couples through the saddle into `SympatheticResonance`, causing undamped open strings to chime lightly behind the tap.
+  - **Dedicated Non-Conflicting MIDI Mapping**:
+    - Assigned to **MIDI Note 29 (F1 / FL Studio: F2)**, located immediately adjacent to E1 Strum (28), D1 Choke (26), and C1 Palm Mute (24), safely outside the guitar playing range (38..86).
+    - Zero voice-stealing: golpe operates as a direct mechanical soundboard excitation, allowing full 6-string polyphonic chord strums and lead lines to sound simultaneously.
+  - **Verification & QA**:
+    - Automated simultaneous 5-voice chord + golpe benchmark verification in `bench_synth` confirms diff peak $> 0.40$ ($+0.10\text{ dBFS}$) during full chord playback.
+    - `bench_synth`: `RTCheck PASS (0)`, timing PASS, chord transition PASS, golpe PASS.
+    - `pluginval` Level 8 `SUCCESS`.
+    - Net CPU overhead: **+0.0%**.
+
 ### v73.f
 - **Acoustic Chord Polyphony & Physical Fretboard Voicing Invariant**:
   - **Ergonomic Chord Voicing Priority**:

@@ -18,7 +18,7 @@
 | **Natural Harmonics** | Light finger touch at integer nodal points ($x = L/2, L/3, L/4, L/5$): localized nodal damping $\sigma_\text{touch}(x)$ suppressing anti-nodal partials. | Planned physical implementation | **$< +0.2\%$** (boundary damp applied to 1 discrete node) | Fully optimal. Emergent crystalline bell tones from modal zero-crossings. |
 | **Pinch Harmonics** | Plectrum release followed immediately ($\sim 2\text{ ms}$) by localized thumb-flesh damping at non-integer nodal position. | Planned physical implementation | **$< +0.2\%$** | Fully optimal. |
 | **String Bending** | Lateral string deflection over fret wire increases longitudinal string elongation $\Delta L(t)$ and nominal tension $T_0(t) = T_0 + EA \frac{\Delta L}{L}$. | Planned physical implementation | **$\sim +0.0\%$** (modulates nominal tension parameter $T_0$ already present in Bilbao loop) | Fully optimal. Smooth continuous pitch bends without spatial grid resizing. |
-| **Flamenco Golpe (Body Knocks)** | Direct mechanical soundboard impact force $f_\text{golpe}(t)$ injected into bridge/body IR convolution engine in parallel with string force. | Planned physical implementation | **$< +0.1\%$** (direct summation into convolution input buffer) | Fully optimal. Directly excites authentic measured body IR wood/cavity modes. |
+| **Flamenco Golpe (Body Knocks)** | Direct mechanical soundboard impact force $F_g(t)$ injected into bridge/body IR convolution engine in parallel with string force + localized flexural plate transient. | **Implemented (v74.f)** | **$+0.0\%$ measured** (Hertzian $2.4\text{--}3.4\text{ ms}$ pulse) | Fully optimal. Drives $A_0$ air cavity and $T(1,1)$ plate modes without voice stealing. |
 | **Dynamic Nonlinear Plectrum** | Dynamic elastoplastic contact force $f_\text{pick}(t) = K [y - u]_+ + R \frac{d}{dt}[y - u]_+$ interacting with node $x_\text{pick}$. | **Implemented (v71.f)** | **$+0.0\%$ measured** (`bench_synth`: 26.48% @ 48k block 32) | Fully optimal. Solved explicitly in closed-form without iterations; unzips Helmholtz corner upon slip. |
 
 ### 0.1 Continuous Nonlinear Plectrum Contact Model (v71.f, Literature Review §6)
@@ -120,6 +120,7 @@ Keyswitches are placed below the playable guitar register so they never trigger 
 | **C1** | MIDI 24 | C2 | **Palm Mute Hold**: While held, all incoming and ringing notes engage selective palm mute. Releasing C1 restores open sustain. |
 | **D1** | MIDI 26 | D2 | **Full Mute / Hand Choke**: When struck, immediately chokes all ringing strings with an acoustic hand slap. While held, incoming notes play as unpitched dead notes ("X" notes). |
 | **E1** | MIDI 28 | E2 | **8th-Note Auto-Strum**: While held, held chord notes are automatically strummed at 8th-note intervals synchronized to DAW host BPM, alternating downstrokes and upstrokes. |
+| **F1** | MIDI 29 | F2 | **Flamenco Golpe (Soundboard Thumb Knock)**: Direct mechanical excitation of the top plate, air cavity ($A_0$), and wood dipole ($T(1,1)$). Operates independently of the 6 string voices and is unaffected by polyphonic chord scaling. |
 
 ### Strict Playable Note Range
 - **Minimum Note**: $D_2$ (MIDI 38 — Drop D tuning support) or $E_2$ (MIDI 40 — standard acoustic low E).

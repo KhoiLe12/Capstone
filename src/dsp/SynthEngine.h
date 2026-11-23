@@ -39,6 +39,9 @@ public:
     void noteOn(int midiNote, float velocity);
     void noteOn(int midiNote, float velocity, float brightnessOverride, float pickPosOverride);
 
+    /** Trigger a flamenco golpe / soundboard thumb knock (percussive force pulse into soundboard). */
+    void triggerGolpe(float velocity) noexcept;
+
     /** Release a note (string continues to decay naturally). */
     void noteOff(int midiNote);
 
@@ -115,6 +118,7 @@ public:
     static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24 / FL: C2) Hold Keyswitch
     static constexpr int KEYSWITCH_FULL_MUTE = 26; ///< D1 (MIDI Note 26 / FL: D2) Hold/Choke Keyswitch
     static constexpr int KEYSWITCH_STRUM_8TH = 28; ///< E1 (MIDI Note 28 / FL: E2) 8th-Note Strum Keyswitch
+    static constexpr int KEYSWITCH_GOLPE     = 29; ///< F1 (MIDI Note 29 / FL: F2) Flamenco Golpe / Soundboard Thumb Knock
     static constexpr int GUITAR_MIN_NOTE     = 38; ///< D2 (Standard Drop-D lowest note; standard E2 is 40)
     static constexpr int GUITAR_MAX_NOTE     = 86; ///< D6 (22nd fret high E string)
 
@@ -203,6 +207,12 @@ private:
         bool  active       = false;
     };
     StrumPluck pendingPlucks[MAX_PENDING_PLUCKS];
+
+    // Flamenco Golpe / Soundboard Thumb Knock Physical Engine
+    int   golpeSamplesLeft  = 0;
+    int   golpeTotalSamples = 0;
+    int   golpeSampleIdx    = 0;
+    float golpeVelocity     = 0.0f;
 
     void triggerStrum(bool isDownstroke, float velOverride = -1.0f) noexcept;
     void schedulePluck(int stringIdx, int midiNote, float velocity, float brightness, int delaySamples) noexcept;

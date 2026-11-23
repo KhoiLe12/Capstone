@@ -93,6 +93,13 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
         return;
     }
 
+    // Intercept Flamenco Golpe (Soundboard Thumb Knock) Keyswitch F1 (MIDI Note 29 / FL: F2)
+    if (midiNote == KEYSWITCH_GOLPE)
+    {
+        triggerGolpe(velocity);
+        return;
+    }
+
     // 4. Strict Physical Guitar Range Validation
     // Standard acoustic guitar range: D2 (38, Drop D) / E2 (40) up to D6 (86, 22nd fret high E)
     // Any notes outside this range are rejected so keyswitches never produce unwanted audio
@@ -394,6 +401,12 @@ void SynthEngine::noteOff(int midiNote)
         return;
     }
 
+    // Intercept Golpe Keyswitch F1 release (momentary percussive knock)
+    if (midiNote == KEYSWITCH_GOLPE)
+    {
+        return;
+    }
+
     // Discard note-off events outside the guitar range
     if (midiNote < GUITAR_MIN_NOTE || midiNote > GUITAR_MAX_NOTE)
     {
@@ -418,6 +431,23 @@ void SynthEngine::syncVoiceMuteModes() noexcept
         if (v.isActive())
             v.setMuteMode(mode);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Flamenco Golpe & Soundboard Thumb Knock Engine
+// ---------------------------------------------------------------------------
+
+void SynthEngine::triggerGolpe(float velocity) noexcept
+{
+    const float clampedVel = std::clamp(velocity, 0.05f, 1.0f);
+    // Contact duration for thumb impact on spruce soundboard:
+    // ~2.4 ms at high velocity to ~3.4 ms at gentle tap (viscoelastic flesh compliance)
+    const float durationSec = 0.0034f * (1.0f - 0.28f * clampedVel);
+    const int numSamples = std::max(16, static_cast<int>(durationSec * sampleRate));
+    golpeTotalSamples = numSamples;
+    golpeSamplesLeft  = numSamples;
+    golpeSampleIdx    = 0;
+    golpeVelocity     = clampedVel;
 }
 
 // ---------------------------------------------------------------------------
@@ -554,6 +584,10 @@ void SynthEngine::allNotesOff() noexcept
     keyswitchStrumActive    = false;
     strumSampleCounter      = 0;
     nextStrumIsDown         = true;
+    golpeSamplesLeft        = 0;
+    golpeTotalSamples       = 0;
+    golpeSampleIdx          = 0;
+    golpeVelocity           = 0.0f;
     std::fill(std::begin(heldNotes), std::end(heldNotes), 0.f);
     for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
         pendingPlucks[p].active = false;
@@ -673,24 +707,56 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
             totalForceV += fV + kHorizontalSaddleCoupling * fH;
         }
 
+        // Flamenco Golpe / Soundboard Thumb Knock Physical Mechanics:
+        // Transmits mechanical compressive force pulse into top plate, air cavity, and bridge
+        float golpeBodyForce = 0.0f;
+        float golpeDirectForce = 0.0f;
+        if (golpeSamplesLeft > 0)
+        {
+            const float tau = static_cast<float>(golpeSampleIdx) / static_cast<float>(golpeTotalSamples);
+            // Hertzian compressive contact pulse: sin^2 gives zero onset/offset discontinuity
+            // Normalized so peak amplitude = 1.0 (occurring at tau ~ 0.39)
+            const float sinTau = std::sin(3.14159265f * tau);
+            const float contactPulse = 2.67f * sinTau * sinTau * std::exp(-2.2f * tau);
+
+            // 1. Mechanical normal force driving the soundboard wood and internal air cavity:
+            // High-energy acoustic punch driving A0 (~100 Hz) air pump and T(1,1) (~200 Hz) wood dipole
+            golpeBodyForce = 4.8f * std::pow(golpeVelocity, 1.20f) * contactPulse;
+
+            // 2. Localized near-field acoustic flexural and wood-tap transient:
+            // Combines deep localized top-plate flexure (~180 Hz) and crisp spruce contact crackle (~1400 Hz)
+            const float flexPhase = 2.0f * 3.14159265f * 180.0f * (static_cast<float>(golpeSampleIdx) / sampleRate);
+            const float tapPhase  = 2.0f * 3.14159265f * 1400.0f * (static_cast<float>(golpeSampleIdx) / sampleRate);
+            const float flexWave  = std::sin(flexPhase) * (1.0f - tau);
+            const float tapClick  = 0.45f * std::sin(tapPhase) * std::exp(-8.0f * tau);
+            golpeDirectForce = 0.65f * std::pow(golpeVelocity, 1.10f) * (flexWave + tapClick) * sinTau;
+
+            ++golpeSampleIdx;
+            --golpeSamplesLeft;
+        }
+
         if (i < CLICK_BUF_SIZE)
-            clickBuf[i] = totalClick;
+            clickBuf[i] = totalClick + golpeDirectForce;
 
         // Cross-bridge sympathetic resonance:
-        // Driving vertical bridge force excites unplayed open strings, coupling equally across soundboard
-        const float sympatheticForce = sympathetic.process(totalForceV);
+        // Driving vertical bridge force (including top-plate golpe shockwave) excites unplayed open strings
+        const float sympatheticForce = sympathetic.process(totalForceV + golpeBodyForce);
         const float coupledSymp = sympatheticForce * (0.12f * paramBodyMix);
-        const float bridgeForce = totalForceV + coupledSymp;
+        const float stringBridgeForce = totalForceV + coupledSymp;
 
         // Polyphonic bridge impedance headroom:
-        // Acoustic soundboard mechanical impedance distributes multi-string chord displacement.
+        // Acoustic soundboard mechanical impedance distributes multi-string chord displacement at the saddle.
         // Real-time smooth slewing (tau ~ 15ms) eliminates zipper/stepping discontinuities when notes are strummed.
         const float targetPolyScale = (activeVoices > 1)
             ? (1.0f / std::sqrt(1.0f + 0.70f * static_cast<float>(activeVoices - 1)))
             : 1.0f;
         smoothedPolyScale = targetPolyScale + polyScaleFilterCoeff * (smoothedPolyScale - targetPolyScale);
 
-        const float monoBridge = bridgeForce * smoothedPolyScale;
+        // Soundboard mechanical drive:
+        // Vibrating strings deliver force through the bridge saddle (scaled by polyphonic impedance).
+        // Soundboard golpe delivers mechanical impact force directly into the spruce plate, unaffected
+        // by the number of active vibrating strings on the fretboard!
+        const float monoBridge = stringBridgeForce * smoothedPolyScale + golpeBodyForce;
 
         // Symmetrical Acoustic Soundboard Reflection Network:
         // Symmetrical reflection taps guarantee bit-exact attack centering (0.00 dB L/R difference across all registers).
@@ -802,6 +868,10 @@ void SynthEngine::reset()
     keyswitchStrumActive    = false;
     strumSampleCounter      = 0;
     nextStrumIsDown         = true;
+    golpeSamplesLeft        = 0;
+    golpeTotalSamples       = 0;
+    golpeSampleIdx          = 0;
+    golpeVelocity           = 0.0f;
     lastStrumWasDown        = true;
     std::fill(std::begin(heldNotes), std::end(heldNotes), 0.f);
     for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
