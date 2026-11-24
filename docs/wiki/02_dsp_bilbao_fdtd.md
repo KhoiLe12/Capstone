@@ -144,3 +144,25 @@ Now every note rings to −76 to −84 dB re. its post-attack level. Total ring 
 ### Effect on the GuitarSet spectral benchmark (wiki 06 §5)
 - **Log-L1 improved slightly**: isolated 0.610 → 0.607, phrases 0.592 → 0.586.
 - **Spectral convergence on isolated notes worsened**: 0.592 → 0.629, so the combined score went 1.202 → 1.235. The benchmark renders at Decay 0.75, which now sustains longer than GuitarSet's notes. SC is dominated by fundamental level over time and does not discriminate between systems (wiki 06 §5).
+
+---
+
+## 8. Electromagnetic Pickup Velocity Induction & Solid-Body Damping (v76.f–v77.f)
+
+### Continuous Transverse String Velocity Sensing
+Unlike acoustic guitars where sound radiates from normal bridge force into the wooden soundboard, electric guitar magnetic pickups physically transduce transverse string velocity:
+$$V_\text{ind}(t) \propto \frac{\partial \Phi}{\partial t} \approx \mu_0 M_0 \frac{\partial u}{\partial t}(x_p, t)$$
+
+1. **Velocity Extraction (`FdtdString::getPickupVelocity`)**:
+   - Evaluated at exact continuous distance from the bridge ($x_p = L - d_\text{bridge}$) via linear/quadratic interpolation across discrete grid nodes:
+     $$v(x_p) = \frac{u_\text{curr}(x_p) - u_\text{prev}(x_p)}{\Delta t}$$
+   - Senses vertical transverse motion ($v_V$) with fringe lateral field coupling ($0.10 \times v_H$).
+2. **Humbucker Dual-Pole Summing**:
+   - For humbucking pickups, velocity is sampled at dual pole positions separated by $d_\text{spacing} \approx 18.5\text{ mm}$:
+     $$v_\text{hum}(x_p) = \frac{1}{2}\left[v(x_p - d_\text{spacing}/2) + v(x_p + d_\text{spacing}/2)\right]$$
+   - Summing dual spatial locations naturally synthesizes the authentic ~3.6 kHz comb-filter phase cancellation notch without artificial filters.
+3. **Solid-Body Sustain Damping**:
+   - A rigid metal bridge mounted on a solid hardwood slab absorbs vastly less vibrational energy than a flexible acoustic soundboard plate.
+   - Frequency-independent loss is reduced to $\sigma_0 \approx 0.16\text{--}0.20\text{ s}^{-1}$, producing 8–15 seconds of singing electric sustain.
+4. **Calibrated Velocity-to-Voltage Scaling (v77.f)**:
+   - String transverse velocity ($v \sim 1.0\text{ m/s}$) is scaled by $0.22\times$ into standard Hi-Z instrument DI levels ($\approx -12\text{ to }-6\text{ dBFS}$), preventing downstream resonant RLC circuit boost ($Q=2.6$) from hitting the master soft-limiter threshold.

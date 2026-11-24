@@ -121,28 +121,36 @@ High-frequency plectrum snap and finger release cavitation ($4\text{--}16\text{ 
 
 ---
 
-## 6. Factory Preset & Program Management Architecture (v59.f, updated v76.f)
+## 6. Factory Preset & Program Management Architecture (v59.f, updated v76.f/v77.f)
 
 To allow fast auditioning and seamless DAW session recall without manual parameter dialing:
 1. **Host Program Protocol**:
    - `HybridSynthProcessor` exposes 12 factory programs (8 Acoustic + 4 Electric DI) across host DAW preset bars.
-2. **Curated Physical Modeling Factory Presets**:
+   - **Bilbao FDTD Engine Invariant**: 100% of factory presets utilize the Bilbao FDTD engine (`engineModel = 1`). Digital Waveguide (DWG) is reserved strictly as a manual fallback option.
+2. **Page-Dependent Dynamic Preset Filtering (v77.f)**:
+   - When on the **Acoustic Page**, the preset dropdown dynamically filters to display only the 8 Acoustic presets.
+   - When on the **Electric Page**, the preset dropdown dynamically filters to display only the 4 Electric DI presets.
+   - Switching pages automatically shifts the preset selection to the appropriate category.
+   - **First-Click Selection Reliability (`PresetBox`)**: Overrides `showPopup()` to reset internal item IDs before opening the dropdown, guaranteeing that selecting any preset (even on the very first boot) immediately triggers parameter synchronization on the 1st click.
+3. **Curated Physical Modeling Factory Presets**:
    - *Acoustic Presets*: Dreadnought Acoustic, Nylon Concert Classical, Flamenco Rasgueado, Fingerstyle Auditorium, Vintage Parlor Blues, 12-String Shimmer, Percussive Palm Chops, Warm Jazz Archtop.
    - *Electric Presets*: Strat Clean Funk DI, Texas Blues Lead, Les Paul Vintage Warmth, Bridge Humbucker Bite.
-3. **Session State Persistence**:
+4. **Session State Persistence**:
    - `currentProgram` and all 22 parameters are serialized to XML in `getStateInformation()` and restored in `setStateInformation()`.
 
 ---
 
-## 7. Dual Instrument Paradigms: Acoustic vs. Electric DI Mode (v76.f)
+## 7. Dual Instrument Paradigms: Acoustic vs. Electric DI Mode (v76.f, calibrated v77.f)
 
 Starting in v76.f, the synthesizer provides two complete, dedicated physical modeling instrument paradigms toggled via the top-level **Acoustic / Electric** page switcher:
 
 ### 1. Signal Flow Divergence
 - **Acoustic Guitar Mode**:
   Vibrating strings deliver force through the bridge saddle into unplayed open string sympathetic resonance $\to$ body soundboard IR convolution (or 32-mode modal bank) $\to$ direct airborne pick snap $\to$ DC blocker and master soft limiter.
-- **Electric Guitar Mode (Pure DI Output)**:
-  Electromagnetic pickups sense physical string transverse velocity $v(x_p, t) = \frac{\partial u}{\partial t}(x_p, t)$ directly above the pole pieces. The induced voltages sum across active vibrating strings into the passive guitar RLC resonant circuit ($L$, $R$, $C$, tone pot), completely bypassing the acoustic body IR and airborne pick snap. This delivers a pristine direct input (DI) signal ready to be plugged into external amp simulation software (Neural DSP, Guitar Rig, Amplitube, etc.). An optional Cab/Air 2nd-order lowpass filter (~4.8 kHz) can be engaged for smooth standalone headphone jamming.
+- **Electric Guitar Mode (Pure DI Output & Calibrated Headroom)**:
+  Electromagnetic pickups sense physical string transverse velocity $v(x_p, t) = \frac{\partial u}{\partial t}(x_p, t)$ directly above the pole pieces. The induced voltages sum across active vibrating strings into the passive guitar RLC resonant circuit ($L$, $R$, $C$, tone pot), completely bypassing the acoustic body IR and airborne pick snap.
+  - **DI Gain & Headroom Calibration (v77.f)**: Physical string transverse velocity ($v \sim 1.0\text{ m/s}$) is scaled by $0.22\times$ into standard instrument Hi-Z voltage levels ($\approx -12\text{ to }-6\text{ dBFS}$). This ensures the $+8.3\text{ dB}$ resonant peak of the passive RLC circuit ($Q = 2.6$) never clips against the master soft limiter threshold ($0.85$), eliminating all harmonic distortion fuzz and delivering a pure, transparent DI signal into external amp modelers (Neural DSP, Guitar Rig, Amplitube, etc.).
+  - **Cab/Air Roll-off**: An optional 2nd-order lowpass filter (~4.8 kHz) simulates gentle speaker cabinet roll-off for direct headphone practice without an external amp simulator.
 
 ### 2. Dedicated Two-Page GUI Architecture
 - **Acoustic Page**: Shows String Material (Nylon/Steel), Body Model IR selector, Custom IR loader button, Body Size, and Body Coupling.
