@@ -25,6 +25,12 @@ public:
      */
     void setModalResonator(float freqHz, float Q, float linearGain, float sampleRate) noexcept;
 
+    /**
+     * Design a 2nd-order resonant lowpass filter at cutoffHz with quality factor Q.
+     * Perfect for passive guitar pickup RLC electronics and speaker cabinet roll-off.
+     */
+    void setLowpass(float cutoffHz, float Q, float sampleRate) noexcept;
+
     /** Load raw biquad coefficients directly (b0, b1, b2, a1, a2 normalised). */
     void setCoefficients(float b0, float b1, float b2, float a1, float a2) noexcept;
 

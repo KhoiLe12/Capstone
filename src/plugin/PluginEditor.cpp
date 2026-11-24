@@ -15,18 +15,34 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
       bodySizeAttach  (p.apvts, "bodySize",     bodySizeKnob),
       bodyMixAttach   (p.apvts, "bodyMix",      bodyMixKnob),
       widthAttach     (p.apvts, "stereoWidth",  widthKnob),
-      gainAttach      (p.apvts, "masterGain",   gainKnob)
+      gainAttach      (p.apvts, "masterGain",   gainKnob),
+      toneAttach      (p.apvts, "toneKnob",     toneKnob)
 {
-    // Preset Selection Dropdown
-    const auto& presets = HybridSynthProcessor::getFactoryPresets();
-    for (size_t i = 0; i < presets.size(); ++i)
-        presetBox.addItem(presets[i].name, static_cast<int>(i + 1));
+    // Mode Page Switcher Buttons
+    acousticPageBtn.setTooltip("Switch to Acoustic Guitar Modeling (classical, flamenco, steel acoustic, soundboards)");
+    acousticPageBtn.onClick = [this]() {
+        if (auto* param = processorRef.apvts.getParameter("instrumentMode"))
+            param->setValueNotifyingHost(param->convertTo0to1(0.0f));
+        updatePageMode(0);
+    };
+    addAndMakeVisible(acousticPageBtn);
 
-    presetBox.setSelectedItemIndex(p.getCurrentProgram(), juce::dontSendNotification);
+    electricPageBtn.setTooltip("Switch to Electric Guitar Modeling (Strat, Les Paul, electromagnetic pickups, passive RLC tone, pure DI output)");
+    electricPageBtn.onClick = [this]() {
+        if (auto* param = processorRef.apvts.getParameter("instrumentMode"))
+            param->setValueNotifyingHost(param->convertTo0to1(1.0f));
+        updatePageMode(1);
+    };
+    addAndMakeVisible(electricPageBtn);
+
+    // Preset Selection Dropdown
     presetBox.onChange = [this]() {
-        const int idx = presetBox.getSelectedItemIndex();
-        if (idx >= 0 && idx != processorRef.getCurrentProgram())
-            processorRef.setCurrentProgram(idx);
+        const int comboIdx = presetBox.getSelectedItemIndex();
+        if (comboIdx < 0) return;
+        const int globalIdx = (currentPageMode == 1)
+            ? (HybridSynthProcessor::kNumAcousticPresets + comboIdx)
+            : comboIdx;
+        processorRef.setCurrentProgram(globalIdx);
     };
     addAndMakeVisible(presetBox);
 
@@ -159,8 +175,59 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     setupKnob(bodyMixKnob,    bodyMixLabel,    "Body Coupl");
     setupKnob(widthKnob,      widthLabel,      "Width");
     setupKnob(gainKnob,       gainLabel,       "Gain");
+    setupKnob(toneKnob,       toneLabel,       "Tone (RLC)");
+
+    // Electric Guitar Model
+    guitarModelBox.addItem("1962 Stratocaster (25.5\")", 1);
+    guitarModelBox.addItem("1959 Les Paul (24.75\")", 2);
+    addAndMakeVisible(guitarModelBox);
+    guitarModelAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        p.apvts, "guitarModel", guitarModelBox);
+    guitarModelLabel.setText("Guitar:", juce::dontSendNotification);
+    guitarModelLabel.setFont(juce::FontOptions(12.f, juce::Font::bold));
+    guitarModelLabel.setColour(juce::Label::textColourId, juce::Colour(0xffa0c0e0));
+    guitarModelLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(guitarModelLabel);
+
+    // Pickup Position
+    pickupPosBox.addItem("Bridge", 1);
+    pickupPosBox.addItem("Bridge + Middle", 2);
+    pickupPosBox.addItem("Middle", 3);
+    pickupPosBox.addItem("Neck + Middle", 4);
+    pickupPosBox.addItem("Neck", 5);
+    pickupPosBox.addItem("Bridge + Neck", 6);
+    addAndMakeVisible(pickupPosBox);
+    pickupPosAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        p.apvts, "pickupPosition", pickupPosBox);
+    pickupPosLabel.setText("Pickup:", juce::dontSendNotification);
+    pickupPosLabel.setFont(juce::FontOptions(12.f, juce::Font::bold));
+    pickupPosLabel.setColour(juce::Label::textColourId, juce::Colour(0xffa0c0e0));
+    pickupPosLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(pickupPosLabel);
+
+    // Pickup Type
+    pickupTypeBox.addItem("Single-Coil (Alnico V)", 1);
+    pickupTypeBox.addItem("Humbucker (PAF Alnico II)", 2);
+    addAndMakeVisible(pickupTypeBox);
+    pickupTypeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        p.apvts, "pickupType", pickupTypeBox);
+    pickupTypeLabel.setText("Type:", juce::dontSendNotification);
+    pickupTypeLabel.setFont(juce::FontOptions(12.f, juce::Font::bold));
+    pickupTypeLabel.setColour(juce::Label::textColourId, juce::Colour(0xffa0c0e0));
+    pickupTypeLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(pickupTypeLabel);
+
+    // Cab / Air Toggle
+    cabAirToggle.setButtonText("Cab/Air Roll-off");
+    cabAirToggle.setTooltip("Simulates gentle ~5kHz speaker cabinet air roll-off for headphone jamming. Off = pure DI.");
+    cabAirToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xfff0f0f0));
+    cabAirToggle.setColour(juce::ToggleButton::tickColourId, juce::Colour(0xff48cae4));
+    addAndMakeVisible(cabAirToggle);
+    cabAirAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.apvts, "cabAirFilter", cabAirToggle);
 
     refreshCustomIRItem();
+    updatePageMode(p.apvts.getRawParameterValue("instrumentMode")->load() > 0.5f ? 1 : 0);
     startTimerHz(30);
 
     setSize(1140, 250);
@@ -250,12 +317,102 @@ void HybridSynthEditor::loadIRFile(const juce::File& file)
     refreshCustomIRItem();
 }
 
+void HybridSynthEditor::updatePageMode(int mode)
+{
+    currentPageMode = mode;
+    const bool isElectric = (mode == 1);
+
+    presetBox.clear(juce::dontSendNotification);
+    const auto& presets = HybridSynthProcessor::getFactoryPresets();
+    if (!isElectric)
+    {
+        for (int i = 0; i < HybridSynthProcessor::kNumAcousticPresets; ++i)
+            presetBox.addItem(presets[static_cast<size_t>(i)].name, i + 1);
+
+        int cur = processorRef.getCurrentProgram();
+        if (cur >= HybridSynthProcessor::kNumAcousticPresets)
+        {
+            processorRef.setCurrentProgram(0);
+            cur = 0;
+        }
+        presetBox.setSelectedItemIndex(cur, juce::dontSendNotification);
+    }
+    else
+    {
+        for (int i = 0; i < HybridSynthProcessor::kNumElectricPresets; ++i)
+        {
+            const size_t pIdx = static_cast<size_t>(HybridSynthProcessor::kNumAcousticPresets + i);
+            presetBox.addItem(presets[pIdx].name, i + 1);
+        }
+
+        int cur = processorRef.getCurrentProgram();
+        if (cur < HybridSynthProcessor::kNumAcousticPresets)
+        {
+            processorRef.setCurrentProgram(HybridSynthProcessor::kNumAcousticPresets);
+            cur = HybridSynthProcessor::kNumAcousticPresets;
+        }
+        presetBox.setSelectedItemIndex(cur - HybridSynthProcessor::kNumAcousticPresets, juce::dontSendNotification);
+    }
+
+    stringMaterialBox.setVisible(!isElectric);
+    stringMaterialLabel.setVisible(!isElectric);
+    bodyModelBox.setVisible(!isElectric);
+    bodyModelLabel.setVisible(!isElectric);
+    irButton.setVisible(!isElectric);
+    bodySizeKnob.setVisible(!isElectric);
+    bodySizeLabel.setVisible(!isElectric);
+    bodyMixKnob.setVisible(!isElectric);
+    bodyMixLabel.setVisible(!isElectric);
+
+    guitarModelBox.setVisible(isElectric);
+    guitarModelLabel.setVisible(isElectric);
+    pickupPosBox.setVisible(isElectric);
+    pickupPosLabel.setVisible(isElectric);
+    pickupTypeBox.setVisible(isElectric);
+    pickupTypeLabel.setVisible(isElectric);
+    cabAirToggle.setVisible(isElectric);
+    toneKnob.setVisible(isElectric);
+    toneLabel.setVisible(isElectric);
+
+    // Style page switcher buttons
+    if (!isElectric)
+    {
+        acousticPageBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a4d69));
+        acousticPageBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+        electricPageBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff182232));
+        electricPageBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff8a99ad));
+    }
+    else
+    {
+        acousticPageBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff182232));
+        acousticPageBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff8a99ad));
+        electricPageBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff0077b6));
+        electricPageBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    }
+
+    resized();
+    repaint();
+}
+
 void HybridSynthEditor::timerCallback()
 {
     refreshCustomIRItem();
 
-    if (processorRef.getCurrentProgram() != presetBox.getSelectedItemIndex())
-        presetBox.setSelectedItemIndex(processorRef.getCurrentProgram(), juce::dontSendNotification);
+    // Sync mode page if changed via APVTS automation or preset load
+    const float modeVal = processorRef.apvts.getRawParameterValue("instrumentMode")->load();
+    const int targetMode = (modeVal >= 0.5f) ? 1 : 0;
+    if (targetMode != currentPageMode)
+        updatePageMode(targetMode);
+
+    const int curProg = processorRef.getCurrentProgram();
+    const int expectedIdx = (currentPageMode == 1)
+        ? (curProg - HybridSynthProcessor::kNumAcousticPresets)
+        : curProg;
+    if (expectedIdx >= 0 && expectedIdx < presetBox.getNumItems()
+        && presetBox.getSelectedItemIndex() != expectedIdx)
+    {
+        presetBox.setSelectedItemIndex(expectedIdx, juce::dontSendNotification);
+    }
 
     const bool currentPalm = processorRef.getSynth().isPalmMuteActive()
                           || (processorRef.apvts.getRawParameterValue("palmMute")->load() > 0.5f);
@@ -310,8 +467,8 @@ void HybridSynthEditor::paint(juce::Graphics& g)
     // Title text
     g.setColour(juce::Colour(0xfff0f0f0));
     g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
-    g.drawText("Hybrid Physical Modeling Guitar",
-               juce::Rectangle<int>(14, 0, getWidth() - 700, 36),
+    g.drawText(currentPageMode == 1 ? "Hybrid Electric Guitar (Pure DI)" : "Hybrid Acoustic Guitar",
+               juce::Rectangle<int>(230, 0, 230, 36),
                juce::Justification::centredLeft);
 
     // Prominent Version Badge in top-right
@@ -381,6 +538,9 @@ void HybridSynthEditor::paint(juce::Graphics& g)
 
 void HybridSynthEditor::resized()
 {
+    acousticPageBtn.setBounds(14, 6, 95, 24);
+    electricPageBtn.setBounds(115, 6, 105, 24);
+
     strictToggle.setBounds(getWidth() - 680, 6, 140, 24);
     legatoToggle.setBounds(getWidth() - 535, 6, 130, 24);
     presetLabel.setBounds(getWidth() - 395, 6, 52, 24);
@@ -389,27 +549,49 @@ void HybridSynthEditor::resized()
     auto area = getLocalBounds();
     area.removeFromTop(38); // title bar
 
-    // Engine Model, Body Model & Articulation Strip
+    // Middle Strip
     auto strip = area.removeFromTop(34).reduced(8, 3);
 
     const int engLabelW = 50;
     engineModelLabel.setBounds(strip.removeFromLeft(engLabelW));
     strip.removeFromLeft(4);
     engineModelBox.setBounds(strip.removeFromLeft(135));
-
     strip.removeFromLeft(8);
-    const int matLabelW = 44;
-    stringMaterialLabel.setBounds(strip.removeFromLeft(matLabelW));
-    strip.removeFromLeft(4);
-    stringMaterialBox.setBounds(strip.removeFromLeft(115));
 
-    strip.removeFromLeft(8);
-    const int labelW = 44;
-    bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
-    strip.removeFromLeft(4);
-    bodyModelBox.setBounds(strip.removeFromLeft(140));
-    strip.removeFromLeft(4);
-    irButton.setBounds(strip.removeFromLeft(44));
+    if (currentPageMode == 0) // Acoustic Mode Page
+    {
+        const int matLabelW = 44;
+        stringMaterialLabel.setBounds(strip.removeFromLeft(matLabelW));
+        strip.removeFromLeft(4);
+        stringMaterialBox.setBounds(strip.removeFromLeft(115));
+
+        strip.removeFromLeft(8);
+        const int labelW = 44;
+        bodyModelLabel.setBounds(strip.removeFromLeft(labelW));
+        strip.removeFromLeft(4);
+        bodyModelBox.setBounds(strip.removeFromLeft(140));
+        strip.removeFromLeft(4);
+        irButton.setBounds(strip.removeFromLeft(44));
+    }
+    else // Electric Mode Page
+    {
+        const int gtrLabelW = 44;
+        guitarModelLabel.setBounds(strip.removeFromLeft(gtrLabelW));
+        strip.removeFromLeft(4);
+        guitarModelBox.setBounds(strip.removeFromLeft(150));
+
+        strip.removeFromLeft(8);
+        const int pickLabelW = 46;
+        pickupPosLabel.setBounds(strip.removeFromLeft(pickLabelW));
+        strip.removeFromLeft(4);
+        pickupPosBox.setBounds(strip.removeFromLeft(125));
+
+        strip.removeFromLeft(8);
+        const int typeLabelW = 38;
+        pickupTypeLabel.setBounds(strip.removeFromLeft(typeLabelW));
+        strip.removeFromLeft(4);
+        pickupTypeBox.setBounds(strip.removeFromLeft(135));
+    }
 
     strip.removeFromLeft(8);
     palmMuteToggle.setBounds(strip.removeFromLeft(115));
@@ -439,8 +621,19 @@ void HybridSynthEditor::resized()
     layoutKnob(brightnessKnob, brightnessLabel);
     layoutKnob(pickPosKnob,    pickPosLabel);
     layoutKnob(stiffnessKnob,  stiffnessLabel);
-    layoutKnob(bodySizeKnob,   bodySizeLabel);
-    layoutKnob(bodyMixKnob,    bodyMixLabel);
+
+    if (currentPageMode == 0) // Acoustic Knobs
+    {
+        layoutKnob(bodySizeKnob,   bodySizeLabel);
+        layoutKnob(bodyMixKnob,    bodyMixLabel);
+    }
+    else // Electric Knobs
+    {
+        layoutKnob(toneKnob,       toneLabel);
+        auto colCab = area.removeFromLeft(knobW).reduced(4, 4);
+        cabAirToggle.setBounds(colCab.withSizeKeepingCentre(110, 30));
+    }
+
     layoutKnob(widthKnob,      widthLabel);
     layoutKnob(gainKnob,       gainLabel);
 }

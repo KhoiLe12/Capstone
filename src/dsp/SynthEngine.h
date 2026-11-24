@@ -2,6 +2,7 @@
 #include "Voice.h"
 #include "BodyResonance.h"
 #include "SympatheticResonance.h"
+#include "ElectricPickup.h"
 
 /**
  * SynthEngine — 6-string voice orchestrator, bridge summing and body coupling.
@@ -137,6 +138,14 @@ public:
     bool  paramFullMute    = false;   ///< Full Mute DAW parameter / UI toggle
     bool  paramStrum       = false;   ///< Strum 8th DAW parameter / UI toggle
 
+    // Electric Guitar Mode parameters
+    float paramInstrumentMode = 0.0f; ///< 0 = Acoustic, 1 = Electric
+    float paramGuitarModel    = 0.0f; ///< 0 = 1962 Stratocaster (25.5"), 1 = 1959 Les Paul (24.75")
+    float paramPickupPosition = 0.0f; ///< 0 = Bridge, 1 = Bridge+Mid, 2 = Mid, 3 = Neck+Mid, 4 = Neck, 5 = Bridge+Neck
+    float paramPickupType     = 0.0f; ///< 0 = Single-Coil, 1 = Humbucker
+    float paramToneKnob       = 1.0f; ///< Passive guitar tone knob (0..1)
+    bool  paramCabAirFilter   = false;///< Optional speaker cabinet / air roll-off filter
+
     void setBpm(float bpm) noexcept
     {
         if (bpm >= 20.f && bpm <= 400.f)
@@ -179,6 +188,8 @@ private:
     Voice         voices[NUM_VOICES];
     BodyResonance body;
     SympatheticResonance sympathetic;
+    ElectricGuitar::PassiveElectronics passiveElectronics;
+    BiquadFilter                       cabFilter;
     float         sampleRate = 44100.f;
     float         currentBpm = 120.0f;
     int           legatoMinOnsetSamples = 1920; ///< kLegatoChordWindowSec at the current sample rate

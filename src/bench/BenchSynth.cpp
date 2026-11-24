@@ -377,6 +377,24 @@ static size_t runEventStressScenario(float sampleRate, int blockSize)
                 engine.noteOn(SynthEngine::KEYSWITCH_GOLPE, 0.9f); run(step);
                 engine.noteOff(SynthEngine::KEYSWITCH_GOLPE);      run(step);
 
+                // Electric Guitar DI mode & pickup parameters
+                engine.paramInstrumentMode = 1.0f;
+                engine.paramGuitarModel = 0.0f; // Strat
+                engine.paramPickupPosition = 1.0f; // Bridge + Middle
+                engine.paramPickupType = 0.0f; // Single-Coil
+                engine.paramToneKnob = 0.85f;
+                engine.paramCabAirFilter = false;
+                engine.noteOn(52, 0.8f); run(step * 2);
+                engine.noteOff(52); run(step);
+                engine.paramGuitarModel = 1.0f; // Les Paul
+                engine.paramPickupPosition = 4.0f; // Neck
+                engine.paramPickupType = 1.0f; // Humbucker
+                engine.paramToneKnob = 0.50f;
+                engine.paramCabAirFilter = true;
+                engine.noteOn(48, 0.85f); run(step * 2);
+                engine.noteOff(48); run(step);
+                engine.paramInstrumentMode = 0.0f;
+
                 // Same-tick chords through the event path (joint string assignment), strict and free
                 for (bool strict : { false, true })
                 {

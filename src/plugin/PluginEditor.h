@@ -21,9 +21,26 @@ private:
 
     HybridSynthProcessor& processorRef;
 
-    // Preset Selection
-    juce::ComboBox presetBox;
-    juce::Label    presetLabel;
+    // Mode Page Switcher (Acoustic vs Electric Page)
+    juce::TextButton acousticPageBtn { "Acoustic" };
+    juce::TextButton electricPageBtn { "Electric (DI)" };
+    int currentPageMode = -1; // 0 = Acoustic, 1 = Electric
+    void updatePageMode(int mode);
+
+    // Preset Selection Custom ComboBox (ensures first click registers reliably)
+    class PresetBox : public juce::ComboBox
+    {
+    public:
+        void showPopup() override
+        {
+            const auto currentText = getText();
+            setSelectedId(0, juce::dontSendNotification);
+            setText(currentText, juce::dontSendNotification);
+            juce::ComboBox::showPopup();
+        }
+    };
+    PresetBox   presetBox;
+    juce::Label presetLabel;
 
     // Engine Model Selection ComboBox
     juce::ComboBox engineModelBox;
@@ -77,16 +94,32 @@ private:
 
     // 8 Physical modeling knobs
     juce::Slider decayKnob, brightnessKnob, pickPosKnob,
-                 stiffnessKnob, bodySizeKnob, bodyMixKnob, widthKnob, gainKnob;
+                 stiffnessKnob, bodySizeKnob, bodyMixKnob, widthKnob, gainKnob, toneKnob;
 
     // Labels
     juce::Label  decayLabel, brightnessLabel, pickPosLabel,
-                 stiffnessLabel, bodySizeLabel, bodyMixLabel, widthLabel, gainLabel;
+                 stiffnessLabel, bodySizeLabel, bodyMixLabel, widthLabel, gainLabel, toneLabel;
+
+    // Electric Guitar Mode Controls
+    juce::ComboBox guitarModelBox;
+    juce::Label    guitarModelLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> guitarModelAttach;
+
+    juce::ComboBox pickupPosBox;
+    juce::Label    pickupPosLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> pickupPosAttach;
+
+    juce::ComboBox pickupTypeBox;
+    juce::Label    pickupTypeLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> pickupTypeAttach;
+
+    juce::ToggleButton cabAirToggle;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> cabAirAttach;
 
     // APVTS Slider Attachments
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     SliderAttachment decayAttach, brightnessAttach, pickPosAttach,
-                     stiffnessAttach, bodySizeAttach, bodyMixAttach, widthAttach, gainAttach;
+                     stiffnessAttach, bodySizeAttach, bodyMixAttach, widthAttach, gainAttach, toneAttach;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HybridSynthEditor)
 };

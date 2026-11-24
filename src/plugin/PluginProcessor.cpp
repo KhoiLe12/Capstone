@@ -134,6 +134,49 @@ HybridSynthProcessor::createParameterLayout()
         "Strict Fretboard",
         false));
 
+    // ── Electric Guitar Parameters (appended to maintain state backwards compatibility) ──
+
+    // Instrument Mode: 0 = Acoustic, 1 = Electric
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "instrumentMode", 1 },
+        "Instrument Mode",
+        juce::StringArray{ "Acoustic", "Electric" },
+        0));
+
+    // Electric Guitar Model: 0 = 1962 Stratocaster (25.5"), 1 = 1959 Les Paul (24.75")
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "guitarModel", 1 },
+        "Guitar Model",
+        juce::StringArray{ "1962 Stratocaster (25.5\")", "1959 Les Paul (24.75\")" },
+        0));
+
+    // Pickup Position: 5-way Strat / 3-way LP selector
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "pickupPosition", 1 },
+        "Pickup Position",
+        juce::StringArray{ "Bridge", "Bridge + Middle", "Middle", "Neck + Middle", "Neck", "Bridge + Neck" },
+        0));
+
+    // Pickup Type: 0 = Single-Coil, 1 = Humbucker
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ "pickupType", 1 },
+        "Pickup Type",
+        juce::StringArray{ "Single-Coil (Alnico V)", "Humbucker (PAF Alnico II)" },
+        0));
+
+    // Tone Knob: passive guitar tone control (0 = dark woman tone, 1 = full open chime)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "toneKnob", 1 },
+        "Tone",
+        juce::NormalisableRange<float>(0.f, 1.f),
+        1.0f));
+
+    // Cab / Air Filter: 0 = pure DI output, 1 = smooth speaker cabinet roll-off
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ "cabAirFilter", 1 },
+        "Cab/Air Roll-off",
+        false));
+
     return { params.begin(), params.end() };
 }
 
@@ -270,6 +313,14 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     synth.paramLegatoEnabled = apvts.getRawParameterValue("legato")->load() > 0.5f;
     synth.paramStrictFretboard = apvts.getRawParameterValue("strictFretboard")->load() > 0.5f;
 
+    // Electric guitar parameters
+    synth.paramInstrumentMode = apvts.getRawParameterValue("instrumentMode")->load();
+    synth.paramGuitarModel    = apvts.getRawParameterValue("guitarModel")->load();
+    synth.paramPickupPosition = apvts.getRawParameterValue("pickupPosition")->load();
+    synth.paramPickupType     = apvts.getRawParameterValue("pickupType")->load();
+    synth.paramToneKnob       = apvts.getRawParameterValue("toneKnob")->load();
+    synth.paramCabAirFilter   = apvts.getRawParameterValue("cabAirFilter")->load() > 0.5f;
+
     if (buffer.getNumChannels() == 0) return;
 
     auto* outputL = buffer.getWritePointer(0);
@@ -333,11 +384,18 @@ const std::vector<HybridSynthProcessor::FactoryPreset>& HybridSynthProcessor::ge
         { "Dreadnought Acoustic",     0.78f, 0.72f, 0.22f, 0.28f, 1.15f, 0.80f, 1,   1,   1,    0.75f, 0.80f, false, false, false },
         { "Nylon Concert Classical",   0.75f, 0.48f, 0.28f, 0.04f, 1.00f, 0.75f, 1,   0,   0,    0.65f, 0.85f, false, false, false },
         { "Flamenco Rasgueado",       0.55f, 0.82f, 0.14f, 0.06f, 0.85f, 0.65f, 1,   0,   3,    0.80f, 0.85f, false, false, false },
-        { "Fingerstyle Auditorium",   0.85f, 0.65f, 0.25f, 0.18f, 1.05f, 0.72f, 0,   1,   1,    0.70f, 0.80f, false, false, false },
+        { "Fingerstyle Auditorium",   0.85f, 0.65f, 0.25f, 0.18f, 1.05f, 0.72f, 1,   1,   1,    0.70f, 0.80f, false, false, false },
         { "Vintage Parlor Blues",     0.62f, 0.75f, 0.18f, 0.35f, 0.75f, 0.60f, 1,   1,   2,    0.50f, 0.82f, false, false, false },
-        { "12-String Shimmer",        0.90f, 0.85f, 0.20f, 0.30f, 1.45f, 0.85f, 0,   1,   2,    1.00f, 0.78f, false, false, false },
+        { "12-String Shimmer",        0.90f, 0.85f, 0.20f, 0.30f, 1.45f, 0.85f, 1,   1,   2,    1.00f, 0.78f, false, false, false },
         { "Percussive Palm Chops",    0.40f, 0.70f, 0.20f, 0.20f, 1.00f, 0.85f, 1,   1,   1,    0.70f, 0.85f, true,  false, false },
-        { "Warm Jazz Archtop",        0.70f, 0.32f, 0.35f, 0.08f, 1.25f, 0.55f, 0,   0,   2,    0.60f, 0.85f, false, false, false }
+        { "Warm Jazz Archtop",        0.70f, 0.32f, 0.35f, 0.08f, 1.25f, 0.55f, 1,   0,   2,    0.60f, 0.85f, false, false, false },
+
+        // Electric Guitar DI Presets:
+        // Name,                      decay, brt,   pick,  stiff, size,  mix,   eng, mat, body, width, gain,  palm,  full,  strum, inst, gtr, pickPos, pickType, tone, cabAir
+        { "Strat Clean Funk DI",      0.82f, 0.78f, 0.22f, 0.15f, 1.00f, 0.00f, 1,   1,   1,    0.00f, 0.76f, false, false, false, 1,    0,   3,       0,        1.0f, false },
+        { "Texas Blues Lead",         0.86f, 0.72f, 0.20f, 0.18f, 1.00f, 0.00f, 1,   1,   1,    0.00f, 0.76f, false, false, false, 1,    0,   4,       0,        0.88f, false },
+        { "Les Paul Vintage Warmth",  0.90f, 0.60f, 0.24f, 0.12f, 1.00f, 0.00f, 1,   1,   1,    0.00f, 0.76f, false, false, false, 1,    1,   4,       1,        0.75f, false },
+        { "Bridge Humbucker Bite",    0.88f, 0.82f, 0.18f, 0.20f, 1.00f, 0.00f, 1,   1,   1,    0.00f, 0.78f, false, false, false, 1,    1,   0,       1,        1.00f, false }
     };
     return presets;
 }
@@ -380,6 +438,34 @@ void HybridSynthProcessor::setCurrentProgram(int index)
     setParam("palmMute",       p.palmMute ? 1.0f : 0.0f);
     setParam("fullMute",       p.fullMute ? 1.0f : 0.0f);
     setParam("strumPattern",   p.strumPattern ? 1.0f : 0.0f);
+    setParam("instrumentMode", static_cast<float>(p.instrumentMode));
+    setParam("guitarModel",    static_cast<float>(p.guitarModel));
+    setParam("pickupPosition", static_cast<float>(p.pickupPosition));
+    setParam("pickupType",     static_cast<float>(p.pickupType));
+    setParam("toneKnob",       p.toneKnob);
+    setParam("cabAirFilter",   p.cabAirFilter ? 1.0f : 0.0f);
+
+    // Immediate direct sync to SynthEngine so DSP updates without waiting
+    synth.paramDecay          = p.decay;
+    synth.paramBrightness     = p.brightness;
+    synth.paramPickPos        = p.pickPos;
+    synth.paramStiffness      = p.stiffness;
+    synth.paramBodySize       = p.bodySize;
+    synth.paramBodyMix        = p.bodyMix;
+    synth.paramEngineType     = static_cast<float>(p.engineModel);
+    synth.paramStringMaterial = static_cast<float>(p.stringMaterial);
+    synth.paramBodyType       = static_cast<float>(p.bodyModel);
+    synth.paramStereoWidth    = p.stereoWidth;
+    synth.paramMasterGain     = p.masterGain;
+    synth.paramPalmMute       = p.palmMute;
+    synth.paramFullMute       = p.fullMute;
+    synth.paramStrum          = p.strumPattern;
+    synth.paramInstrumentMode = static_cast<float>(p.instrumentMode);
+    synth.paramGuitarModel    = static_cast<float>(p.guitarModel);
+    synth.paramPickupPosition = static_cast<float>(p.pickupPosition);
+    synth.paramPickupType     = static_cast<float>(p.pickupType);
+    synth.paramToneKnob       = p.toneKnob;
+    synth.paramCabAirFilter   = p.cabAirFilter;
 
     // Tell the host the program changed, so its preset display (and the AU's present-preset
     // property) follows selections made in the plugin's own preset dropdown.

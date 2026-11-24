@@ -52,6 +52,26 @@ void BiquadFilter::setModalResonator(float freqHz, float Q, float linearGain, fl
     a2 = (1.f - alpha) * a0_inv;
 }
 
+void BiquadFilter::setLowpass(float cutoffHz, float Q, float sampleRate) noexcept
+{
+    const float maxFreq = 0.49f * sampleRate;
+    const float f = std::max(20.0f, std::min(cutoffHz, maxFreq));
+    const float q = std::max(0.1f, Q);
+
+    const float omega = 2.f * kPi * f / sampleRate;
+    const float sinW  = std::sin(omega);
+    const float cosW  = std::cos(omega);
+    const float alpha = sinW / (2.f * q);
+
+    const float a0_inv = 1.f / (1.f + alpha);
+
+    b0 = (0.5f * (1.f - cosW)) * a0_inv;
+    b1 = (1.f - cosW)          * a0_inv;
+    b2 = (0.5f * (1.f - cosW)) * a0_inv;
+    a1 = (-2.f * cosW)         * a0_inv;
+    a2 = (1.f - alpha)         * a0_inv;
+}
+
 void BiquadFilter::setCoefficients(float b0_, float b1_, float b2_,
                                     float a1_, float a2_) noexcept
 {

@@ -21,6 +21,7 @@ void SynthEngine::init(float sr, int blockSize)
     polyScaleFilterCoeff = std::exp(-1.0f / (0.015f * sampleRate));
     legatoMinOnsetSamples = static_cast<int>(kLegatoChordWindowSec * sampleRate);
     smoothedPolyScale = 1.0f;
+    cabFilter.setLowpass(4800.0f, 0.707f, sampleRate);
     reset();
 }
 
@@ -208,6 +209,9 @@ void SynthEngine::startNoteOnString(int midiNote, float velocity, int s, float b
     const bool isFdtd = (paramEngineType >= 0.5f);
     voices[s].setEngineType(isFdtd ? Voice::EngineType::BilbaoFdtd : Voice::EngineType::DigitalWaveguide);
     voices[s].setPhysicalStringIndex(s);
+    const bool isElectric = (paramInstrumentMode >= 0.5f);
+    voices[s].setInstrumentMode(isElectric ? 1 : 0);
+    voices[s].setGuitarModel(static_cast<int>(std::round(paramGuitarModel)));
 
     // On-board: the string's own gauge. Off-board (past fret kMaxFret or below the open pitch):
     // sound with the gauge of the note's natural string so tone and level match a fretted note.
@@ -579,6 +583,8 @@ void SynthEngine::allNotesOff() noexcept
     for (auto& v : voices)
         v.reset();
     sympathetic.reset();
+    passiveElectronics.reset();
+    cabFilter.reset();
     keyswitchPalmMuteActive = false;
     keyswitchFullMuteActive = false;
     keyswitchStrumActive    = false;
@@ -600,8 +606,17 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
     int nextEvent = 0;
 
     // Update body parameters (size, damping, coupling, bodyType)
-    const int bodyType = static_cast<int>(std::round(paramBodyType));
-    body.setParameters(paramBodySize, 1.0f, paramBodyMix, bodyType);
+    const bool isElectric = (paramInstrumentMode >= 0.5f);
+    const auto guitarModelEnum = (paramGuitarModel >= 0.5f) ? ElectricGuitar::GuitarModel::LesPaul1959 : ElectricGuitar::GuitarModel::Stratocaster1962;
+    if (isElectric)
+    {
+        passiveElectronics.update(guitarModelEnum, paramToneKnob, sampleRate);
+    }
+    else
+    {
+        const int bodyType = static_cast<int>(std::round(paramBodyType));
+        body.setParameters(paramBodySize, 1.0f, paramBodyMix, bodyType);
+    }
 
     // Sync mute state if changed via DAW automation parameter or UI toggle
     const auto currentMuteMode = getEffectiveMuteMode();
@@ -689,10 +704,15 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
         float totalForceV = 0.f;
         int activeVoices = 0;
         float totalClick = 0.f;
+        float totalPickupVoltage = 0.0f;
+
+        const auto pickupPosEnum = static_cast<ElectricGuitar::PickupPosition>(std::clamp(static_cast<int>(std::round(paramPickupPosition)), 0, 5));
+        const int pickupTypeOverride = static_cast<int>(std::round(paramPickupType));
 
         for (int v = 0; v < NUM_VOICES; ++v)
         {
-            totalClick += voices[v].tickPickClick();
+            if (!isElectric)
+                totalClick += voices[v].tickPickClick();
 
             if (!voices[v].isActive())
                 continue;
@@ -700,11 +720,25 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
             activeVoices++;
             float fV = 0.0f, fH = 0.0f;
             voices[v].tickPolar(fV, fH);
-            // Vertical (soundboard pumping) drives the saddle directly; the horizontal polarization
-            // couples through lateral saddle rocking at ~35% (same ratio as the waveguide engine).
-            // The slightly detuned H plane is what produces the natural two-stage decay and beating.
-            // All string fundamentals are centered (constant spatial location for every note).
-            totalForceV += fV + kHorizontalSaddleCoupling * fH;
+
+            if (isElectric)
+            {
+                int sIdx = voices[v].getPhysicalStringIndex();
+                if (sIdx < 0 || sIdx >= 6) sIdx = v;
+                const auto pCfg = ElectricGuitar::getPickupConfig(guitarModelEnum, pickupPosEnum, sIdx, pickupTypeOverride);
+                float v_ind = pCfg.mixGain * voices[v].getPickupVelocity(pCfg.distBridge1, pCfg.isHumbucker1, pCfg.poleSpacing1);
+                if (pCfg.numActivePickups > 1)
+                    v_ind += pCfg.mixGain * voices[v].getPickupVelocity(pCfg.distBridge2, pCfg.isHumbucker2, pCfg.poleSpacing2);
+                totalPickupVoltage += v_ind;
+            }
+            else
+            {
+                // Vertical (soundboard pumping) drives the saddle directly; the horizontal polarization
+                // couples through lateral saddle rocking at ~35% (same ratio as the waveguide engine).
+                // The slightly detuned H plane is what produces the natural two-stage decay and beating.
+                // All string fundamentals are centered (constant spatial location for every note).
+                totalForceV += fV + kHorizontalSaddleCoupling * fH;
+            }
         }
 
         // Flamenco Golpe / Soundboard Thumb Knock Physical Mechanics:
@@ -758,45 +792,82 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
         // by the number of active vibrating strings on the fretboard!
         const float monoBridge = stringBridgeForce * smoothedPolyScale + golpeBodyForce;
 
-        // Symmetrical Acoustic Soundboard Reflection Network:
-        // Symmetrical reflection taps guarantee bit-exact attack centering (0.00 dB L/R difference across all registers).
-        reflectionBuf[reflectionIdx] = monoBridge;
-        const int read1 = (reflectionIdx - d1 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
-        const int read2 = (reflectionIdx - d2 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
-        reflectionIdx = (reflectionIdx + 1) % REFLECTION_BUF_SIZE;
+        if (isElectric)
+        {
+            // Calibrate physical string transverse velocity (v ~ 1.0 m/s) to standard instrument DI voltage
+            // (-12 to -6 dBFS). This guarantees the +8 dB resonant peak from the passive RLC tone biquad
+            // (Q = 2.6) never hits the soft-limiter threshold (0.85), eliminating all clipping fuzz and
+            // delivering a clean, uncompressed DI output directly into DAW amp modelers.
+            float diSample = totalPickupVoltage * smoothedPolyScale * 0.22f;
+            diSample = passiveElectronics.process(diSample);
+            if (paramCabAirFilter)
+                diSample = cabFilter.process(diSample);
 
-        const float ref1 = reflectionBuf[read1];
-        const float ref2 = reflectionBuf[read2];
+            if (widthParam > 0.001f)
+            {
+                reflectionBuf[reflectionIdx] = diSample;
+                const int read1 = (reflectionIdx - d1 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
+                const int read2 = (reflectionIdx - d2 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
+                reflectionIdx = (reflectionIdx + 1) % REFLECTION_BUF_SIZE;
 
-        // Symmetrical mirrored diffuse aura:
-        const float rL =  0.22f * ref1 - 0.16f * ref2;
-        const float rR = -0.16f * ref1 + 0.22f * ref2;
+                const float ref1 = reflectionBuf[read1];
+                const float ref2 = reflectionBuf[read2];
+                const float rL =  0.20f * ref1 - 0.15f * ref2;
+                const float rR = -0.15f * ref1 + 0.20f * ref2;
+                outputL[i] = diSample + widthParam * rL;
+                outputR[i] = diSample + widthParam * rR;
+            }
+            else
+            {
+                outputL[i] = diSample;
+                outputR[i] = diSample;
+            }
+        }
+        else
+        {
+            // Symmetrical Acoustic Soundboard Reflection Network:
+            // Symmetrical reflection taps guarantee bit-exact attack centering (0.00 dB L/R difference across all registers).
+            reflectionBuf[reflectionIdx] = monoBridge;
+            const int read1 = (reflectionIdx - d1 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
+            const int read2 = (reflectionIdx - d2 + REFLECTION_BUF_SIZE) % REFLECTION_BUF_SIZE;
+            reflectionIdx = (reflectionIdx + 1) % REFLECTION_BUF_SIZE;
 
-        float driveL = monoBridge + widthParam * rL;
-        float driveR = monoBridge + widthParam * rR;
+            const float ref1 = reflectionBuf[read1];
+            const float ref2 = reflectionBuf[read2];
 
-        // Pure Linear Bridge Force Radiation into Acoustic Soundboard:
-        // Delivering clean linear force into the body IR/modal resonators eliminates all inharmonic
-        // intermodulation distortion (IMD) on chords and prevents discontinuous knee-switching crackles.
-        outputL[i] = driveL;
-        outputR[i] = driveR;
+            // Symmetrical mirrored diffuse aura:
+            const float rL =  0.22f * ref1 - 0.16f * ref2;
+            const float rR = -0.16f * ref1 + 0.22f * ref2;
+
+            float driveL = monoBridge + widthParam * rL;
+            float driveR = monoBridge + widthParam * rR;
+
+            // Pure Linear Bridge Force Radiation into Acoustic Soundboard:
+            // Delivering clean linear force into the body IR/modal resonators eliminates all inharmonic
+            // intermodulation distortion (IMD) on chords and prevents discontinuous knee-switching crackles.
+            outputL[i] = driveL;
+            outputR[i] = driveR;
+        }
     }
 
     // Events with offsets past the end of the block (out-of-range timestamps) still take effect
     if (nextEvent < numEvents)
         dispatchGroup(events + nextEvent, numEvents - nextEvent);
 
-    // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
-    body.processBlock(outputL, outputR, numSamples);
-
-    // 3. Direct Airborne Plectrum Radiation:
-    // Injects the direct high-frequency pick snap (~4–12 kHz) directly into both channels,
-    // bypassing the soundboard body lowpass filter while preserving master gain and DC blocking.
-    for (int i = 0; i < numSamples; ++i)
+    if (!isElectric)
     {
-        const float click = (i < CLICK_BUF_SIZE) ? clickBuf[i] : 0.0f;
-        outputL[i] += click;
-        outputR[i] += click;
+        // 2. Drive the acoustic body soundboard (Stereo IR convolution or 32-Mode Modal Bank)
+        body.processBlock(outputL, outputR, numSamples);
+
+        // 3. Direct Airborne Plectrum Radiation:
+        // Injects the direct high-frequency pick snap (~4–12 kHz) directly into both channels,
+        // bypassing the soundboard body lowpass filter while preserving master gain and DC blocking.
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float click = (i < CLICK_BUF_SIZE) ? clickBuf[i] : 0.0f;
+            outputL[i] += click;
+            outputR[i] += click;
+        }
     }
 
     // 4. DC Blocker, Master Gain, and Transparent Soft Saturation
@@ -858,6 +929,8 @@ void SynthEngine::reset()
         v.reset();
     body.reset();
     sympathetic.reset();
+    passiveElectronics.reset();
+    cabFilter.reset();
     dcX_L = 0.f; dcY_L = 0.f;
     dcX_R = 0.f; dcY_R = 0.f;
     std::fill_n(reflectionBuf, REFLECTION_BUF_SIZE, 0.f);

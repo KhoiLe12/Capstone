@@ -117,6 +117,15 @@ public:
     /** Hard-stop and reset. */
     void reset() noexcept;
 
+    /** Electric guitar mode and blueprint model setters. */
+    void setInstrumentMode(int mode) noexcept { instrumentMode = mode; }
+    void setGuitarModel(int model) noexcept { guitarModel = model; }
+    int  getInstrumentMode() const noexcept { return instrumentMode; }
+    int  getGuitarModel() const noexcept { return guitarModel; }
+
+    /** Electromagnetic pickup induction velocity at distance from bridge (in meters). */
+    float getPickupVelocity(float distFromBridgeMeters, bool isHumbucker, float poleSpacingMeters = 0.0185f) const noexcept;
+
 private:
     Exciter       exciter;
     KarplusStrong string;
@@ -124,6 +133,8 @@ private:
 
     EngineType    engineType = EngineType::DigitalWaveguide;
     int           stringMaterial = 0; // 0 = Nylon Classical, 1 = Steel Acoustic
+    int           instrumentMode = 0; // 0 = Acoustic, 1 = Electric
+    int           guitarModel    = 0; // 0 = Stratocaster 1962, 1 = Les Paul 1959
     int           physicalStringIndex = -1;
     int           geometryStringIndex = -1; ///< String gauge used for the sound (see noteOn)
 
@@ -140,6 +151,7 @@ private:
     float releaseCoeff    = 0.999f;
     int   fadeSamplesLeft = -1;
     int   samplesSinceNoteOn = 0;
+    float lastGainScale = 1.0f;
 
     // Physical acoustic choke & hand slap transient state
     bool  choking          = false;

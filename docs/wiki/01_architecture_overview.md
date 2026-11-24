@@ -121,27 +121,32 @@ High-frequency plectrum snap and finger release cavitation ($4\text{--}16\text{ 
 
 ---
 
-## 6. Factory Preset & Program Management Architecture (v59.f)
+## 6. Factory Preset & Program Management Architecture (v59.f, updated v76.f)
 
-To allow fast auditioning and seamless DAW session recall without manual 14-parameter dialing:
+To allow fast auditioning and seamless DAW session recall without manual parameter dialing:
 1. **Host Program Protocol**:
-   - `HybridSynthProcessor` overrides `getNumPrograms()`, `getCurrentProgram()`, `setCurrentProgram(int index)`, and `getProgramName(int index)`.
-   - DAW host wrappers (such as FL Studio's top preset bar, Logic Pro's preset manager, Cubase VST3 selector) automatically expose the 8 factory programs.
-2. **Bi-Directional APVTS Parameter Notification**:
-   - Program changes execute `param->setValueNotifyingHost(param->convertTo0to1(val))` across all APVTS parameters.
-   - This atomically moves all attached rotary sliders, toggle buttons, and combo boxes in the custom GUI (`PluginEditor`) without thread contention or audio dropouts.
-3. **Curated Physical Modeling Factory Presets**:
-   - *Dreadnought Acoustic*: Steel, Legacy Body IR, full sustain, Bilbao FDTD.
-   - *Nylon Concert Classical*: Nylon, Classical (Contreras) IR, soft plectrum contact, Bilbao FDTD.
-   - *Flamenco Rasgueado*: Nylon, Flamenco (Conde 1964) IR, fast snappy attack, wide stereo.
-   - *Fingerstyle Auditorium*: Steel, Legacy Body IR, high sustain, Digital Waveguide.
-   - *Vintage Parlor Blues*: Steel, 32-mode Modal Bank, woody grit, Bilbao FDTD.
-   - *12-String Shimmer*: Steel, Modal Bank, jumbo body, maximum stereo width, DWG.
-   - *Percussive Palm Chops*: Steel, Legacy Body IR, palm mute active, tight acoustic chug.
-   - *Warm Jazz Archtop*: Nylon, Modal Bank, deep warmth, gentle soundhole position.
-4. **First-Launch Initialization Parity**:
-   - The processor constructor explicitly executes `setCurrentProgram(0)` and sets APVTS layout defaults to match Preset 0 (*Dreadnought Acoustic*), guaranteeing that when the plugin is opened for the first time, all physical modeling DSP parameters match the displayed preset immediately.
-5. **Session State Persistence**:
-   - `currentProgram` is serialized to XML alongside the APVTS value tree in `getStateInformation()` and restored in `setStateInformation()`, ensuring host project recalls faithfully restore both the audio parameters and the active preset name.
+   - `HybridSynthProcessor` exposes 12 factory programs (8 Acoustic + 4 Electric DI) across host DAW preset bars.
+2. **Curated Physical Modeling Factory Presets**:
+   - *Acoustic Presets*: Dreadnought Acoustic, Nylon Concert Classical, Flamenco Rasgueado, Fingerstyle Auditorium, Vintage Parlor Blues, 12-String Shimmer, Percussive Palm Chops, Warm Jazz Archtop.
+   - *Electric Presets*: Strat Clean Funk DI, Texas Blues Lead, Les Paul Vintage Warmth, Bridge Humbucker Bite.
+3. **Session State Persistence**:
+   - `currentProgram` and all 22 parameters are serialized to XML in `getStateInformation()` and restored in `setStateInformation()`.
+
+---
+
+## 7. Dual Instrument Paradigms: Acoustic vs. Electric DI Mode (v76.f)
+
+Starting in v76.f, the synthesizer provides two complete, dedicated physical modeling instrument paradigms toggled via the top-level **Acoustic / Electric** page switcher:
+
+### 1. Signal Flow Divergence
+- **Acoustic Guitar Mode**:
+  Vibrating strings deliver force through the bridge saddle into unplayed open string sympathetic resonance $\to$ body soundboard IR convolution (or 32-mode modal bank) $\to$ direct airborne pick snap $\to$ DC blocker and master soft limiter.
+- **Electric Guitar Mode (Pure DI Output)**:
+  Electromagnetic pickups sense physical string transverse velocity $v(x_p, t) = \frac{\partial u}{\partial t}(x_p, t)$ directly above the pole pieces. The induced voltages sum across active vibrating strings into the passive guitar RLC resonant circuit ($L$, $R$, $C$, tone pot), completely bypassing the acoustic body IR and airborne pick snap. This delivers a pristine direct input (DI) signal ready to be plugged into external amp simulation software (Neural DSP, Guitar Rig, Amplitube, etc.). An optional Cab/Air 2nd-order lowpass filter (~4.8 kHz) can be engaged for smooth standalone headphone jamming.
+
+### 2. Dedicated Two-Page GUI Architecture
+- **Acoustic Page**: Shows String Material (Nylon/Steel), Body Model IR selector, Custom IR loader button, Body Size, and Body Coupling.
+- **Electric Page**: Shows Guitar Model (1962 Stratocaster / 1959 Les Paul), Pickup Position (5-way Strat / 3-way LP selector), Pickup Type (Single-Coil / Humbucker), Tone Knob (RLC circuit sweep), and Cab/Air roll-off toggle.
+- Both pages share physical string articulation controls (Palm Muting, Choke Dead Notes, Strumming, Legato Hammer-ons/Pull-offs, Decay, Brightness, Pick Position, and Inharmonic Stiffness).
 
 

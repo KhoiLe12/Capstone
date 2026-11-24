@@ -1208,6 +1208,58 @@ public:
     int getNumPoints() const noexcept { return N_pts; }
     float getGridSpacing() const noexcept { return h; }
 
+    /**
+     * Physical transverse string velocity extraction at distance from bridge (in meters).
+     * Senses vertical velocity with subtle lateral coupling for electromagnetic induction.
+     */
+    float getPointVelocity(float distFromBridgeMeters) const noexcept
+    {
+        if (N_pts < 2 || distFromBridgeMeters <= 0.0f)
+            return 0.0f;
+
+        const float x = p.L - distFromBridgeMeters;
+        if (x <= 0.0f || x >= p.L)
+            return 0.0f;
+
+        const float pos = (x / h) - 1.0f;
+        const int idx = std::clamp(static_cast<int>(pos), 0, N_pts - 2);
+        const float alpha = std::clamp(pos - static_cast<float>(idx), 0.0f, 1.0f);
+
+        const float invK = 1.0f / k;
+        const float u_c_V = (1.0f - alpha) * u_curr[static_cast<size_t>(idx)] + alpha * u_curr[static_cast<size_t>(idx + 1)];
+        const float u_p_V = (1.0f - alpha) * u_prev[static_cast<size_t>(idx)] + alpha * u_prev[static_cast<size_t>(idx + 1)];
+        const float vV = (u_c_V - u_p_V) * invK;
+
+        float vH = 0.0f;
+        if (!u_curr_H.empty() && static_cast<size_t>(idx + 1) < u_curr_H.size())
+        {
+            const float u_c_H = (1.0f - alpha) * u_curr_H[static_cast<size_t>(idx)] + alpha * u_curr_H[static_cast<size_t>(idx + 1)];
+            const float u_p_H = (1.0f - alpha) * u_prev_H[static_cast<size_t>(idx)] + alpha * u_prev_H[static_cast<size_t>(idx + 1)];
+            vH = (u_c_H - u_p_H) * invK;
+        }
+
+        return vV + 0.10f * vH;
+    }
+
+    /**
+     * Electromagnetic pickup induction velocity.
+     * For single-coil: point velocity.
+     * For humbucker: dual pole piece velocity sum (creates the authentic ~3.6 kHz comb-filter notch).
+     */
+    float getPickupVelocity(float distFromBridgeMeters, bool isHumbucker, float poleSpacingMeters = 0.0185f) const noexcept
+    {
+        if (!isHumbucker)
+        {
+            return getPointVelocity(distFromBridgeMeters);
+        }
+        else
+        {
+            const float d1 = distFromBridgeMeters - 0.5f * poleSpacingMeters;
+            const float d2 = distFromBridgeMeters + 0.5f * poleSpacingMeters;
+            return 0.5f * (getPointVelocity(d1) + getPointVelocity(d2));
+        }
+    }
+
 private:
     /** Reserve every grid-sized buffer for the worst case at this sample rate (may allocate). */
     void reserveCapacity()

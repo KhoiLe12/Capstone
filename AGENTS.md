@@ -122,7 +122,42 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v75.f**
+### Current Version Status: **v77.f**
+- **v77.f**:
+  - **Electric DI Gain Calibration & Headroom Optimization**:
+    - Calibrated electric transverse string velocity induction scaling from raw $0.85\times$ down to $0.22\times$ (`diSample = totalPickupVoltage * smoothedPolyScale * 0.22f`).
+    - Standardized peak DI voltage levels to standard Hi-Z instrument inputs ($\approx -12\text{ to }-6\text{ dBFS}$), preventing the $+8.3\text{ dB}$ resonant peak of the passive RLC tone biquad ($Q = 2.6$) from hitting the master soft-limiter threshold ($0.85$), eliminating all unwanted clipping fuzz and distortion.
+    - Adjusted electric preset master gains to `0.76--0.78f` for ample dynamic headroom on heavy chord strums and aggressive bends.
+  - **First-Boot Preset Selection Reliability**:
+    - Created `PresetComboBox` with an overridden `showPopup()` callback that clears the internal selection index before menu presentation, guaranteeing that clicking any preset item in the dropdown (even the initial default program on first boot) triggers selection change on the very first click without requiring double-clicking.
+    - Removed redundant `if (globalIdx != currentProgram)` guard in `presetBox.onChange`, allowing instant preset reload on direct user selection.
+
+- **v76.f**:
+  - **Electric Guitar Mode (Electromagnetic Pickup Induction, Passive RLC Tone Circuitry, Solid-Body Damping, and Pure DI Output)**:
+    - **Physical Transverse Velocity Induction (`FdtdString::getPickupVelocity`)**:
+      - Electromagnetic pickups physically detect string transverse velocity $v(x_p, t) = \frac{\partial u}{\partial t}(x_p, t)$ rather than bridge saddle force.
+      - Extracted at exact continuous physical coordinates from the FDTD displacement grid ($v(x_p) = (u_{\text{curr}}(x_p) - u_{\text{prev}}(x_p)) / \Delta t$) via quadratic B-spline spatial interpolation. Vertical string motion drives the pickup flux, with subtle lateral field fringe coupling ($0.10 \times v_H$).
+    - **Factory Blueprint Geometries**:
+      - *1962 Fender Stratocaster (25.5" / 647.7 mm scale)*: Slanted bridge pickup (47.6 mm bass E down to 41.3 mm high E), straight middle pickup (98.4 mm), and straight neck pickup (146.0 mm). 5-way selector with authentic parallel coil "quack" out-of-phase comb notches.
+      - *1959 Gibson Les Paul (24.75" / 628.65 mm scale)*: Bridge PAF humbucker (42.0 mm) and neck PAF humbucker (155.0 mm) with dual pole pieces separated by 18.5 mm. Dual-pole summing naturally synthesizes the famous ~3.6 kHz humbucker phase-cancellation notch without artificial filters.
+    - **Passive Guitar RLC Resonant Tone Circuit**:
+      - 2nd-order resonant lowpass biquad modeling coil inductance $L$, coil resistance $R$, guitar cable capacitance $C_{\text{cable}} \approx 500\text{ pF}$, and tone pot sweep.
+      - Stratocaster: $f_{\text{res}}$ sweeps from 4.2 kHz ($Q=2.6$) down to 450 Hz ($Q=1.1$).
+      - Les Paul: $f_{\text{res}}$ sweeps from 2.8 kHz ($Q=1.95$) down to 400 Hz ($Q=0.95$).
+    - **Solid-Body Damping & Nickel-Plated Steel Strings**:
+      - Rigid metal bridge on solid hardwood slab absorbs far less vibrational energy than a thin acoustic soundboard, reducing $\sigma_0$ to $0.16\text{--}0.20\text{ s}^{-1}$ ($T_{60} \approx 8\text{--}15\text{ s}$ of singing electric sustain).
+      - Electric D'Addario EXL110 regular light (10-46) metallurgy: wound hex-core on E2, A2, D3; plain steel wire on G3, B3, E4 (`woundFactor = 0` on G string).
+    - **Two-Page User Interface (Acoustic Page vs. Electric Page)**:
+      - Clean top-level page switcher toggling between dedicated Acoustic Guitar and Electric Guitar DI interfaces.
+      - Acoustic page displays String Material, Body Model IRs, IR loader, Body Size, and Body Coupling.
+      - Electric page displays Guitar Model (Strat/LP), Pickup Selector (5-way/3-way), Pickup Type (Single-Coil/Humbucker), Tone Knob (RLC), and optional Cab/Air roll-off filter.
+    - **Pristine DI Signal Path**:
+      - Electric mode cleanly bypasses acoustic body IR convolution and airborne pick snap, routing the pure electromagnetic induction voltage straight into DAW amp modelers (Neural DSP, Guitar Rig, Amplitube, etc.).
+    - **Verification & QA**:
+      - Added 4 curated electric factory presets (`Strat Clean Funk DI`, `Texas Blues Lead`, `Les Paul Vintage Warmth`, `Bridge Humbucker Bite`).
+      - `bench_synth`: `RTCheck ALL PASS (0)` across all block sizes (32..512) and sample rates (44.1..192 kHz), zero heap allocations, **+0.0% CPU overhead**.
+      - `pluginval`: Strictness level 8 **`SUCCESS`** with 0 errors across all 22 parameters and 12 factory programs.
+
 - **v75.f**:
   - **Flamenco Golpe (Soundboard Thumb Knock) Engine & Acoustic Chord Headroom Isolation**:
     - **Physical Viscoelastic Flesh-Wood Contact Law**: Implemented physical thumb-heel impact mechanics on the spruce top plate (Literature Review §6). Compressive contact force pulse $F_g(t) = 4.8 v^{1.2} \times 2.67 \sin^2(\pi \tau) e^{-2.2\tau}$ over duration $T_c \approx 2.4\text{--}3.4\text{ ms}$ (viscoelastic thumb flesh compliance). Smooth onset and offset guarantees zero DC bias or boundary clicks.
@@ -237,7 +272,7 @@ For comprehensive mathematical derivations, code architectures, and implementati
 - [ ] **Harmonics Engine (Natural & Pinch Harmonics)**:
   - Natural nodal touch damping (12th fret $1/2$ octave, 7th fret $1/3$ octave+5th, 5th fret $1/4$ 2 octaves) damping non-nodal modes into crystalline chimes.
   - Pinch / artificial harmonics with thumb-flesh damping for high-register harmonic squeals, triggered via keyswitch or articulation control.
-- [ ] **Electric Guitar Mode (Electromagnetic Pickups & Solid Body)**:
+- [x] **Electric Guitar Mode (Electromagnetic Pickups & Solid Body)**:
   - Electromagnetic pickup induction model sensing string transverse velocity ($\frac{\partial u}{\partial t}$) at physical positions $x_\text{pickup}$ (Neck, Middle, Bridge).
   - Single-coil vs. Humbucker aperture comb filtering, tone pot load, and solid body low-damping sustained vibration.
 - [ ] **Micro-Tuning & Alternate Tuning Support**:

@@ -149,13 +149,15 @@ FdtdString::StringParams Voice::makeFdtdParams(int note, int s, float stiffness,
     static constexpr float centsOffsets[6] = { 1.5f, 1.5f, 1.0f, 0.8f, 0.5f, 0.0f };
 
     s = std::clamp(s, 0, 5);
-    const bool isSteel = (stringMaterial == 1);
+    const bool isElectric = (instrumentMode == 1);
+    const bool isSteel = isElectric ? true : (stringMaterial == 1);
     const float targetFreq = midiToFreq(note);
     const int fret = std::clamp(note - openMidi[s], 0, 22);
 
     FdtdString::StringParams p;
     p.fretNumber  = fret;
-    p.L           = 0.65f * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
+    const float baseScale = isElectric ? ((guitarModel == 1) ? 0.62865f : 0.64770f) : 0.65f;
+    p.L           = baseScale * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
     p.f0          = targetFreq;
     p.r           = isSteel ? steelRadii[s] : nylonRadii[s];
     p.r_stiffness = isSteel ? steelBendingRadii[s] : nylonBendingRadii[s];
@@ -182,13 +184,28 @@ FdtdString::StringParams Voice::makeFdtdParams(int note, int s, float stiffness,
     const float fRatio = std::clamp(targetFreq / 82.4f, 1.0f, 16.0f);
     const float registerDecayScale = std::pow(fRatio, isSteel ? kFdtdSteelRegisterExponent : kFdtdNylonRegisterExponent);
     const float nutVsFretScale = (fret == 0) ? 0.88f : (1.0f + 0.008f * static_cast<float>(fret));
-    fdtdOpenSigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - decay)) : (0.75f + 1.25f * (1.0f - decay)))
-                     * registerDecayScale * nutVsFretScale;
 
-    const float trebleFactor = std::clamp((targetFreq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
-    const float decaySigma1Scale = 1.0f + 0.6f * (1.0f - decay);
-    fdtdOpenSigma1 = (isSteel ? (3.5e-4f + 1.8e-3f * trebleFactor)
-                              : (4.5e-4f + 2.5e-3f * trebleFactor)) * decaySigma1Scale;
+    if (isElectric)
+    {
+        // Solid body termination (rigid bridge on solid hardwood slab):
+        // Vastly lower boundary loss than an acoustic soundboard, yielding 8–15s of singing sustain.
+        const float baseSigma0 = (guitarModel == 1) ? 0.16f : 0.20f;
+        fdtdOpenSigma0 = (baseSigma0 + 0.35f * (1.0f - decay)) * registerDecayScale * nutVsFretScale;
+
+        const float trebleFactor = std::clamp((targetFreq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
+        const float decaySigma1Scale = 1.0f + 0.5f * (1.0f - decay);
+        fdtdOpenSigma1 = (2.2e-4f + 1.2e-3f * trebleFactor) * decaySigma1Scale;
+    }
+    else
+    {
+        fdtdOpenSigma0 = (isSteel ? (0.45f + 0.85f * (1.0f - decay)) : (0.75f + 1.25f * (1.0f - decay)))
+                         * registerDecayScale * nutVsFretScale;
+
+        const float trebleFactor = std::clamp((targetFreq - 110.0f) / (1000.0f - 110.0f), 0.0f, 1.0f);
+        const float decaySigma1Scale = 1.0f + 0.6f * (1.0f - decay);
+        fdtdOpenSigma1 = (isSteel ? (3.5e-4f + 1.8e-3f * trebleFactor)
+                                  : (4.5e-4f + 2.5e-3f * trebleFactor)) * decaySigma1Scale;
+    }
 
     p.sigma0     = fdtdOpenSigma0;
     p.sigma1     = fdtdOpenSigma1;
@@ -200,7 +217,11 @@ FdtdString::StringParams Voice::makeFdtdParams(int note, int s, float stiffness,
     p.phantomCoupling    = isSteel ? 0.30f : 0.20f;
 
     // Wound bass string vs plain treble factor
-    p.woundFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.22f) : 0.0f;
+    // On acoustic, strings 0..3 are wound (E2, A2, D3, G3); on electric sets (10-46), G3 (string 3) is plain steel!
+    if (isElectric)
+        p.woundFactor = (s <= 2) ? (1.0f - static_cast<float>(s) * 0.33f) : 0.0f;
+    else
+        p.woundFactor = (s <= (isSteel ? 3 : 2)) ? (1.0f - static_cast<float>(s) * 0.22f) : 0.0f;
 
     // Calibrated fret action clearance (1.3 mm bass down to 1.0 mm treble)
     p.m0 = -0.0010f - 0.0003f * (1.0f - static_cast<float>(s) / 5.0f);
@@ -512,6 +533,7 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
             }
         }
 
+        lastGainScale = gainScale;
         outV = fV * gainScale;
         outH = fH * gainScale;
 
@@ -549,6 +571,7 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
     {
         // Digital Waveguide fallback: single axis vertical drive
         const float sOut = tick();
+        lastGainScale = 1.0f;
         outV = sOut;
         outH = 0.0f;
     }
@@ -571,6 +594,7 @@ void Voice::reset() noexcept
     chokeSamplesLeft = 0;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
+    lastGainScale = 1.0f;
     midiNote = -1;
 
     // Reset direct airborne pick-click physical model (v51.f)
@@ -588,7 +612,7 @@ void Voice::reset() noexcept
 
 float Voice::tickPickClick() noexcept
 {
-    if (pickClickSamplesLeft <= 0)
+    if (pickClickSamplesLeft <= 0 || instrumentMode == 1)
         return 0.0f;
 
     // 1. Acoustic Dipole Shock Wave (Ricker wavelet / pressure doublet):
@@ -657,4 +681,23 @@ float Voice::midiToFreq(int note) noexcept
 {
     // Equal temperament tuning: A4 = 440 Hz = MIDI 69
     return 440.f * std::pow(2.f, (note - 69) / 12.f);
+}
+
+float Voice::getPickupVelocity(float distFromBridgeMeters, bool isHumbucker, float poleSpacingMeters) const noexcept
+{
+    if (!active)
+        return 0.0f;
+
+    float rawVel = 0.0f;
+    if (engineType == EngineType::BilbaoFdtd)
+    {
+        rawVel = fdtdString.getPickupVelocity(distFromBridgeMeters, isHumbucker, poleSpacingMeters);
+    }
+    else
+    {
+        // Waveguide fallback: comb-filter approximation at pickup distance
+        rawVel = (isHumbucker ? 0.75f : 1.0f) * string.getEnergy();
+    }
+
+    return rawVel * lastGainScale;
 }

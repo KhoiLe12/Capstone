@@ -52,9 +52,18 @@ public:
         bool  palmMute;
         bool  fullMute;
         bool  strumPattern;
+        // Electric guitar parameters (defaults for acoustic presets)
+        int   instrumentMode = 0; // 0 = Acoustic, 1 = Electric
+        int   guitarModel    = 0; // 0 = Strat 1962, 1 = Les Paul 1959
+        int   pickupPosition = 0; // 0 = Bridge, 1 = Bridge+Mid, 2 = Mid, 3 = Neck+Mid, 4 = Neck, 5 = Bridge+Neck
+        int   pickupType     = 0; // 0 = Single-Coil, 1 = Humbucker
+        float toneKnob       = 1.0f;
+        bool  cabAirFilter   = false;
     };
 
     static const std::vector<FactoryPreset>& getFactoryPresets() noexcept;
+    static constexpr int kNumAcousticPresets = 8;
+    static constexpr int kNumElectricPresets = 4;
 
     int  getNumPrograms()   override;
     int  getCurrentProgram() override;
