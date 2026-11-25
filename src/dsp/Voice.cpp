@@ -680,7 +680,7 @@ float Voice::tickPickClick() noexcept
 float Voice::midiToFreq(int note) noexcept
 {
     // Equal temperament tuning: A4 = 440 Hz = MIDI 69
-    return 440.f * std::pow(2.f, (note - 69) / 12.f);
+    return 440.f * std::pow(2.f, static_cast<float>(note - 69) / 12.f);
 }
 
 float Voice::getPickupVelocity(float distFromBridgeMeters, bool isHumbucker, float poleSpacingMeters) const noexcept

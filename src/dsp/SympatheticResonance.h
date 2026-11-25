@@ -48,15 +48,15 @@ public:
         float y1 = 0.0f;
         float y2 = 0.0f;
 
-        void setup(float freq, float Q, float sampleRate) noexcept
+        void setup(float freq, float Q, float sr) noexcept
         {
-            if (freq >= sampleRate * 0.48f)
+            if (freq >= sr * 0.48f)
             {
                 b0 = b2 = a1 = a2 = 0.0f;
                 return;
             }
 
-            const float w0 = 2.0f * 3.14159265358979323846f * freq / sampleRate;
+            const float w0 = 2.0f * 3.14159265358979323846f * freq / sr;
             const float cosw = std::cos(w0);
             const float sinw = std::sin(w0);
             const float alpha = sinw / (2.0f * std::max(1.0f, Q));

@@ -159,8 +159,8 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
         // Legato is strictly valid ONLY for monophonic lead transitions where exactly 1 note is held:
         if (numCurrentlyHeld == 1 && heldVoiceIdx >= 0)
         {
-            // The held note must have started at least kLegatoChordWindowSec (40 ms) earlier, so the
-            // notes of a rolled / humanised chord (typically 10-40 ms apart) stay a chord:
+            // The held note must have started at least kLegatoChordWindowSec (75 ms) earlier, so the
+            // notes of a rolled / humanised chord (typically 10-60 ms apart) stay a chord:
             if (voices[heldVoiceIdx].getSamplesSinceNoteOn() >= legatoMinOnsetSamples)
             {
                 const int interval = std::abs(midiNote - heldMidiNote);

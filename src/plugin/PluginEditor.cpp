@@ -135,7 +135,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     // Legato toggle (hammer-ons / pull-offs on overlapping notes)
     legatoToggle.setButtonText("Legato (HO/PO)");
     legatoToggle.setTooltip("Overlapping notes on one string play as hammer-ons / pull-offs. "
-                            "Notes within 40 ms of each other always play as a chord.");
+                            "Notes within 75 ms of each other always play as a chord.");
     legatoToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xfff0f0f0));
     legatoToggle.setColour(juce::ToggleButton::tickColourId, juce::Colour(0xff8ecae6));
     addAndMakeVisible(legatoToggle);

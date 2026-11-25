@@ -122,7 +122,7 @@ HybridSynthProcessor::createParameterLayout()
         "Strum 8th",
         false));
 
-    // Legato: overlapping notes on one string play as hammer-ons / pull-offs (40 ms chord window)
+    // Legato: overlapping notes on one string play as hammer-ons / pull-offs (75 ms chord window)
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{ "legato", 1 },
         "Legato (HO/PO)",
@@ -541,14 +541,14 @@ void HybridSynthProcessor::setStateInformation(const void* data, int sizeInBytes
         {
             const int channels = static_cast<int>(ir.getProperty("channels", 0));
             const int samples  = static_cast<int>(ir.getProperty("samples", 0));
-            juce::MemoryBlock data;
+            juce::MemoryBlock irData;
             if (channels >= 1 && channels <= 2 && samples > 0
-                && data.fromBase64Encoding(ir.getProperty("data").toString())
-                && data.getSize() == sizeof(float) * static_cast<size_t>(channels) * static_cast<size_t>(samples))
+                && irData.fromBase64Encoding(ir.getProperty("data").toString())
+                && irData.getSize() == sizeof(float) * static_cast<size_t>(channels) * static_cast<size_t>(samples))
             {
                 restoredIR.setSize(channels, samples);
                 for (int ch = 0; ch < channels; ++ch)
-                    restoredIR.copyFrom(ch, 0, static_cast<const float*>(data.getData()) + static_cast<size_t>(ch) * static_cast<size_t>(samples), samples);
+                    restoredIR.copyFrom(ch, 0, static_cast<const float*>(irData.getData()) + static_cast<size_t>(ch) * static_cast<size_t>(samples), samples);
                 restoredRate = static_cast<double>(ir.getProperty("sampleRate", 48000.0));
                 restoredName = ir.getProperty("name").toString();
             }

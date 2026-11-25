@@ -215,8 +215,8 @@ static BenchmarkResult runScenario(
     engine.paramMasterGain  = 0.80f;
     engine.paramBodyType    = 0.0f; // Classical Nylon IR
 
-    std::vector<float> bufferL(blockSize, 0.0f);
-    std::vector<float> bufferR(blockSize, 0.0f);
+    std::vector<float> bufferL(static_cast<size_t>(blockSize), 0.0f);
+    std::vector<float> bufferR(static_cast<size_t>(blockSize), 0.0f);
 
     for (int note : midiNotes)
     {
@@ -235,7 +235,7 @@ static BenchmarkResult runScenario(
     g_realtimeFreeCount.store(0);
 
     std::vector<double> blockTimesUs;
-    blockTimesUs.reserve(measureBlocks);
+    blockTimesUs.reserve(static_cast<size_t>(measureBlocks));
 
     g_realtimeThreadActive = true;
     for (int b = 0; b < measureBlocks; ++b)
@@ -593,7 +593,7 @@ static bool runChordVsLegatoCheck(float sampleRate)
     SynthEngine::Event golpeEv = { 0, SynthEngine::Event::Type::NoteOn, SynthEngine::KEYSWITCH_GOLPE, 0.9f, -1.f, -1.f };
     golpeEng.process(gL.data(), gR.data(), 512, &golpeEv, 1);
     float golpePeak = 0.0f;
-    for (int i = 0; i < 512; ++i)
+    for (size_t i = 0; i < 512; ++i)
         golpePeak = std::max(golpePeak, std::max(std::abs(gL[i]), std::abs(gR[i])));
     const bool golpeOk = (golpePeak > 0.05f && golpePeak < 0.999f && golpeEng.getNumActiveVoices() == 0);
     std::cout << "  Flamenco Golpe knock (MIDI 29, F1)  : Peak " << golpePeak << " ("
@@ -773,12 +773,14 @@ static MultiTrackResult runMultiTrackScenario(
     int warmupBlocks = 32,
     int measureBlocks = 150)
 {
+    const auto nTrk = static_cast<size_t>(numTracks);
+    const auto bsSz = static_cast<size_t>(blockSize);
     std::vector<std::unique_ptr<SynthEngine>> engines;
-    engines.reserve(numTracks);
-    std::vector<std::vector<float>> bufsL(numTracks, std::vector<float>(blockSize, 0.0f));
-    std::vector<std::vector<float>> bufsR(numTracks, std::vector<float>(blockSize, 0.0f));
-    std::vector<float> masterL(blockSize, 0.0f);
-    std::vector<float> masterR(blockSize, 0.0f);
+    engines.reserve(nTrk);
+    std::vector<std::vector<float>> bufsL(nTrk, std::vector<float>(bsSz, 0.0f));
+    std::vector<std::vector<float>> bufsR(nTrk, std::vector<float>(bsSz, 0.0f));
+    std::vector<float> masterL(bsSz, 0.0f);
+    std::vector<float> masterR(bsSz, 0.0f);
 
     const std::vector<int> chord6Voice = { 40, 45, 50, 55, 59, 64 };
 
@@ -804,7 +806,7 @@ static MultiTrackResult runMultiTrackScenario(
     // Warm-up
     for (int b = 0; b < warmupBlocks; ++b)
     {
-        for (int t = 0; t < numTracks; ++t)
+        for (size_t t = 0; t < nTrk; ++t)
         {
             engines[t]->process(bufsL[t].data(), bufsR[t].data(), blockSize);
         }
@@ -835,7 +837,7 @@ static MultiTrackResult runMultiTrackScenario(
     task.bL = &bufsL;
     task.bR = &bufsR;
     task.bs = blockSize;
-    task.nTracks = numTracks;
+    task.nTracks = nTrk;
 
     // Active measurement
     g_realtimeAllocCount.store(0);
@@ -843,7 +845,7 @@ static MultiTrackResult runMultiTrackScenario(
     g_realtimeFreeCount.store(0);
 
     std::vector<double> blockTimesUs;
-    blockTimesUs.reserve(measureBlocks);
+    blockTimesUs.reserve(static_cast<size_t>(measureBlocks));
 
     for (int b = 0; b < measureBlocks; ++b)
     {
@@ -857,7 +859,7 @@ static MultiTrackResult runMultiTrackScenario(
         else
         {
             g_realtimeThreadActive = true;
-            for (int t = 0; t < numTracks; ++t)
+            for (size_t t = 0; t < nTrk; ++t)
             {
                 engines[t]->process(bufsL[t].data(), bufsR[t].data(), blockSize);
             }
@@ -867,9 +869,9 @@ static MultiTrackResult runMultiTrackScenario(
         // Master mix bus summation
         std::fill(masterL.begin(), masterL.end(), 0.0f);
         std::fill(masterR.begin(), masterR.end(), 0.0f);
-        for (int t = 0; t < numTracks; ++t)
+        for (size_t t = 0; t < nTrk; ++t)
         {
-            for (int s = 0; s < blockSize; ++s)
+            for (size_t s = 0; s < bsSz; ++s)
             {
                 masterL[s] += bufsL[t][s];
                 masterR[s] += bufsR[t][s];
