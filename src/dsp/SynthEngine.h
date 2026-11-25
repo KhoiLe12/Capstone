@@ -3,6 +3,7 @@
 #include "BodyResonance.h"
 #include "SympatheticResonance.h"
 #include "ElectricPickup.h"
+#include <atomic>
 
 /**
  * SynthEngine — 6-string voice orchestrator, bridge summing and body coupling.
@@ -154,31 +155,31 @@ public:
 
     bool isStrumActive() const noexcept
     {
-        return paramStrum || keyswitchStrumActive;
+        return paramStrum || keyswitchStrumActive.load(std::memory_order_relaxed);
     }
 
     bool isStrumDownstroke() const noexcept
     {
-        return lastStrumWasDown;
+        return lastStrumWasDown.load(std::memory_order_relaxed);
     }
 
     KarplusStrong::MuteMode getEffectiveMuteMode() const noexcept
     {
-        if (paramFullMute || keyswitchFullMuteActive)
+        if (paramFullMute || keyswitchFullMuteActive.load(std::memory_order_relaxed))
             return KarplusStrong::MuteMode::Full;
-        if (paramPalmMute || keyswitchPalmMuteActive)
+        if (paramPalmMute || keyswitchPalmMuteActive.load(std::memory_order_relaxed))
             return KarplusStrong::MuteMode::Palm;
         return KarplusStrong::MuteMode::Open;
     }
 
     bool isPalmMuteActive() const noexcept
     {
-        return (paramPalmMute || keyswitchPalmMuteActive) && !isFullMuteActive();
+        return (paramPalmMute || keyswitchPalmMuteActive.load(std::memory_order_relaxed)) && !isFullMuteActive();
     }
 
     bool isFullMuteActive() const noexcept
     {
-        return paramFullMute || keyswitchFullMuteActive;
+        return paramFullMute || keyswitchFullMuteActive.load(std::memory_order_relaxed);
     }
 
 private:
@@ -194,13 +195,14 @@ private:
     float         currentBpm = 120.0f;
     int           legatoMinOnsetSamples = 1920; ///< kLegatoChordWindowSec at the current sample rate
 
-    bool          keyswitchPalmMuteActive = false;
-    bool          keyswitchFullMuteActive = false;
-    bool          keyswitchStrumActive    = false;
+    std::atomic<bool> keyswitchPalmMuteActive { false };
+    std::atomic<bool> keyswitchFullMuteActive { false };
+    std::atomic<bool> keyswitchStrumActive    { false };
     float         strumKeyswitchVelocity  = 0.8f;
     int           strumSampleCounter      = 0;
     bool          nextStrumIsDown         = true;
-    bool          lastStrumWasDown        = true;
+    std::atomic<bool> lastStrumWasDown        { true };
+    bool          prevIsElectric          = false;
     KarplusStrong::MuteMode prevMuteMode  = KarplusStrong::MuteMode::Open;
 
     // Track physically held notes in guitar range
@@ -224,6 +226,8 @@ private:
     int   golpeTotalSamples = 0;
     int   golpeSampleIdx    = 0;
     float golpeVelocity     = 0.0f;
+    float golpeBodyAmp      = 0.0f;
+    float golpeDirectAmp    = 0.0f;
 
     void triggerStrum(bool isDownstroke, float velOverride = -1.0f) noexcept;
     void schedulePluck(int stringIdx, int midiNote, float velocity, float brightness, int delaySamples) noexcept;

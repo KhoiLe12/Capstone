@@ -12,6 +12,29 @@ HybridSynthProcessor::HybridSynthProcessor()
               .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "HybridSynthState", createParameterLayout())
 {
+    pDecay           = apvts.getRawParameterValue("decay");
+    pBrightness      = apvts.getRawParameterValue("brightness");
+    pPickPos         = apvts.getRawParameterValue("pickPosition");
+    pStiffness       = apvts.getRawParameterValue("stiffness");
+    pBodySize        = apvts.getRawParameterValue("bodySize");
+    pBodyMix         = apvts.getRawParameterValue("bodyMix");
+    pBodyModel       = apvts.getRawParameterValue("bodyModel");
+    pEngineModel     = apvts.getRawParameterValue("engineModel");
+    pStringMaterial  = apvts.getRawParameterValue("stringMaterial");
+    pStereoWidth     = apvts.getRawParameterValue("stereoWidth");
+    pMasterGain      = apvts.getRawParameterValue("masterGain");
+    pPalmMute        = apvts.getRawParameterValue("palmMute");
+    pFullMute        = apvts.getRawParameterValue("fullMute");
+    pStrumPattern    = apvts.getRawParameterValue("strumPattern");
+    pLegato          = apvts.getRawParameterValue("legato");
+    pStrictFretboard = apvts.getRawParameterValue("strictFretboard");
+    pInstrumentMode  = apvts.getRawParameterValue("instrumentMode");
+    pGuitarModel     = apvts.getRawParameterValue("guitarModel");
+    pPickupPosition  = apvts.getRawParameterValue("pickupPosition");
+    pPickupType      = apvts.getRawParameterValue("pickupType");
+    pToneKnob        = apvts.getRawParameterValue("toneKnob");
+    pCabAirFilter    = apvts.getRawParameterValue("cabAirFilter");
+
     setCurrentProgram(0);
 }
 
@@ -295,31 +318,31 @@ void HybridSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // Sync parameters from APVTS to SynthEngine (thread-safe atomic load)
-    synth.paramDecay      = apvts.getRawParameterValue("decay")->load();
-    synth.paramBrightness = apvts.getRawParameterValue("brightness")->load();
-    synth.paramPickPos    = apvts.getRawParameterValue("pickPosition")->load();
-    synth.paramStiffness  = apvts.getRawParameterValue("stiffness")->load();
-    synth.paramBodySize   = apvts.getRawParameterValue("bodySize")->load();
-    synth.paramBodyMix    = apvts.getRawParameterValue("bodyMix")->load();
-    synth.paramBodyType   = apvts.getRawParameterValue("bodyModel")->load();
-    synth.paramEngineType = apvts.getRawParameterValue("engineModel")->load();
-    synth.paramStringMaterial = apvts.getRawParameterValue("stringMaterial")->load();
-    synth.paramStereoWidth = apvts.getRawParameterValue("stereoWidth")->load();
-    synth.paramMasterGain = apvts.getRawParameterValue("masterGain")->load();
-    synth.paramPalmMute   = apvts.getRawParameterValue("palmMute")->load() > 0.5f;
-    synth.paramFullMute   = apvts.getRawParameterValue("fullMute")->load() > 0.5f;
-    synth.paramStrum      = apvts.getRawParameterValue("strumPattern")->load() > 0.5f;
-    synth.paramLegatoEnabled = apvts.getRawParameterValue("legato")->load() > 0.5f;
-    synth.paramStrictFretboard = apvts.getRawParameterValue("strictFretboard")->load() > 0.5f;
+    // Sync parameters from cached APVTS atomic pointers to SynthEngine
+    synth.paramDecay          = pDecay->load(std::memory_order_relaxed);
+    synth.paramBrightness     = pBrightness->load(std::memory_order_relaxed);
+    synth.paramPickPos        = pPickPos->load(std::memory_order_relaxed);
+    synth.paramStiffness      = pStiffness->load(std::memory_order_relaxed);
+    synth.paramBodySize       = pBodySize->load(std::memory_order_relaxed);
+    synth.paramBodyMix        = pBodyMix->load(std::memory_order_relaxed);
+    synth.paramBodyType       = pBodyModel->load(std::memory_order_relaxed);
+    synth.paramEngineType     = pEngineModel->load(std::memory_order_relaxed);
+    synth.paramStringMaterial = pStringMaterial->load(std::memory_order_relaxed);
+    synth.paramStereoWidth    = pStereoWidth->load(std::memory_order_relaxed);
+    synth.paramMasterGain     = pMasterGain->load(std::memory_order_relaxed);
+    synth.paramPalmMute       = pPalmMute->load(std::memory_order_relaxed) > 0.5f;
+    synth.paramFullMute       = pFullMute->load(std::memory_order_relaxed) > 0.5f;
+    synth.paramStrum          = pStrumPattern->load(std::memory_order_relaxed) > 0.5f;
+    synth.paramLegatoEnabled  = pLegato->load(std::memory_order_relaxed) > 0.5f;
+    synth.paramStrictFretboard= pStrictFretboard->load(std::memory_order_relaxed) > 0.5f;
 
     // Electric guitar parameters
-    synth.paramInstrumentMode = apvts.getRawParameterValue("instrumentMode")->load();
-    synth.paramGuitarModel    = apvts.getRawParameterValue("guitarModel")->load();
-    synth.paramPickupPosition = apvts.getRawParameterValue("pickupPosition")->load();
-    synth.paramPickupType     = apvts.getRawParameterValue("pickupType")->load();
-    synth.paramToneKnob       = apvts.getRawParameterValue("toneKnob")->load();
-    synth.paramCabAirFilter   = apvts.getRawParameterValue("cabAirFilter")->load() > 0.5f;
+    synth.paramInstrumentMode = pInstrumentMode->load(std::memory_order_relaxed);
+    synth.paramGuitarModel    = pGuitarModel->load(std::memory_order_relaxed);
+    synth.paramPickupPosition = pPickupPosition->load(std::memory_order_relaxed);
+    synth.paramPickupType     = pPickupType->load(std::memory_order_relaxed);
+    synth.paramToneKnob       = pToneKnob->load(std::memory_order_relaxed);
+    synth.paramCabAirFilter   = pCabAirFilter->load(std::memory_order_relaxed) > 0.5f;
 
     if (buffer.getNumChannels() == 0) return;
 
@@ -444,28 +467,6 @@ void HybridSynthProcessor::setCurrentProgram(int index)
     setParam("pickupType",     static_cast<float>(p.pickupType));
     setParam("toneKnob",       p.toneKnob);
     setParam("cabAirFilter",   p.cabAirFilter ? 1.0f : 0.0f);
-
-    // Immediate direct sync to SynthEngine so DSP updates without waiting
-    synth.paramDecay          = p.decay;
-    synth.paramBrightness     = p.brightness;
-    synth.paramPickPos        = p.pickPos;
-    synth.paramStiffness      = p.stiffness;
-    synth.paramBodySize       = p.bodySize;
-    synth.paramBodyMix        = p.bodyMix;
-    synth.paramEngineType     = static_cast<float>(p.engineModel);
-    synth.paramStringMaterial = static_cast<float>(p.stringMaterial);
-    synth.paramBodyType       = static_cast<float>(p.bodyModel);
-    synth.paramStereoWidth    = p.stereoWidth;
-    synth.paramMasterGain     = p.masterGain;
-    synth.paramPalmMute       = p.palmMute;
-    synth.paramFullMute       = p.fullMute;
-    synth.paramStrum          = p.strumPattern;
-    synth.paramInstrumentMode = static_cast<float>(p.instrumentMode);
-    synth.paramGuitarModel    = static_cast<float>(p.guitarModel);
-    synth.paramPickupPosition = static_cast<float>(p.pickupPosition);
-    synth.paramPickupType     = static_cast<float>(p.pickupType);
-    synth.paramToneKnob       = p.toneKnob;
-    synth.paramCabAirFilter   = p.cabAirFilter;
 
     // Tell the host the program changed, so its preset display (and the AU's present-preset
     // property) follows selections made in the plugin's own preset dropdown.

@@ -634,7 +634,61 @@ static bool runChordVsLegatoCheck(float sampleRate)
               << (20.0f * std::log10(diffPeak + 1e-9f)) << " dBFS)  "
               << (simOk ? "PASS" : "FAIL") << "\n";
 
-    return ok && chordTransitionOk && golpeOk && simOk;
+    // 1) FDTD Choke termination check: choked voice must terminate cleanly and not leak forever
+    SynthEngine chokeEng;
+    chokeEng.init(sampleRate, 512);
+    chokeEng.paramEngineType = 1.0f;
+    std::vector<float> chL(512, 0.0f), chR(512, 0.0f);
+    chokeEng.noteOn(40, 0.85f);
+    chokeEng.process(chL.data(), chR.data(), 512, nullptr, 0);
+    chokeEng.noteOn(SynthEngine::KEYSWITCH_FULL_MUTE, 0.80f);
+    for (int b = 0; b < 10; ++b)
+        chokeEng.process(chL.data(), chR.data(), 512, nullptr, 0);
+    const bool chokeTermOk = (chokeEng.getNumActiveVoices() == 0);
+    std::cout << "  FDTD Choke termination (<100 ms)   : " << chokeEng.getNumActiveVoices()
+              << " voices (expect 0)  " << (chokeTermOk ? "PASS" : "FAIL") << "\n";
+
+    // 2) Electric + Digital Waveguide AC signal check (4096 samples = ~85 ms, ~9.4 cycles at 110 Hz)
+    SynthEngine elWgEng;
+    elWgEng.init(sampleRate, 512);
+    elWgEng.paramInstrumentMode = 1.0f;
+    elWgEng.paramEngineType     = 0.0f; // Waveguide
+    elWgEng.paramGuitarModel    = 0.0f;
+    elWgEng.paramPickupPosition = 0.0f;
+    elWgEng.paramMasterGain     = 0.80f;
+    std::vector<float> ewL(4096, 0.0f), ewR(4096, 0.0f);
+    elWgEng.noteOn(45, 0.85f);
+    elWgEng.process(ewL.data(), ewR.data(), 4096, nullptr, 0);
+    double ewSumSq = 0.0;
+    int ewZeroCross = 0;
+    for (size_t i = 0; i < 4096; ++i)
+    {
+        ewSumSq += static_cast<double>(ewL[i]) * ewL[i];
+        if (i > 0 && ((ewL[i - 1] < 0.0f && ewL[i] >= 0.0f) || (ewL[i - 1] >= 0.0f && ewL[i] < 0.0f)))
+            ++ewZeroCross;
+    }
+    const float ewRms = static_cast<float>(std::sqrt(ewSumSq / 4096.0));
+    const bool elWgOk = (ewRms > 0.01f && ewZeroCross >= 16);
+    std::cout << "  Electric + Waveguide AC output     : RMS " << ewRms
+              << ", zero-crossings " << ewZeroCross << "  " << (elWgOk ? "PASS" : "FAIL") << "\n";
+
+    // 3) Waveguide 75 ms legato chord window check (50 ms spread must stay a dyad, not halve to 37.5 ms)
+    SynthEngine wgWinEng;
+    wgWinEng.init(sampleRate, 512);
+    wgWinEng.paramEngineType = 0.0f;
+    wgWinEng.paramLegatoEnabled = true;
+    std::vector<float> wwL(512, 0.0f), wwR(512, 0.0f);
+    wgWinEng.noteOn(52, 0.85f);
+    const int n50ms = static_cast<int>(0.050f * sampleRate);
+    for (int done = 0; done < n50ms; done += 512)
+        wgWinEng.process(wwL.data(), wwR.data(), std::min(512, n50ms - done), nullptr, 0);
+    wgWinEng.noteOn(54, 0.85f);
+    wgWinEng.process(wwL.data(), wwR.data(), 512, nullptr, 0);
+    const bool wgWinOk = (wgWinEng.getNumActiveVoices() == 2);
+    std::cout << "  Waveguide 75 ms chord window (50ms): " << wgWinEng.getNumActiveVoices()
+              << " voices (expect 2)  " << (wgWinOk ? "PASS" : "FAIL") << "\n";
+
+    return ok && chordTransitionOk && golpeOk && simOk && chokeTermOk && elWgOk && wgWinOk;
 }
 
 // ---------------------------------------------------------------------------

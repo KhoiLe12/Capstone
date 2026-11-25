@@ -45,7 +45,7 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
     // 1. Intercept Palm Mute Keyswitch C1 (MIDI 24 / FL: C2)
     if (midiNote == KEYSWITCH_PALM_MUTE)
     {
-        keyswitchPalmMuteActive = true;
+        keyswitchPalmMuteActive.store(true, std::memory_order_relaxed);
         prevMuteMode = getEffectiveMuteMode();
         // Physically clamp all currently ringing strings into palm mute if not already full-muted
         if (!isFullMuteActive())
@@ -60,7 +60,7 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
     // 2. Intercept Full Mute Keyswitch D1 (MIDI 26 / FL: D2)
     if (midiNote == KEYSWITCH_FULL_MUTE)
     {
-        keyswitchFullMuteActive = true;
+        keyswitchFullMuteActive.store(true, std::memory_order_relaxed);
         prevMuteMode = getEffectiveMuteMode();
 
         // If any strings are vibrating, physically choke them with authentic hand slap
@@ -85,7 +85,7 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
     // 3. Intercept 8th-Note Strum Keyswitch E1 (MIDI 28 / FL: E2)
     if (midiNote == KEYSWITCH_STRUM_8TH)
     {
-        keyswitchStrumActive = true;
+        keyswitchStrumActive.store(true, std::memory_order_relaxed);
         strumKeyswitchVelocity = velocity;
         const int samplesPer8th = std::max(100, static_cast<int>((30.0f / currentBpm) * sampleRate));
         strumSampleCounter = samplesPer8th;
@@ -385,7 +385,7 @@ void SynthEngine::noteOff(int midiNote)
     // Intercept Palm Mute Keyswitch C1 release
     if (midiNote == KEYSWITCH_PALM_MUTE)
     {
-        keyswitchPalmMuteActive = false;
+        keyswitchPalmMuteActive.store(false, std::memory_order_relaxed);
         syncVoiceMuteModes();
         return;
     }
@@ -393,7 +393,7 @@ void SynthEngine::noteOff(int midiNote)
     // Intercept Full Mute Keyswitch D1 release
     if (midiNote == KEYSWITCH_FULL_MUTE)
     {
-        keyswitchFullMuteActive = false;
+        keyswitchFullMuteActive.store(false, std::memory_order_relaxed);
         syncVoiceMuteModes();
         return;
     }
@@ -401,7 +401,7 @@ void SynthEngine::noteOff(int midiNote)
     // Intercept 8th-Note Strum Keyswitch E1 release
     if (midiNote == KEYSWITCH_STRUM_8TH)
     {
-        keyswitchStrumActive = false;
+        keyswitchStrumActive.store(false, std::memory_order_relaxed);
         return;
     }
 
@@ -452,6 +452,8 @@ void SynthEngine::triggerGolpe(float velocity) noexcept
     golpeSamplesLeft  = numSamples;
     golpeSampleIdx    = 0;
     golpeVelocity     = clampedVel;
+    golpeBodyAmp      = 4.8f * std::pow(clampedVel, 1.20f);
+    golpeDirectAmp    = 0.65f * std::pow(clampedVel, 1.10f);
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +462,7 @@ void SynthEngine::triggerGolpe(float velocity) noexcept
 
 void SynthEngine::triggerStrum(bool isDownstroke, float velOverride) noexcept
 {
-    lastStrumWasDown = isDownstroke;
+    lastStrumWasDown.store(isDownstroke, std::memory_order_relaxed);
 
     // 1. Collect currently held notes from the keyboard (at most 6 notes on guitar)
     std::pair<int, float> chord[6];
@@ -585,9 +587,9 @@ void SynthEngine::allNotesOff() noexcept
     sympathetic.reset();
     passiveElectronics.reset();
     cabFilter.reset();
-    keyswitchPalmMuteActive = false;
-    keyswitchFullMuteActive = false;
-    keyswitchStrumActive    = false;
+    keyswitchPalmMuteActive.store(false, std::memory_order_relaxed);
+    keyswitchFullMuteActive.store(false, std::memory_order_relaxed);
+    keyswitchStrumActive.store(false, std::memory_order_relaxed);
     strumSampleCounter      = 0;
     nextStrumIsDown         = true;
     golpeSamplesLeft        = 0;
@@ -607,6 +609,16 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
 
     // Update body parameters (size, damping, coupling, bodyType)
     const bool isElectric = (paramInstrumentMode >= 0.5f);
+    if (isElectric != prevIsElectric)
+    {
+        std::fill_n(reflectionBuf, REFLECTION_BUF_SIZE, 0.f);
+        reflectionIdx = 0;
+        passiveElectronics.reset();
+        cabFilter.reset();
+        for (auto& v : voices)
+            v.setInstrumentMode(isElectric ? 1 : 0);
+        prevIsElectric = isElectric;
+    }
     const auto guitarModelEnum = (paramGuitarModel >= 0.5f) ? ElectricGuitar::GuitarModel::LesPaul1959 : ElectricGuitar::GuitarModel::Stratocaster1962;
     if (isElectric)
     {
@@ -643,6 +655,17 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
     const int d2 = std::clamp(static_cast<int>(sampleRate * 0.0096f), 8, REFLECTION_BUF_SIZE - 1);
     const float widthParam = std::clamp(paramStereoWidth, 0.0f, 1.0f);
 
+    // Precompute per-string pickup geometry once per block in Electric mode
+    const auto pickupPosEnum = static_cast<ElectricGuitar::PickupPosition>(
+        std::clamp(static_cast<int>(std::round(paramPickupPosition)), 0, 5));
+    const int pickupTypeOverride = static_cast<int>(std::round(paramPickupType));
+    ElectricGuitar::PickupSampleConfig pickupCfgs[NUM_VOICES];
+    if (isElectric)
+    {
+        for (int s = 0; s < NUM_VOICES; ++s)
+            pickupCfgs[s] = ElectricGuitar::getPickupConfig(guitarModelEnum, pickupPosEnum, s, pickupTypeOverride);
+    }
+
     // 1. Advance all active string voices and sum bridge force into output buffers.
     for (int i = 0; i < numSamples; ++i)
     {
@@ -657,7 +680,7 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
         }
 
         // Advance 8th-note strum interval timer
-        if (keyswitchStrumActive || paramStrum)
+        if (keyswitchStrumActive.load(std::memory_order_relaxed) || paramStrum)
         {
             --strumSampleCounter;
             if (strumSampleCounter <= 0)
@@ -684,36 +707,31 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
             }
         }
 
-        // Update open-string fretting damping:
-        // If an active voice is fretted on physical string s, its open length is damped
-        bool stringActive[6] = { false, false, false, false, false, false };
-        for (int v = 0; v < NUM_VOICES; ++v)
-        {
-            if (voices[v].isActive())
-            {
-                const int sIdx = voices[v].getPhysicalStringIndex();
-                if (sIdx >= 0 && sIdx < 6)
-                    stringActive[sIdx] = true;
-            }
-        }
-        for (int s = 0; s < 6; ++s)
-            sympathetic.setStringFretted(s, stringActive[s]);
-
-        sympathetic.setMuted(isPalmMuteActive(), isFullMuteActive());
-
         float totalForceV = 0.f;
         int activeVoices = 0;
-        float totalClick = 0.f;
         float totalPickupVoltage = 0.0f;
 
-        const auto pickupPosEnum = static_cast<ElectricGuitar::PickupPosition>(std::clamp(static_cast<int>(std::round(paramPickupPosition)), 0, 5));
-        const int pickupTypeOverride = static_cast<int>(std::round(paramPickupType));
+        if (!isElectric)
+        {
+            // Update open-string fretting damping only for acoustic sympathetic coupling
+            bool stringActive[6] = { false, false, false, false, false, false };
+            for (int v = 0; v < NUM_VOICES; ++v)
+            {
+                if (voices[v].isActive())
+                {
+                    const int sIdx = voices[v].getPhysicalStringIndex();
+                    if (sIdx >= 0 && sIdx < 6)
+                        stringActive[sIdx] = true;
+                }
+            }
+            for (int s = 0; s < 6; ++s)
+                sympathetic.setStringFretted(s, stringActive[s]);
+
+            sympathetic.setMuted(isPalmMuteActive(), isFullMuteActive());
+        }
 
         for (int v = 0; v < NUM_VOICES; ++v)
         {
-            if (!isElectric)
-                totalClick += voices[v].tickPickClick();
-
             if (!voices[v].isActive())
                 continue;
 
@@ -725,7 +743,7 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
             {
                 int sIdx = voices[v].getPhysicalStringIndex();
                 if (sIdx < 0 || sIdx >= 6) sIdx = v;
-                const auto pCfg = ElectricGuitar::getPickupConfig(guitarModelEnum, pickupPosEnum, sIdx, pickupTypeOverride);
+                const auto& pCfg = pickupCfgs[sIdx];
                 float v_ind = pCfg.mixGain * voices[v].getPickupVelocity(pCfg.distBridge1, pCfg.isHumbucker1, pCfg.poleSpacing1);
                 if (pCfg.numActivePickups > 1)
                     v_ind += pCfg.mixGain * voices[v].getPickupVelocity(pCfg.distBridge2, pCfg.isHumbucker2, pCfg.poleSpacing2);
@@ -741,43 +759,6 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
             }
         }
 
-        // Flamenco Golpe / Soundboard Thumb Knock Physical Mechanics:
-        // Transmits mechanical compressive force pulse into top plate, air cavity, and bridge
-        float golpeBodyForce = 0.0f;
-        float golpeDirectForce = 0.0f;
-        if (golpeSamplesLeft > 0)
-        {
-            const float tau = static_cast<float>(golpeSampleIdx) / static_cast<float>(golpeTotalSamples);
-            // Hertzian compressive contact pulse: sin^2 gives zero onset/offset discontinuity
-            // Normalized so peak amplitude = 1.0 (occurring at tau ~ 0.39)
-            const float sinTau = std::sin(3.14159265f * tau);
-            const float contactPulse = 2.67f * sinTau * sinTau * std::exp(-2.2f * tau);
-
-            // 1. Mechanical normal force driving the soundboard wood and internal air cavity:
-            // High-energy acoustic punch driving A0 (~100 Hz) air pump and T(1,1) (~200 Hz) wood dipole
-            golpeBodyForce = 4.8f * std::pow(golpeVelocity, 1.20f) * contactPulse;
-
-            // 2. Localized near-field acoustic flexural and wood-tap transient:
-            // Combines deep localized top-plate flexure (~180 Hz) and crisp spruce contact crackle (~1400 Hz)
-            const float flexPhase = 2.0f * 3.14159265f * 180.0f * (static_cast<float>(golpeSampleIdx) / sampleRate);
-            const float tapPhase  = 2.0f * 3.14159265f * 1400.0f * (static_cast<float>(golpeSampleIdx) / sampleRate);
-            const float flexWave  = std::sin(flexPhase) * (1.0f - tau);
-            const float tapClick  = 0.45f * std::sin(tapPhase) * std::exp(-8.0f * tau);
-            golpeDirectForce = 0.65f * std::pow(golpeVelocity, 1.10f) * (flexWave + tapClick) * sinTau;
-
-            ++golpeSampleIdx;
-            --golpeSamplesLeft;
-        }
-
-        if (i < CLICK_BUF_SIZE)
-            clickBuf[i] = totalClick + golpeDirectForce;
-
-        // Cross-bridge sympathetic resonance:
-        // Driving vertical bridge force (including top-plate golpe shockwave) excites unplayed open strings
-        const float sympatheticForce = sympathetic.process(totalForceV + golpeBodyForce);
-        const float coupledSymp = sympatheticForce * (0.12f * paramBodyMix);
-        const float stringBridgeForce = totalForceV + coupledSymp;
-
         // Polyphonic bridge impedance headroom:
         // Acoustic soundboard mechanical impedance distributes multi-string chord displacement at the saddle.
         // Real-time smooth slewing (tau ~ 15ms) eliminates zipper/stepping discontinuities when notes are strummed.
@@ -785,12 +766,6 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
             ? (1.0f / std::sqrt(1.0f + 0.70f * static_cast<float>(activeVoices - 1)))
             : 1.0f;
         smoothedPolyScale = targetPolyScale + polyScaleFilterCoeff * (smoothedPolyScale - targetPolyScale);
-
-        // Soundboard mechanical drive:
-        // Vibrating strings deliver force through the bridge saddle (scaled by polyphonic impedance).
-        // Soundboard golpe delivers mechanical impact force directly into the spruce plate, unaffected
-        // by the number of active vibrating strings on the fretboard!
-        const float monoBridge = stringBridgeForce * smoothedPolyScale + golpeBodyForce;
 
         if (isElectric)
         {
@@ -825,6 +800,47 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
         }
         else
         {
+            // Flamenco Golpe / Soundboard Thumb Knock Physical Mechanics:
+            // Transmits mechanical compressive force pulse into top plate, air cavity, and bridge
+            float golpeBodyForce = 0.0f;
+            float golpeDirectForce = 0.0f;
+            if (golpeSamplesLeft > 0)
+            {
+                const float tau = static_cast<float>(golpeSampleIdx) / static_cast<float>(golpeTotalSamples);
+                // Hertzian compressive contact pulse: sin^2 gives zero onset/offset discontinuity
+                // Normalized so peak amplitude = 1.0 (occurring at tau ~ 0.39)
+                const float sinTau = std::sin(3.14159265f * tau);
+                const float contactPulse = 2.67f * sinTau * sinTau * std::exp(-2.2f * tau);
+
+                // 1. Mechanical normal force driving the soundboard wood and internal air cavity:
+                golpeBodyForce = golpeBodyAmp * contactPulse;
+
+                // 2. Localized near-field acoustic flexural and wood-tap transient:
+                const float tGolpe = static_cast<float>(golpeSampleIdx) / sampleRate;
+                const float flexWave  = std::sin(2.0f * 3.14159265f * 180.0f * tGolpe) * (1.0f - tau);
+                const float tapClick  = 0.45f * std::sin(2.0f * 3.14159265f * 1400.0f * tGolpe) * std::exp(-8.0f * tau);
+                golpeDirectForce = golpeDirectAmp * (flexWave + tapClick) * sinTau;
+
+                ++golpeSampleIdx;
+                --golpeSamplesLeft;
+            }
+
+            if (i < CLICK_BUF_SIZE)
+                clickBuf[i] = golpeDirectForce;
+
+            // Cross-bridge sympathetic resonance:
+            // Driving vertical bridge force (including top-plate golpe shockwave) excites unplayed open strings
+            float coupledSymp = 0.0f;
+            if (paramBodyMix > 0.001f)
+                coupledSymp = sympathetic.process(totalForceV + golpeBodyForce) * (0.12f * paramBodyMix);
+            const float stringBridgeForce = totalForceV + coupledSymp;
+
+            // Soundboard mechanical drive:
+            // Vibrating strings deliver force through the bridge saddle (scaled by polyphonic impedance).
+            // Soundboard golpe delivers mechanical impact force directly into the spruce plate, unaffected
+            // by the number of active vibrating strings on the fretboard!
+            const float monoBridge = stringBridgeForce * smoothedPolyScale + golpeBodyForce;
+
             // Symmetrical Acoustic Soundboard Reflection Network:
             // Symmetrical reflection taps guarantee bit-exact attack centering (0.00 dB L/R difference across all registers).
             reflectionBuf[reflectionIdx] = monoBridge;
@@ -936,16 +952,17 @@ void SynthEngine::reset()
     std::fill_n(reflectionBuf, REFLECTION_BUF_SIZE, 0.f);
     std::fill_n(clickBuf, CLICK_BUF_SIZE, 0.f);
     reflectionIdx = 0;
-    keyswitchPalmMuteActive = false;
-    keyswitchFullMuteActive = false;
-    keyswitchStrumActive    = false;
+    keyswitchPalmMuteActive.store(false, std::memory_order_relaxed);
+    keyswitchFullMuteActive.store(false, std::memory_order_relaxed);
+    keyswitchStrumActive.store(false, std::memory_order_relaxed);
     strumSampleCounter      = 0;
     nextStrumIsDown         = true;
     golpeSamplesLeft        = 0;
     golpeTotalSamples       = 0;
     golpeSampleIdx          = 0;
     golpeVelocity           = 0.0f;
-    lastStrumWasDown        = true;
+    lastStrumWasDown.store(true, std::memory_order_relaxed);
+    prevIsElectric          = (paramInstrumentMode >= 0.5f);
     std::fill(std::begin(heldNotes), std::end(heldNotes), 0.f);
     for (int p = 0; p < MAX_PENDING_PLUCKS; ++p)
         pendingPlucks[p].active = false;

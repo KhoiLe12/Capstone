@@ -6,6 +6,14 @@
 #include <array>
 #include <iostream>
 
+#if defined(_MSC_VER)
+    #define FDTD_RESTRICT __restrict
+#elif defined(__clang__) || defined(__GNUC__)
+    #define FDTD_RESTRICT __restrict__
+#else
+    #define FDTD_RESTRICT
+#endif
+
 /**
  * FdtdString — Real-Time Non-Iterative Guitar String Physical Model
  * Based on:
@@ -131,9 +139,13 @@ public:
         std::fill(u_next_H.begin(), u_next_H.end(), 0.0f);
         std::fill(u_curr_H.begin(), u_curr_H.end(), 0.0f);
         std::fill(u_prev_H.begin(), u_prev_H.end(), 0.0f);
+        std::fill(Du.begin(),       Du.end(),       0.0f);
+        std::fill(Du_prev.begin(),  Du_prev.end(),  0.0f);
         std::fill(Du_H.begin(),     Du_H.end(),     0.0f);
         std::fill(D2u_H.begin(),    D2u_H.end(),    0.0f);
         std::fill(Du_prev_H.begin(),Du_prev_H.end(),0.0f);
+        computeLaplacian(u_prev.data(), Du_prev.data());
+        computeLaplacian(u_prev_H.data(), Du_prev_H.data());
         dcBlockerStateH    = 0.0f;
         prevRawForceH      = 0.0f;
         saddleFilterStateH  = 0.0f;
@@ -257,6 +269,10 @@ public:
         // Reset scrape to avoid plectrum click
         scrapeSamplesLeft = 0;
         lastScrapeForce = 0.0f;
+
+        // Recompute previous-step Laplacians once for O(1) Du_prev swap on subsequent ticks
+        computeLaplacian(u_prev.data(), Du_prev.data());
+        computeLaplacian(u_prev_H.data(), Du_prev_H.data());
     }
 
     void setFingerEngaged(bool engaged) noexcept { fingerEngaged = engaged; }
@@ -283,6 +299,10 @@ public:
         else
             p.sigma1 = initialSigma1;
         lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
+        c3 = 2.0f * p.sigma1 * k;
+        c1_plus_c3 = c1 + c3;
+        c1H_plus_c3 = c1_H + c3;
+        updateKcFactor();
         updateDampingProfile();
     }
 
@@ -487,6 +507,8 @@ public:
         std::fill(Du_H.begin(),     Du_H.end(),     0.0f);
         std::fill(D2u_H.begin(),    D2u_H.end(),    0.0f);
         std::fill(Du_prev_H.begin(),Du_prev_H.end(),0.0f);
+        computeLaplacian(u_prev.data(), Du_prev.data());
+        computeLaplacian(u_prev_H.data(), Du_prev_H.data());
         dcBlockerStateH    = u_curr_H[static_cast<size_t>(N_pts - 1)] / h;
         prevRawForceH      = 0.0f;
         saddleFilterStateH  = 0.0f;
@@ -532,7 +554,7 @@ public:
     }
 
     /** Advance simulation by 1 audio sample and return bridge displacement/force. */
-    float tick() noexcept
+    float tick(bool acousticBridgeOutput = true) noexcept
     {
         float contactForceH = 0.0f;
 
@@ -546,62 +568,64 @@ public:
             pluckSampleCount++;
         }
 
-        // 2. Compute spatial differences on u_curr: D*u and D^2*u
-        // D is tridiagonal: Du[i] = (u[i+1] - 2*u[i] + u[i-1]) / h^2
-        const float invHSq = 1.0f / (h * h);
+        const int nPts = N_pts;
+        const float ih2 = invHSq;
+        const float* FDTD_RESTRICT uc = u_curr.data();
+        const float* FDTD_RESTRICT up = u_prev.data();
+        float* FDTD_RESTRICT un = u_next.data();
+        float* FDTD_RESTRICT du = Du.data();
+        const float* FDTD_RESTRICT dup = Du_prev.data();
+        const float* FDTD_RESTRICT c0p = c0_vec.data();
+        const float* FDTD_RESTRICT c4p = c4_vec.data();
+        float* FDTD_RESTRICT bStr = b_string.data();
 
-        if (N_pts >= 2)
-        {
-            // Boundary point 0
-            Du[0] = (-2.0f * u_curr[0] + u_curr[1]) * invHSq;
-            for (int i = 1; i < N_pts - 1; ++i)
-                Du[static_cast<size_t>(i)] = (u_curr[static_cast<size_t>(i - 1)] - 2.0f * u_curr[static_cast<size_t>(i)] + u_curr[static_cast<size_t>(i + 1)]) * invHSq;
-            Du[static_cast<size_t>(N_pts - 1)] = (u_curr[static_cast<size_t>(N_pts - 2)] - 2.0f * u_curr[static_cast<size_t>(N_pts - 1)]) * invHSq;
-
-            // Biharmonic D^2*u
-            D2u[0] = (-2.0f * Du[0] + Du[1]) * invHSq;
-            for (int i = 1; i < N_pts - 1; ++i)
-                D2u[static_cast<size_t>(i)] = (Du[static_cast<size_t>(i - 1)] - 2.0f * Du[static_cast<size_t>(i)] + Du[static_cast<size_t>(i + 1)]) * invHSq;
-            D2u[static_cast<size_t>(N_pts - 1)] = (Du[static_cast<size_t>(N_pts - 2)] - 2.0f * Du[static_cast<size_t>(N_pts - 1)]) * invHSq;
-
-            // Damping term D*u_prev
-            Du_prev[0] = (-2.0f * u_prev[0] + u_prev[1]) * invHSq;
-            for (int i = 1; i < N_pts - 1; ++i)
-                Du_prev[static_cast<size_t>(i)] = (u_prev[static_cast<size_t>(i - 1)] - 2.0f * u_prev[static_cast<size_t>(i)] + u_prev[static_cast<size_t>(i + 1)]) * invHSq;
-            Du_prev[static_cast<size_t>(N_pts - 1)] = (u_prev[static_cast<size_t>(N_pts - 2)] - 2.0f * u_prev[static_cast<size_t>(N_pts - 1)]) * invHSq;
-        }
-
-
-        // 3. Kirchhoff-Carrier dynamic tension vector k^n (Eq. 52):
-        // k^n = (k / 2) * sqrt(E*h / (rho*L*(1 + sigma0*k))) * [Du^T, 0]^T
-        const float kcFactor = (k * 0.5f) * std::sqrt((p.E * h) / (p.rho * p.L * (1.0f + p.sigma0 * k)));
-        float knDotZprev = 0.0f;
-        for (int i = 0; i < N_pts; ++i)
-        {
-            kn[static_cast<size_t>(i)] = kcFactor * Du[static_cast<size_t>(i)];
-            knDotZprev += kn[static_cast<size_t>(i)] * u_prev[static_cast<size_t>(i)];
-        }
-
-        // 4. Compute Non-linear Potentials and Gradients (SAV, Eq. 54-55)
-        // Pre-compute unconstrained linear update: v_lin = Bu^n + Cu^{n-1} - u^{n-1}
-        const float c1 = (p.T0 * k * k) / rhoA;
-        const float c2 = (EI * k * k) / rhoA;
-        const float c3 = 2.0f * p.sigma1 * k;
-
+        // 2 & 3 (Pass 1): Compute Du from u_curr, track minU, accumulate dot products for KC & elongation
         float minU = 1e6f;
-        for (int i = 0; i < N_pts; ++i)
+        float duDotUprev = 0.0f;
+        float duDotDu = 0.0f;
+        float uDotDu = 0.0f;
+
+        if (nPts >= 2)
         {
-            const float u_val = u_curr[static_cast<size_t>(i)];
-            if (u_val < minU) minU = u_val;
+            const float d0 = (-2.0f * uc[0] + uc[1]) * ih2;
+            du[0] = d0;
+            if (uc[0] < minU) minU = uc[0];
+            duDotUprev += d0 * up[0];
+            duDotDu    += d0 * d0;
+            if (acousticBridgeOutput) uDotDu += uc[0] * d0;
 
-            const float c0_i = c0_vec[static_cast<size_t>(i)];
-            const float c4_i = c4_vec[static_cast<size_t>(i)];
+            for (int i = 1; i < nPts - 1; ++i)
+            {
+                const float u_i = uc[i];
+                const float d_i = (uc[i - 1] - 2.0f * u_i + uc[i + 1]) * ih2;
+                du[i] = d_i;
+                if (u_i < minU) minU = u_i;
+                duDotUprev += d_i * up[i];
+                duDotDu    += d_i * d_i;
+                if (acousticBridgeOutput) uDotDu += u_i * d_i;
+            }
 
-            const float Bu_i = c0_i * (2.0f * u_val + (c1 + c3) * Du[static_cast<size_t>(i)] - c2 * D2u[static_cast<size_t>(i)]);
-            const float Cu_i = c0_i * (c4_i * u_prev[static_cast<size_t>(i)] - c3 * Du_prev[static_cast<size_t>(i)]);
-            Bu_plus_Cu[static_cast<size_t>(i)] = Bu_i + Cu_i;
-            v_lin[static_cast<size_t>(i)] = Bu_i + Cu_i - u_prev[static_cast<size_t>(i)];
+            const int last = nPts - 1;
+            const float dLast = (uc[last - 1] - 2.0f * uc[last]) * ih2;
+            du[last] = dLast;
+            if (uc[last] < minU) minU = uc[last];
+            duDotUprev += dLast * up[last];
+            duDotDu    += dLast * dLast;
+            if (acousticBridgeOutput) uDotDu += uc[last] * dLast;
         }
+        else if (nPts == 1)
+        {
+            const float d0 = (-2.0f * uc[0]) * ih2;
+            du[0] = d0;
+            minU = uc[0];
+            duDotUprev = d0 * up[0];
+            duDotDu    = d0 * d0;
+            if (acousticBridgeOutput) uDotDu = uc[0] * d0;
+        }
+
+        const float kcFac = kcFactor;
+        const float knDotZprev = kcFac * duDotUprev;
+        const float kn_dot_kn  = kcFac * kcFac * duDotDu;
 
         // Fret crown height is p.m0 (-0.0012 m). Fretboard surface is p.b0 (-0.0028 m).
         // If minU > p.m0, string displacement is physically above all frets and fretboard.
@@ -609,7 +633,7 @@ public:
         bool fingerCollisionActive = false;
         if (fingerEngaged)
         {
-            const float uFinger = (1.0f - fingerAlpha) * u_curr[static_cast<size_t>(fingerIdx)] + fingerAlpha * u_curr[static_cast<size_t>(fingerIdx + 1)];
+            const float uFinger = (1.0f - fingerAlpha) * uc[fingerIdx] + fingerAlpha * uc[fingerIdx + 1];
             if ((uFinger - w_curr) > 0.0f)
                 fingerCollisionActive = true;
         }
@@ -625,44 +649,98 @@ public:
             prevXiB = 0.0f;
             prevXiF = 0.0f;
 
-            // Fast-path Rank-1 Woodbury (Kirchhoff-Carrier dynamic tension ONLY):
-            // (I + kn * kn^T)^(-1) * b = b - (kn^T * b / (1 + kn^T * kn)) * kn
-            float kn_dot_kn = 0.0f;
-            float kn_dot_b  = 0.0f;
+            // Fast-path fused Rank-1 Sherman-Morrison (Kirchhoff-Carrier dynamic tension ONLY):
+            // Inline D2u from Du[i-1..i+1], build b_string[i], accumulate Du . b_string
+            const float kcTermScale = -kcFac * knDotZprev;
+            const float c1pc3 = c1_plus_c3;
+            const float c2_loc = c2;
+            const float c3_loc = c3;
+            float duDotB = 0.0f;
 
-            for (int i = 0; i < N_pts; ++i)
+            if (nPts >= 2)
             {
-                float Ef_i = 0.0f;
-                if (pluckDurSamples > 0)
                 {
-                    const int dist = std::abs(i - pluckIdx);
-                    if (dist <= 2)
-                    {
-                        const float spatialWeight = 0.5f * (1.0f + std::cos(3.14159265f * static_cast<float>(dist) / 3.0f));
-                        Ef_i = fe * lambdaString * spatialWeight * 0.40f;
-                    }
+                    const float d2u0 = (-2.0f * du[0] + du[1]) * ih2;
+                    const float bi = c0p[0] * (2.0f * uc[0] + c1pc3 * du[0] - c2_loc * d2u0 + c4p[0] * up[0] - c3_loc * dup[0])
+                                   + kcTermScale * du[0];
+                    bStr[0] = bi;
+                    duDotB += du[0] * bi;
                 }
 
-                const float kcTerm = -kn[static_cast<size_t>(i)] * knDotZprev;
-                const float bi = Bu_plus_Cu[static_cast<size_t>(i)] + Ef_i + kcTerm;
-                b_string[static_cast<size_t>(i)] = bi;
+                for (int i = 1; i < nPts - 1; ++i)
+                {
+                    const float d_i = du[i];
+                    const float d2u_i = (du[i - 1] - 2.0f * d_i + du[i + 1]) * ih2;
+                    const float bi = c0p[i] * (2.0f * uc[i] + c1pc3 * d_i - c2_loc * d2u_i + c4p[i] * up[i] - c3_loc * dup[i])
+                                   + kcTermScale * d_i;
+                    bStr[i] = bi;
+                    duDotB += d_i * bi;
+                }
 
-                const float k_val = kn[static_cast<size_t>(i)];
-                kn_dot_kn += k_val * k_val;
-                kn_dot_b  += k_val * bi;
+                {
+                    const int last = nPts - 1;
+                    const float dLast = du[last];
+                    const float d2uLast = (du[last - 1] - 2.0f * dLast) * ih2;
+                    const float bi = c0p[last] * (2.0f * uc[last] + c1pc3 * dLast - c2_loc * d2uLast + c4p[last] * up[last] - c3_loc * dup[last])
+                                   + kcTermScale * dLast;
+                    bStr[last] = bi;
+                    duDotB += dLast * bi;
+                }
             }
-
-            const float x_kc = kn_dot_b / (1.0f + kn_dot_kn);
-
-            for (int i = 0; i < N_pts; ++i)
+            else if (nPts == 1)
             {
-                u_next[static_cast<size_t>(i)] = b_string[static_cast<size_t>(i)] - kn[static_cast<size_t>(i)] * x_kc;
+                const float d2u0 = (-2.0f * du[0]) * ih2;
+                const float bi = c0p[0] * (2.0f * uc[0] + c1pc3 * du[0] - c2_loc * d2u0 + c4p[0] * up[0] - c3_loc * dup[0])
+                               + kcTermScale * du[0];
+                bStr[0] = bi;
+                duDotB = du[0] * bi;
             }
+
+            if (pluckDurSamples > 0)
+            {
+                const int lo = std::max(0, pluckIdx - 2);
+                const int hi = std::min(nPts - 1, pluckIdx + 2);
+                for (int i = lo; i <= hi; ++i)
+                {
+                    const int dist = std::abs(i - pluckIdx);
+                    const float spatialWeight = 0.5f * (1.0f + std::cos(3.14159265f * static_cast<float>(dist) / 3.0f));
+                    const float Ef_i = fe * lambdaString * spatialWeight * 0.40f;
+                    bStr[i] += Ef_i;
+                    duDotB += du[i] * Ef_i;
+                }
+            }
+
+            const float x_kc_scaled = (kcFac * kcFac * duDotB) / (1.0f + kn_dot_kn);
+
+            for (int i = 0; i < nPts; ++i)
+                un[i] = bStr[i] - x_kc_scaled * du[i];
 
             w_next = 2.0f * w_curr - w_prev;
         }
         else
         {
+            // Full 4x4 Woodbury collision path (~2% of frames): populate D2u, kn, Bu_plus_Cu, v_lin
+            if (nPts >= 2)
+            {
+                D2u[0] = (-2.0f * du[0] + du[1]) * ih2;
+                for (int i = 1; i < nPts - 1; ++i)
+                    D2u[static_cast<size_t>(i)] = (du[i - 1] - 2.0f * du[i] + du[i + 1]) * ih2;
+                D2u[static_cast<size_t>(nPts - 1)] = (du[nPts - 2] - 2.0f * du[nPts - 1]) * ih2;
+            }
+            else if (nPts == 1)
+            {
+                D2u[0] = (-2.0f * du[0]) * ih2;
+            }
+
+            for (int i = 0; i < nPts; ++i)
+            {
+                const auto si = static_cast<size_t>(i);
+                kn[si] = kcFac * du[i];
+                const float Bu_i = c0p[i] * (2.0f * uc[i] + c1_plus_c3 * du[i] - c2 * D2u[si]);
+                const float Cu_i = c0p[i] * (c4p[i] * up[i] - c3 * dup[i]);
+                Bu_plus_Cu[si] = Bu_i + Cu_i;
+                v_lin[si] = Bu_i + Cu_i - up[i];
+            }
             // a) Fretboard: V_B
             float VB = 0.0f;
             std::fill(gradVB.begin(), gradVB.end(), 0.0f);
@@ -830,7 +908,6 @@ public:
         float gB_dot_gB = 0.0f, gB_dot_gF = 0.0f, gB_dot_gFG = 0.0f, gB_dot_kn = 0.0f;
         float gF_dot_gF = 0.0f, gF_dot_gFG = 0.0f, gF_dot_kn = 0.0f;
         float gFG_dot_gFG = 0.0f, gFG_dot_kn = 0.0f;
-        float kn_dot_kn = 0.0f;
 
         for (int i = 0; i < N_pts; ++i)
         {
@@ -850,8 +927,6 @@ public:
 
             gFG_dot_gFG += gfg * gfg;
             gFG_dot_kn  += gfg * k_val;
-
-            kn_dot_kn   += k_val * k_val;
         }
 
         // Fill 4x4 matrix M:
@@ -967,120 +1042,115 @@ public:
                 for (int j = 0; j < 3; ++j)
                 {
                     const size_t idx = static_cast<size_t>(pickContactIdx - 1 + j);
-                    const float lam = (k * k / (rhoA * h)) * c0_vec[idx];
-                    u_next[idx] += lam * pickContactWeights[j] * fV;
+                    const float lam = lamBase * c0p[idx];
+                    un[idx] += lam * pickContactWeights[j] * fV;
                 }
             }
         }
 
-        // 9. Audio output drawn at the bridge boundary x = L (penultimate interior point)
-
-        // Force on the bridge saddle is proportional to spatial slope: u[N-1] / h
-        float bridgeForce = (u_next[static_cast<size_t>(N_pts - 1)]) / h;
-
-        // 25 Hz DC Blocker removes static displacement offset from initial triangular pluck
+        // 9. Audio output drawn at the bridge boundary x = L (only needed for Acoustic bridge radiation)
         constexpr float dcR = 0.9965f;
-        const float dcOut = bridgeForce - dcBlockerState + dcR * prevRawForce;
-        dcBlockerState = bridgeForce;
-        prevRawForce = dcOut;
-        bridgeForce = dcOut;
-
-        // Smooth initial attack ramp (32 samples = 0.7 ms) to eliminate static step click
-        if (rampSamplesLeft > 0)
-        {
-            const int idx = rampTotalSamples - rampSamplesLeft;
-            const float ramp = 0.5f * (1.0f - std::cos(3.14159265358979323846f * static_cast<float>(idx) / static_cast<float>(rampTotalSamples)));
-            bridgeForce *= ramp;
-            rampSamplesLeft--;
-        }
-
-        // Tactile nail/plectrum scrape friction transient
         float scrapeForce = 0.0f;
-        if (scrapeSamplesLeft > 0)
+        if (acousticBridgeOutput)
         {
-            scrapeRng ^= scrapeRng << 13u;
-            scrapeRng ^= scrapeRng >> 17u;
-            scrapeRng ^= scrapeRng << 5u;
-            const float noise = static_cast<float>(static_cast<int32_t>(scrapeRng)) / static_cast<float>(0x7FFFFFFFu);
-            const float hfScrape = noise - 0.72f * scrapeFilterState;
-            scrapeFilterState = noise;
-            const float progress = 1.0f - static_cast<float>(scrapeSamplesLeft) / static_cast<float>(scrapeTotalSamples);
-            const float env = (progress < 0.12f) ? (progress / 0.12f) : std::exp(-4.2f * (progress - 0.12f));
+            // Force on the bridge saddle is proportional to spatial slope: u[N-1] / h
+            float bridgeForce = un[static_cast<size_t>(nPts - 1)] * invH;
 
-            // Wound bass string winding rasp vs plain nylon glassy slip:
-            float texture = hfScrape;
-            if (p.woundFactor > 0.05f)
+            // 25 Hz DC Blocker removes static displacement offset from initial triangular pluck
+            const float dcOut = bridgeForce - dcBlockerState + dcR * prevRawForce;
+            dcBlockerState = bridgeForce;
+            prevRawForce = dcOut;
+            bridgeForce = dcOut;
+
+            // Smooth initial attack ramp (32 samples = 0.7 ms) to eliminate static step click
+            if (rampSamplesLeft > 0)
             {
-                // Winding ridge corrugation texture (~2400 Hz)
-                const float ridgePhase = static_cast<float>(scrapeTotalSamples - scrapeSamplesLeft) * (2400.0f * 6.2831853f / fs);
-                const float ridgeRasp = std::sin(ridgePhase);
-                texture = (1.0f - 0.45f * p.woundFactor) * hfScrape + (0.45f * p.woundFactor) * ridgeRasp * (0.8f + 0.2f * noise);
+                const int idx = rampTotalSamples - rampSamplesLeft;
+                const float ramp = 0.5f * (1.0f - std::cos(3.14159265358979323846f * static_cast<float>(idx) / static_cast<float>(rampTotalSamples)));
+                bridgeForce *= ramp;
+                rampSamplesLeft--;
             }
 
-            scrapeForce = scrapeAmp * texture * env;
-            scrapeSamplesLeft--;
-        }
+            // Tactile nail/plectrum scrape friction transient
+            if (scrapeSamplesLeft > 0)
+            {
+                scrapeRng ^= scrapeRng << 13u;
+                scrapeRng ^= scrapeRng >> 17u;
+                scrapeRng ^= scrapeRng << 5u;
+                const float noise = static_cast<float>(static_cast<int32_t>(scrapeRng)) / static_cast<float>(0x7FFFFFFFu);
+                const float hfScrape = noise - 0.72f * scrapeFilterState;
+                scrapeFilterState = noise;
+                const float progress = 1.0f - static_cast<float>(scrapeSamplesLeft) / static_cast<float>(scrapeTotalSamples);
+                const float env = (progress < 0.12f) ? (progress / 0.12f) : std::exp(-4.2f * (progress - 0.12f));
 
-        // Bone saddle dual-pole terminating mechanical impedance lowpass filter (12 dB/octave)
-        saddleFilterState  = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
-        saddleFilterState2 = (1.0f - saddleBeta) * saddleFilterState + saddleBeta * saddleFilterState2;
+                // Wound bass string winding rasp vs plain nylon glassy slip:
+                float texture = hfScrape;
+                if (p.woundFactor > 0.05f)
+                {
+                    // Winding ridge corrugation texture (~2400 Hz)
+                    const float ridgePhase = static_cast<float>(scrapeTotalSamples - scrapeSamplesLeft) * (2400.0f * 6.2831853f / fs);
+                    const float ridgeRasp = std::sin(ridgePhase);
+                    texture = (1.0f - 0.45f * p.woundFactor) * hfScrape + (0.45f * p.woundFactor) * ridgeRasp * (0.8f + 0.2f * noise);
+                }
+
+                scrapeForce = scrapeAmp * texture * env;
+                scrapeSamplesLeft--;
+            }
+
+            // Bone saddle dual-pole terminating mechanical impedance lowpass filter (12 dB/octave)
+            saddleFilterState  = (1.0f - saddleBeta) * bridgeForce + saddleBeta * saddleFilterState;
+            saddleFilterState2 = (1.0f - saddleBeta) * saddleFilterState + saddleBeta * saddleFilterState2;
+        }
 
         // 10. Pointer / State rotation (O(1) buffer swaps, zero memory copies)
         u_prev.swap(u_curr);
         u_curr.swap(u_next);
+        Du_prev.swap(Du);
         w_prev = w_curr;
         w_curr = w_next;
 
 
         // ── H-Polarization Tick ────────────────────────────────────────────────
         // Horizontal (lateral) string polarization, parallel to the soundboard.
-        // Runs free stiff string + Kirchhoff-Carrier nonlinearity only — no fretboard
-        // or fret collision physics, because horizontal motion cannot push the string
-        // into obstacles located vertically below. This is physically correct and
-        // halves the Woodbury solver cost vs. running the full system twice.
-        //
-        // T0_H = T0_V * (1 + delta)^2, so f_H = f_V * (1 + delta), giving a beat
-        // of f_V * delta Hz (~ 0.1..1.0 Hz depending on pitch and polarizationSplit).
+        // Runs free stiff string + Kirchhoff-Carrier nonlinearity only.
+        float* FDTD_RESTRICT duh = Du_H.data();
+        const float* FDTD_RESTRICT uch = u_curr_H.data();
+        const float* FDTD_RESTRICT uph = u_prev_H.data();
+        const float* FDTD_RESTRICT duph = Du_prev_H.data();
+        float* FDTD_RESTRICT unh = u_next_H.data();
 
-        const float invHSq_H = 1.0f / (h * h);
+        // Pass 1: H spatial Laplacian (Du_prev_H swapped in O(1) at step end)
+        computeLaplacian(uch, duh);
 
-        if (N_pts >= 2)
+        // Pass 2: Fused inline biharmonic D2u_H + stencil update (eliminates D2u_H array pass)
         {
-            // H spatial Laplacian: Du_H = D* u_curr_H
-            Du_H[0] = (-2.0f * u_curr_H[0] + u_curr_H[1]) * invHSq_H;
-            for (int i = 1; i < N_pts - 1; ++i)
-                Du_H[static_cast<size_t>(i)] = (u_curr_H[static_cast<size_t>(i - 1)] - 2.0f * u_curr_H[static_cast<size_t>(i)] + u_curr_H[static_cast<size_t>(i + 1)]) * invHSq_H;
-            Du_H[static_cast<size_t>(N_pts - 1)] = (u_curr_H[static_cast<size_t>(N_pts - 2)] - 2.0f * u_curr_H[static_cast<size_t>(N_pts - 1)]) * invHSq_H;
-
-            // H biharmonic: D2u_H = D* Du_H
-            D2u_H[0] = (-2.0f * Du_H[0] + Du_H[1]) * invHSq_H;
-            for (int i = 1; i < N_pts - 1; ++i)
-                D2u_H[static_cast<size_t>(i)] = (Du_H[static_cast<size_t>(i - 1)] - 2.0f * Du_H[static_cast<size_t>(i)] + Du_H[static_cast<size_t>(i + 1)]) * invHSq_H;
-            D2u_H[static_cast<size_t>(N_pts - 1)] = (Du_H[static_cast<size_t>(N_pts - 2)] - 2.0f * Du_H[static_cast<size_t>(N_pts - 1)]) * invHSq_H;
-
-            // H Laplacian on u_prev_H for frequency-dependent damping
-            Du_prev_H[0] = (-2.0f * u_prev_H[0] + u_prev_H[1]) * invHSq_H;
-            for (int i = 1; i < N_pts - 1; ++i)
-                Du_prev_H[static_cast<size_t>(i)] = (u_prev_H[static_cast<size_t>(i - 1)] - 2.0f * u_prev_H[static_cast<size_t>(i)] + u_prev_H[static_cast<size_t>(i + 1)]) * invHSq_H;
-            Du_prev_H[static_cast<size_t>(N_pts - 1)] = (u_prev_H[static_cast<size_t>(N_pts - 2)] - 2.0f * u_prev_H[static_cast<size_t>(N_pts - 1)]) * invHSq_H;
-        }
-
-
-        // H update coefficients (same as V except c1_H uses T0_H)
-        const float c1_H = (T0_H * k * k) / rhoA;
-
-        for (int i = 0; i < N_pts; ++i)
-        {
-            const float c0_i = c0_vec[static_cast<size_t>(i)];
-            const float c4_i = c4_vec[static_cast<size_t>(i)];
-
-            const float Bu_H = c0_i * (2.0f * u_curr_H[static_cast<size_t>(i)]
-                                       + (c1_H + c3) * Du_H[static_cast<size_t>(i)]
-                                       - c2          * D2u_H[static_cast<size_t>(i)]);
-            const float Cu_H = c0_i * (c4_i * u_prev_H[static_cast<size_t>(i)]
-                                       - c3 * Du_prev_H[static_cast<size_t>(i)]);
-
-            u_next_H[static_cast<size_t>(i)] = Bu_H + Cu_H;
+            const float c1Hpc3 = c1H_plus_c3;
+            const float c2_loc = c2;
+            const float c3_loc = c3;
+            if (nPts >= 2)
+            {
+                {
+                    const float d2u0 = (-2.0f * duh[0] + duh[1]) * ih2;
+                    unh[0] = c0p[0] * (2.0f * uch[0] + c1Hpc3 * duh[0] - c2_loc * d2u0 + c4p[0] * uph[0] - c3_loc * duph[0]);
+                }
+                for (int i = 1; i < nPts - 1; ++i)
+                {
+                    const float d_i = duh[i];
+                    const float d2u_i = (duh[i - 1] - 2.0f * d_i + duh[i + 1]) * ih2;
+                    unh[i] = c0p[i] * (2.0f * uch[i] + c1Hpc3 * d_i - c2_loc * d2u_i + c4p[i] * uph[i] - c3_loc * duph[i]);
+                }
+                {
+                    const int last = nPts - 1;
+                    const float dLast = duh[last];
+                    const float d2uLast = (duh[last - 1] - 2.0f * dLast) * ih2;
+                    unh[last] = c0p[last] * (2.0f * uch[last] + c1Hpc3 * dLast - c2_loc * d2uLast + c4p[last] * uph[last] - c3_loc * duph[last]);
+                }
+            }
+            else if (nPts == 1)
+            {
+                const float d2u0 = (-2.0f * duh[0]) * ih2;
+                unh[0] = c0p[0] * (2.0f * uch[0] + c1Hpc3 * duh[0] - c2_loc * d2u0 + c4p[0] * uph[0] - c3_loc * duph[0]);
+            }
         }
 
         if (contactForceH != 0.0f)
@@ -1088,47 +1158,43 @@ public:
             for (int j = 0; j < 3; ++j)
             {
                 const size_t idx = static_cast<size_t>(pickContactIdx - 1 + j);
-                const float lam = (k * k / (rhoA * h)) * c0_vec[idx];
-                u_next_H[idx] += lam * pickContactWeights[j] * contactForceH;
+                const float lam = lamBase * c0p[idx];
+                unh[idx] += lam * pickContactWeights[j] * contactForceH;
             }
         }
 
-        // H bridge force + DC blocker
-        constexpr float dcR_H = 0.9965f;
-        float bridgeForce_H = u_next_H[static_cast<size_t>(N_pts - 1)] / h;
-        const float dcOut_H = bridgeForce_H - dcBlockerStateH + dcR_H * prevRawForceH;
-        dcBlockerStateH  = bridgeForce_H;
-        prevRawForceH    = dcOut_H;
-        bridgeForce_H    = dcOut_H;
+        if (acousticBridgeOutput)
+        {
+            // H bridge force + DC blocker
+            constexpr float dcR_H = 0.9965f;
+            float bridgeForce_H = unh[static_cast<size_t>(nPts - 1)] * invH;
+            const float dcOut_H = bridgeForce_H - dcBlockerStateH + dcR_H * prevRawForceH;
+            dcBlockerStateH  = bridgeForce_H;
+            prevRawForceH    = dcOut_H;
+            bridgeForce_H    = dcOut_H;
 
-        // H saddle filter (same saddleBeta as V)
-        saddleFilterStateH  = (1.0f - saddleBeta) * bridgeForce_H + saddleBeta * saddleFilterStateH;
-        saddleFilterState2H = (1.0f - saddleBeta) * saddleFilterStateH + saddleBeta * saddleFilterState2H;
+            // H saddle filter (same saddleBeta as V)
+            saddleFilterStateH  = (1.0f - saddleBeta) * bridgeForce_H + saddleBeta * saddleFilterStateH;
+            saddleFilterState2H = (1.0f - saddleBeta) * saddleFilterStateH + saddleBeta * saddleFilterState2H;
+        }
 
         // H state rotation (O(1) buffer swaps, zero memory copies)
         u_prev_H.swap(u_curr_H);
         u_curr_H.swap(u_next_H);
+        Du_prev_H.swap(Du_H);
 
+        if (!acousticBridgeOutput)
+            return 0.0f;
 
         // Mix: V drives the saddle directly (100%); H couples laterally at ~35%.
         // The lateral rocking force on the saddle is less efficient than vertical drive.
         const float transverseMix = saddleFilterState2 + 0.35f * saddleFilterState2H;
 
         // ── Longitudinal String Physics: Phantom Harmonics (2f0, 4f0) & P-wave Snap ──
-        // 1. Dynamic string elongation:
-        // Delta L = -0.5 * h * sum(u_curr[i] * Du[i])
-        // Delta T = (EA / L) * Delta L
-        float uDotDu = 0.0f;
-        for (int i = 0; i < N_pts; ++i)
-            uDotDu += u_curr[static_cast<size_t>(i)] * Du[static_cast<size_t>(i)];
-
+        // 1. Dynamic string elongation (uDotDu computed on u^n . D u^n prior to state rotation):
         const float elongation = -0.5f * h * uDotDu;
         const float deltaT = (EA / p.L) * elongation;
 
-        // Bone saddle break angle (~18 deg) couples dynamic tension fluctuations
-        // into downward vertical force on soundboard, oscillating at 2*f0, 4*f0.
-        // On real strings, tension modulation is strictly quadratic with vibration amplitude.
-        // Dynamic quadratic scaling: blooms on hard plucks, disappears on delicate touches.
         const float potScale = std::clamp(std::abs(elongation) / (0.00015f + 1e-9f), 0.05f, 2.50f);
         const float phantomRaw = (deltaT / p.T0) * (p.phantomCoupling * 0.35f * potScale);
         const float dcOutPhantom = phantomRaw - dcBlockerStatePhantom + dcR * prevRawForcePhantom;
@@ -1139,16 +1205,11 @@ public:
         saddleFilterPhantom = (1.0f - saddleBeta) * dcOutPhantom + saddleBeta * saddleFilterPhantom;
 
         // 2. Longitudinal P-wave attack resonator (eigenfrequency f_L = c_L / 2L):
-        // Solves: xi^n = impulse - b1 * xi^{n-1} - b2 * xi^{n-2}
         const float longSample = longitudinalImpulse - longitudinalB1 * longitudinalS1 - longitudinalB2 * longitudinalS2;
         longitudinalImpulse = 0.0f; // one-shot release impulse
         longitudinalS2 = longitudinalS1;
         longitudinalS1 = longSample;
 
-        // Combined bridge output:
-        // - Transverse V (100%) & H (35%)
-        // - Dynamic Phantom Harmonics 2*f0 (octave bloom)
-        // - Axial P-wave attack snap (scaled so as not to sound like a metallic piano wire ping)
         const float longAcoustic = longSample * (p.woundFactor > 0.1f ? 0.22f : 0.14f);
         const float phantomAcoustic = saddleFilterPhantom * 0.35f;
         lastScrapeForce = scrapeForce;
@@ -1157,13 +1218,30 @@ public:
     }
 
     /** Dual-axis saddle output: returns distinct vertical (pumping) and horizontal (rocking) forces. */
-    void tickPolar(float& outV, float& outH) noexcept
+    void tickPolar(float& outV, float& outH, bool acousticBridgeOutput = true) noexcept
     {
-        static_cast<void>(tick());
+        static_cast<void>(tick(acousticBridgeOutput));
+        if (!acousticBridgeOutput)
+        {
+            outV = 0.0f;
+            outH = 0.0f;
+            return;
+        }
         // outV is vertical plate pumping: V transverse + axial tension phantom + longitudinal snap + tactile scrape
         outV = saddleFilterState2 + saddleFilterPhantom * 0.35f + (longitudinalS1 * (p.woundFactor > 0.1f ? 0.22f : 0.14f)) + (lastScrapeForce * 0.85f);
         // outH is lateral rocking along saddle line
         outH = saddleFilterState2H;
+    }
+
+    /** Numerical sanity check on grid displacement (used in Electric mode when bridge force outputs are bypassed). */
+    bool isStateValid() const noexcept
+    {
+        if (N_pts <= 0)
+            return true;
+        const float uMid = u_curr[static_cast<size_t>(N_pts / 2)];
+        const float uEnd = u_curr[static_cast<size_t>(N_pts - 1)];
+        return !(std::isnan(uMid) || std::isinf(uMid) || std::abs(uMid) > 1.0f ||
+                 std::isnan(uEnd) || std::isinf(uEnd) || std::abs(uEnd) > 1.0f);
     }
 
     /** Fast string displacement energy estimate for voice stealing. */
@@ -1180,7 +1258,6 @@ public:
     {
         // Kinetic string energy: (rhoA*h / 2) * ||D- u^{n+1}||^2
         float kineticString = 0.0f;
-        const float invK = 1.0f / k;
         for (int i = 0; i < N_pts; ++i)
         {
             const float v = (u_curr[static_cast<size_t>(i)] - u_prev[static_cast<size_t>(i)]) * invK;
@@ -1221,11 +1298,10 @@ public:
         if (x <= 0.0f || x >= p.L)
             return 0.0f;
 
-        const float pos = (x / h) - 1.0f;
+        const float pos = (x * invH) - 1.0f;
         const int idx = std::clamp(static_cast<int>(pos), 0, N_pts - 2);
         const float alpha = std::clamp(pos - static_cast<float>(idx), 0.0f, 1.0f);
 
-        const float invK = 1.0f / k;
         const float u_c_V = (1.0f - alpha) * u_curr[static_cast<size_t>(idx)] + alpha * u_curr[static_cast<size_t>(idx + 1)];
         const float u_p_V = (1.0f - alpha) * u_prev[static_cast<size_t>(idx)] + alpha * u_prev[static_cast<size_t>(idx + 1)];
         const float vV = (u_c_V - u_p_V) * invK;
@@ -1356,9 +1432,43 @@ private:
         fingerIdx = std::clamp(static_cast<int>(p.xFG * p.L / h) - 1, 0, N_pts - 2);
         fingerAlpha = std::clamp((p.xFG * p.L / h) - static_cast<float>(fingerIdx + 1), 0.0f, 1.0f);
 
-        // Diagonal scaling Lambda (Eq. 51)
+        // Diagonal scaling Lambda (Eq. 51) & cached tick() loop-invariant scalars
         lambdaString = (k * k) / (rhoA * h * (1.0f + p.sigma0 * k));
         lambdaFinger = (k * k) / p.MFG;
+
+        invH        = 1.0f / h;
+        invHSq      = invH * invH;
+        invK        = 1.0f / k;
+        lamBase     = (k * k) / (rhoA * h);
+        c1          = (p.T0 * k * k) / rhoA;
+        c1_H        = (T0_H * k * k) / rhoA;
+        c2          = (EI * k * k) / rhoA;
+        c3          = 2.0f * p.sigma1 * k;
+        c1_plus_c3  = c1 + c3;
+        c1H_plus_c3 = c1_H + c3;
+        updateKcFactor();
+    }
+
+    void updateKcFactor() noexcept
+    {
+        kcFactor = (k * 0.5f) * std::sqrt((p.E * h) / (p.rho * p.L * (1.0f + p.sigma0 * k)));
+    }
+
+    void computeLaplacian(const float* FDTD_RESTRICT u, float* FDTD_RESTRICT outDu) const noexcept
+    {
+        const int nPts = N_pts;
+        const float ih2 = invHSq;
+        if (nPts >= 2)
+        {
+            outDu[0] = (-2.0f * u[0] + u[1]) * ih2;
+            for (int i = 1; i < nPts - 1; ++i)
+                outDu[i] = (u[i - 1] - 2.0f * u[i] + u[i + 1]) * ih2;
+            outDu[nPts - 1] = (u[nPts - 2] - 2.0f * u[nPts - 1]) * ih2;
+        }
+        else if (nPts == 1)
+        {
+            outDu[0] = (-2.0f * u[0]) * ih2;
+        }
     }
 
     /**
@@ -1485,6 +1595,19 @@ private:
     int N      = 0;
     int N_pts  = 0;
     float h    = 0.0f;
+
+    // Cached loop-invariant coefficients (updated in configureGrid / setDamping)
+    float invH        = 0.0f;
+    float invHSq      = 0.0f;
+    float invK        = 0.0f;
+    float lamBase     = 0.0f;
+    float c1          = 0.0f;
+    float c1_H        = 0.0f;
+    float c2          = 0.0f;
+    float c3          = 0.0f;
+    float c1_plus_c3  = 0.0f;
+    float c1H_plus_c3 = 0.0f;
+    float kcFactor    = 0.0f;
 
     // Displacement states
     std::vector<float> u_next;

@@ -118,6 +118,30 @@ private:
     static constexpr int kMaxEventsPerSegment = 512;
     std::array<SynthEngine::Event, kMaxEventsPerSegment> eventQueue {};
 
+    // Cached APVTS atomic parameter pointers (resolved once in constructor; zero map lookups in processBlock)
+    std::atomic<float>* pDecay          = nullptr;
+    std::atomic<float>* pBrightness     = nullptr;
+    std::atomic<float>* pPickPos        = nullptr;
+    std::atomic<float>* pStiffness      = nullptr;
+    std::atomic<float>* pBodySize       = nullptr;
+    std::atomic<float>* pBodyMix        = nullptr;
+    std::atomic<float>* pBodyModel      = nullptr;
+    std::atomic<float>* pEngineModel    = nullptr;
+    std::atomic<float>* pStringMaterial = nullptr;
+    std::atomic<float>* pStereoWidth    = nullptr;
+    std::atomic<float>* pMasterGain     = nullptr;
+    std::atomic<float>* pPalmMute       = nullptr;
+    std::atomic<float>* pFullMute       = nullptr;
+    std::atomic<float>* pStrumPattern   = nullptr;
+    std::atomic<float>* pLegato         = nullptr;
+    std::atomic<float>* pStrictFretboard= nullptr;
+    std::atomic<float>* pInstrumentMode = nullptr;
+    std::atomic<float>* pGuitarModel    = nullptr;
+    std::atomic<float>* pPickupPosition = nullptr;
+    std::atomic<float>* pPickupType     = nullptr;
+    std::atomic<float>* pToneKnob       = nullptr;
+    std::atomic<float>* pCabAirFilter   = nullptr;
+
     /** Build the parameter layout used to construct the APVTS. */
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

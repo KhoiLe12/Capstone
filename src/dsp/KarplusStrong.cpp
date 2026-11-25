@@ -89,8 +89,9 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
         fracV += 1.0f;
     }
 
-    if (delayLengthV + 8 > static_cast<int>(delayLineV.size()))
-        delayLineV.resize(static_cast<size_t>(delayLengthV) + 32, 0.f);
+    const int maxDelayV = std::max(2, static_cast<int>(delayLineV.size()) - 2);
+    if (delayLengthV > maxDelayV)
+        delayLengthV = maxDelayV;
 
     apCoeffV = (1.0f - fracV) / (1.0f + fracV);
 
@@ -109,8 +110,9 @@ void KarplusStrong::setFrequency(float freqHz, float stiffness)
         fracH += 1.0f;
     }
 
-    if (delayLengthH + 8 > static_cast<int>(delayLineH.size()))
-        delayLineH.resize(static_cast<size_t>(delayLengthH) + 32, 0.f);
+    const int maxDelayH = std::max(2, static_cast<int>(delayLineH.size()) - 2);
+    if (delayLengthH > maxDelayH)
+        delayLengthH = maxDelayH;
 
     apCoeffH = (1.0f - fracH) / (1.0f + fracH);
 
@@ -322,6 +324,48 @@ float KarplusStrong::tick() noexcept
     energyEstimate = 0.9999f * energyEstimate + 0.0001f * (bridgeSignal * bridgeSignal);
 
     return bridgeSignal;
+}
+
+float KarplusStrong::getPickupVelocity(float distFromBridgeMeters, float stringLengthMeters,
+                                       bool isHumbucker, float poleSpacingMeters) const noexcept
+{
+    if (delayLengthV < 4 || delayLengthH < 4 || stringLengthMeters <= 0.01f)
+        return 0.0f;
+
+    auto readLine = [](const std::vector<float>& line, int len, int head, float delaySamples) noexcept -> float
+    {
+        // Newest written sample sits at (head - 1 + len) % len
+        const float clamped = std::clamp(delaySamples, 0.0f, static_cast<float>(len - 2));
+        const int d0 = static_cast<int>(clamped);
+        const float frac = clamped - static_cast<float>(d0);
+        const int idx0 = ((head - 1 - d0) % len + len) % len;
+        const int idx1 = ((head - 2 - d0) % len + len) % len;
+        return (1.0f - frac) * line[static_cast<size_t>(idx0)]
+             + frac          * line[static_cast<size_t>(idx1)];
+    };
+
+    auto samplePoint = [&](float d) noexcept -> float
+    {
+        if (d <= 0.0f || d >= stringLengthMeters)
+            return 0.0f;
+        const float ratio = d / stringLengthMeters; // in (0, 1)
+        const float tapV = ratio * static_cast<float>(delayLengthV);
+        const float tapH = ratio * static_cast<float>(delayLengthH);
+
+        // Standing-wave superposition at pickup coordinate: incident - bridge-reflected wave
+        const float vV = readLine(delayLineV, delayLengthV, writeHeadV, 0.0f)
+                       - readLine(delayLineV, delayLengthV, writeHeadV, tapV);
+        const float vH = readLine(delayLineH, delayLengthH, writeHeadH, 0.0f)
+                       - readLine(delayLineH, delayLengthH, writeHeadH, tapH);
+        return (vV + 0.10f * vH) * 1.8f;
+    };
+
+    if (!isHumbucker)
+        return samplePoint(distFromBridgeMeters);
+
+    const float d1 = distFromBridgeMeters - 0.5f * poleSpacingMeters;
+    const float d2 = distFromBridgeMeters + 0.5f * poleSpacingMeters;
+    return 0.5f * (samplePoint(d1) + samplePoint(d2));
 }
 
 // ---------------------------------------------------------------------------

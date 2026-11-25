@@ -25,7 +25,9 @@ private:
     juce::TextButton acousticPageBtn { "Acoustic" };
     juce::TextButton electricPageBtn { "Electric (DI)" };
     int currentPageMode = -1; // 0 = Acoustic, 1 = Electric
-    void updatePageMode(int mode);
+    int shownGuitarModel = -1;
+    void updatePageMode(int mode, bool selectDefaultPreset = false);
+    void refreshPickupChoices(int guitarModel);
 
     // Preset Selection Custom ComboBox (ensures first click registers reliably)
     class PresetBox : public juce::ComboBox

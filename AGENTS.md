@@ -122,7 +122,18 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v77.f**
+### Current Version Status: **v78.f**
+- **v78.f**:
+  - **DSP & UI Bugfix Pass**:
+    - Fixed FDTD choked voice termination leak in `Voice::tickPolar()`, Waveguide double-counted `samplesSinceNoteOn`, `fadeSamplesTotal` fade step discontinuity, `FdtdString` pre-swap `uDotDu` time alignment, and dead `Voice::tickPickClick()` legacy state.
+    - Eliminated audio-thread `.resize()` in `KarplusStrong::setFrequency()` and implemented traveling-wave `KarplusStrong::getPickupVelocity()` with dual-pole humbucker summing for Electric + Waveguide support.
+    - Converted keyswitch/strum state flags to `std::atomic<bool>`, cleared reflection/RLC/cab filters cleanly on acoustic/electric mode switches, removed unsafe message-thread `synth.param*` writes in `PluginProcessor::setCurrentProgram()`, prevented `PluginEditor::updatePageMode(false)` from clobbering user edits, and greyed out Strat-only pickup selector items on Les Paul.
+  - **Zero-Loss FDTD & Engine Optimizations (`-26.3%` to `-33.2%` CPU Load Reduction)**:
+    - Replaced per-sample `Du_prev` / `Du_prev_H` recomputation with $O(1)$ `std::vector::swap()` rotation, fused V/H fast-path interior loops with inline $D^2 u$ and `FDTD_RESTRICT`, cached loop-invariant FDTD constants, added `isStateValid()` runaway guard, and skipped bridge/saddle/body stages in Electric DI mode.
+    - Cached `PassiveElectronics` filter coefficients, precomputed per-block pickup geometries, skipped sympathetic coupling when `bodyMix <= 0.001`, and cached all 22 APVTS parameter pointers in `PluginProcessor`.
+    - Verified pre/post-optimization mathematical equivalence (`-95.9 dBFS` acoustic RMS diff, `-87.6 dBFS` electric RMS diff) and added 3 regression checks to `BenchSynth`.
+    - Post-edit `bench_synth` (48 kHz, 6-voice FDTD): `20.77%` @ 32 (was `28.36%`), `15.75%` @ 64 (was `21.38%`), `13.37%` @ 128 (was `19.10%`), `12.17%` @ 256 (was `18.22%`), `11.63%` @ 512 (was `17.37%`); serial capacity improved from 5 to 7 tracks; `RTCheck PASS (0)` across all buffer sizes and sample rates (44.1–192 kHz).
+
 - **v77.f**:
   - **Electric DI Gain Calibration & Headroom Optimization**:
     - Calibrated electric transverse string velocity induction scaling from raw $0.85\times$ down to $0.22\times$ (`diSample = totalPickupVoltage * smoothedPolyScale * 0.22f`).

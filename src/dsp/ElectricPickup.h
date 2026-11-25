@@ -196,6 +196,16 @@ namespace ElectricGuitar
         void update(GuitarModel model, float toneKnob, float sampleRate) noexcept
         {
             const float tone = std::clamp(toneKnob, 0.0f, 1.0f);
+            if (initialized && model == lastModel
+                && std::abs(sampleRate - lastSampleRate) < 1e-3f
+                && std::abs(tone - lastTone) < 1e-5f)
+                return;
+
+            initialized = true;
+            lastModel = model;
+            lastTone = tone;
+            lastSampleRate = sampleRate;
+
             float fMin = 450.0f, fMax = 4200.0f, qMin = 1.1f, qMax = 2.6f;
 
             if (model == GuitarModel::LesPaul1959)
@@ -222,9 +232,14 @@ namespace ElectricGuitar
         void reset() noexcept
         {
             rlcFilter.reset();
+            initialized = false;
         }
 
     private:
         BiquadFilter rlcFilter;
+        bool initialized = false;
+        GuitarModel lastModel = GuitarModel::Stratocaster1962;
+        float lastTone = -1.0f;
+        float lastSampleRate = 0.0f;
     };
 }

@@ -2,8 +2,6 @@
 #include <cmath>
 #include <algorithm>
 
-static constexpr float kPi = 3.14159265358979323846f;
-
 // ---------------------------------------------------------------------------
 // Initialisation
 // ---------------------------------------------------------------------------
@@ -15,9 +13,6 @@ void Voice::init(float sr)
     fdtdString.init(sr);
     // Classical finger/palm damping time constant ~35ms: smooth, natural decay
     releaseCoeff = std::exp(-1.0f / (0.035f * sampleRate));
-
-    // High-frequency plectrum edge air sizzle filter (~8 kHz 1-pole HP)
-    pickEdgeHPAlpha = 1.0f - std::exp(-2.0f * kPi * 8000.0f / sampleRate);
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +33,7 @@ void Voice::noteOn(int note, float vel,
     chokeGain = 1.0f;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
+    fadeSamplesTotal = 96;
     stringMaterial = mat;
 
     currentMuteMode = muteMode;
@@ -63,6 +59,13 @@ void Voice::noteOn(int note, float vel,
     geometryStringIndex = (geometryString >= 0 && geometryString <= 5) ? geometryString : s;
     s = geometryStringIndex;
 
+    {
+        static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
+        const int fret = std::clamp(note - openMidi[std::clamp(s, 0, 5)], 0, 22);
+        const float baseScale = (instrumentMode == 1) ? ((guitarModel == 1) ? 0.62865f : 0.64770f) : 0.65f;
+        currentStringLengthMeters = baseScale * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
+    }
+
     const float clampedVel = std::clamp(velocity, 0.01f, 1.0f);
 
     if (engineType == EngineType::BilbaoFdtd)
@@ -87,19 +90,8 @@ void Voice::noteOn(int note, float vel,
         const float clampedPickPos = std::clamp(pickPosition + pickJitter, 0.08f, 0.48f);
         fdtdString.startPlectrumContact(clampedPickPos, peakDisp, effBrightness, humanAngle);
         resetFdtdSilenceReference();
-
-        // First-Principles Dynamic Plectrum Contact Model (v71.f, Literature Review §6):
-        // All plectrum-string elastoplastic contact mechanics, winding ridge micro-textures,
-        // and Helmholtz release transients are computed directly within the FDTD elastodynamic solver.
-        // Zero synthetic airborne Ricker dipole & bandpass filter shortcuts.
-        pickClickSamplesLeft = 0;
-        pickClickAmp         = 0.0f;
         return;
     }
-
-    // DWG path: silence any residual pick-click burst
-    pickClickSamplesLeft = 0;
-    pickClickAmp         = 0.0f;
 
     const float freq = midiToFreq(note);
     string.setFrequency(freq, isSteel ? std::min(1.0f, stiffness * 1.5f) : stiffness);
@@ -237,6 +229,7 @@ void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, fl
     releasing = false;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1; // Reset any decay auto-fade
+    fadeSamplesTotal = 96;
     active = true;
 
     const float freq = midiToFreq(midiNote);
@@ -251,11 +244,12 @@ void Voice::legatoTransition(int newNote, float newVelocity, bool isHammerOn, fl
         else                   s = 5;
     }
 
-    // Zero any direct airborne plectrum clicks (hammer-ons and pull-offs have NO pick attack)
-    pickClickSamplesLeft = 0;
-    pickClickAmp = 0.0f;
-    pickRidgeDurSamples = 0;
-    pickRidgeAmp = 0.0f;
+    {
+        static constexpr int openMidi[6] = { 40, 45, 50, 55, 59, 64 };
+        const int fret = std::clamp(newNote - openMidi[std::clamp(s, 0, 5)], 0, 22);
+        const float baseScale = (instrumentMode == 1) ? ((guitarModel == 1) ? 0.62865f : 0.64770f) : 0.65f;
+        currentStringLengthMeters = baseScale * std::pow(2.0f, -static_cast<float>(fret) / 12.0f);
+    }
 
     if (engineType == EngineType::DigitalWaveguide)
     {
@@ -430,6 +424,7 @@ float Voice::tick() noexcept
         if (releaseGain < 0.0025f && fadeSamplesLeft < 0)
         {
             fadeSamplesLeft = 96;
+            fadeSamplesTotal = 96;
         }
     }
     else
@@ -440,13 +435,14 @@ float Voice::tick() noexcept
         {
             // Natural ring-out also fades out cleanly instead of hard-cutting
             fadeSamplesLeft = 64;
+            fadeSamplesTotal = 64;
         }
     }
 
-    // 96-sample linear fade-out to guarantee zero DC or step click
+    // Linear fade-out to guarantee zero DC or step click
     if (fadeSamplesLeft > 0)
     {
-        const float fadeFactor = static_cast<float>(fadeSamplesLeft) / 96.0f;
+        const float fadeFactor = static_cast<float>(fadeSamplesLeft) / static_cast<float>(fadeSamplesTotal);
         out *= fadeFactor;
         --fadeSamplesLeft;
 
@@ -472,17 +468,19 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         outH = 0.0f;
         return;
     }
-    ++samplesSinceNoteOn;
 
     if (engineType == EngineType::BilbaoFdtd)
     {
+        ++samplesSinceNoteOn;
+        const bool isElectric = (instrumentMode == 1);
         float fV = 0.0f, fH = 0.0f;
-        fdtdString.tickPolar(fV, fH);
+        fdtdString.tickPolar(fV, fH, !isElectric);
         fV *= 95.0f;
         fH *= 95.0f;
 
         // Safety guard against NaN/Inf or runaway numerical explosion
-        if (std::isnan(fV) || std::isinf(fV) || std::abs(fV) > 50.0f ||
+        if (!fdtdString.isStateValid() ||
+            std::isnan(fV) || std::isinf(fV) || std::abs(fV) > 50.0f ||
             std::isnan(fH) || std::isinf(fH) || std::abs(fH) > 50.0f)
         {
             fdtdString.reset();
@@ -511,17 +509,23 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
             gainScale = releaseGain;
             releaseGain *= releaseCoeff;
             if (releaseGain < 0.0025f && fadeSamplesLeft < 0)
+            {
                 fadeSamplesLeft = 96;
+                fadeSamplesTotal = 96;
+            }
         }
         else
         {
             if (fdtdIsSilent() && fadeSamplesLeft < 0)
+            {
                 fadeSamplesLeft = 64;
+                fadeSamplesTotal = 64;
+            }
         }
 
         if (fadeSamplesLeft > 0)
         {
-            gainScale *= (static_cast<float>(fadeSamplesLeft) / 96.0f);
+            gainScale *= (static_cast<float>(fadeSamplesLeft) / static_cast<float>(fadeSamplesTotal));
             --fadeSamplesLeft;
             if (fadeSamplesLeft == 0)
             {
@@ -537,22 +541,25 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
         outV = fV * gainScale;
         outH = fH * gainScale;
 
-        // Choke mechanical hand slap is added to vertical plate pumping
-        if (choking && slapActive)
+        // Choke mechanical hand slap & full voice termination (independent of slapActive!)
+        if (choking)
         {
-            if (slapPulseElapsed < slapPulseDuration)
+            if (slapActive)
             {
-                const float t = static_cast<float>(slapPulseElapsed) - slapPulseCenter;
-                const float u = t / slapPulseSigma;
-                if (std::abs(u) < 3.8f)
+                if (slapPulseElapsed < slapPulseDuration)
                 {
-                    outV += -u * std::exp(-0.5f * u * u) * slapPulseAmp;
+                    const float t = static_cast<float>(slapPulseElapsed) - slapPulseCenter;
+                    const float u = t / slapPulseSigma;
+                    if (std::abs(u) < 3.8f)
+                    {
+                        outV += -u * std::exp(-0.5f * u * u) * slapPulseAmp;
+                    }
+                    ++slapPulseElapsed;
                 }
-                ++slapPulseElapsed;
-            }
-            else
-            {
-                slapActive = false;
+                else
+                {
+                    slapActive = false;
+                }
             }
 
             --chokeSamplesLeft;
@@ -569,9 +576,9 @@ void Voice::tickPolar(float& outV, float& outH) noexcept
     }
     else
     {
-        // Digital Waveguide fallback: single axis vertical drive
+        // Digital Waveguide fallback: single axis vertical drive (tick() increments samplesSinceNoteOn)
         const float sOut = tick();
-        lastGainScale = 1.0f;
+        lastGainScale = releasing ? releaseGain : (choking ? chokeGain : 1.0f);
         outV = sOut;
         outH = 0.0f;
     }
@@ -594,87 +601,9 @@ void Voice::reset() noexcept
     chokeSamplesLeft = 0;
     releaseGain = 1.0f;
     fadeSamplesLeft = -1;
+    fadeSamplesTotal = 96;
     lastGainScale = 1.0f;
     midiNote = -1;
-
-    // Reset direct airborne pick-click physical model (v51.f)
-    pickClickSamplesLeft = 0;
-    pickClickElapsed     = 0;
-    pickClickAmp         = 0.0f;
-    pickRes1_x1 = 0.0f; pickRes1_x2 = 0.0f;
-    pickRes1_y1 = 0.0f; pickRes1_y2 = 0.0f;
-    pickRes2_x1 = 0.0f; pickRes2_x2 = 0.0f;
-    pickRes2_y1 = 0.0f; pickRes2_y2 = 0.0f;
-    pickRidgeDurSamples  = 0;
-    pickRidgeAmp         = 0.0f;
-    pickEdgeHPState      = 0.0f;
-}
-
-float Voice::tickPickClick() noexcept
-{
-    if (pickClickSamplesLeft <= 0 || instrumentMode == 1)
-        return 0.0f;
-
-    // 1. Acoustic Dipole Shock Wave (Ricker wavelet / pressure doublet):
-    // Pressure profile: x_dipole = (1 - u^2) * exp(-0.5 * u^2)
-    // where u = (elapsed - center) / sigma.
-    const float u = (static_cast<float>(pickClickElapsed) - pickDipoleCenter) / pickDipoleSigma;
-    float shock = 0.0f;
-    if (std::abs(u) < 4.0f)
-    {
-        shock = (1.0f - u * u) * std::exp(-0.5f * u * u);
-    }
-
-    // 2. Add subtle organic micro-roughness from PRNG
-    pickClickRng ^= pickClickRng << 13u;
-    pickClickRng ^= pickClickRng >> 17u;
-    pickClickRng ^= pickClickRng << 5u;
-    const float noise = static_cast<float>(static_cast<int32_t>(pickClickRng)) / static_cast<float>(0x7FFFFFFFu);
-    const float excitation = shock + 0.15f * noise * std::exp(-u * u * 0.25f);
-
-    // 3. Drive flexural resonator 1 (plectrum body / nail plate flex mode)
-    const float y1 = pickRes1_b0 * (excitation - pickRes1_x2) - pickRes1_a1 * pickRes1_y1 - pickRes1_a2 * pickRes1_y2;
-    pickRes1_x2 = pickRes1_x1;
-    pickRes1_x1 = excitation;
-    pickRes1_y2 = pickRes1_y1;
-    pickRes1_y1 = y1;
-
-    // 4. Drive flexural resonator 2 (plectrum tip snap / nail edge clack mode)
-    const float y2 = pickRes2_b0 * (excitation - pickRes2_x2) - pickRes2_a1 * pickRes2_y1 - pickRes2_a2 * pickRes2_y2;
-    pickRes2_x2 = pickRes2_x1;
-    pickRes2_x1 = excitation;
-    pickRes2_y2 = pickRes2_y1;
-    pickRes2_y1 = y2;
-
-    // 5. Pre-release wound-wire winding ridge micro-texture
-    float ridgeOut = 0.0f;
-    if (pickClickElapsed < pickRidgeDurSamples && pickRidgeDurSamples > 0)
-    {
-        const float ridgeEnv = std::sin(kPi * static_cast<float>(pickClickElapsed) / static_cast<float>(pickRidgeDurSamples));
-        ridgeOut = pickRidgeAmp * std::sin(pickRidgePhase) * ridgeEnv * (0.8f + 0.2f * noise);
-        pickRidgePhase += pickRidgePhaseInc;
-        pickRidgePhaseInc += pickRidgeChirpRate;
-        if (pickRidgePhase >= 2.0f * kPi) pickRidgePhase -= 2.0f * kPi;
-    }
-
-    // 6. Airborne edge air sizzle (8–16 kHz cavitation & edge slip bite)
-    const float edgeHP = noise - pickEdgeHPState;
-    pickEdgeHPState += pickEdgeHPAlpha * edgeHP;
-    const float edgeEnv = std::exp(-static_cast<float>(pickClickElapsed) * pickEdgeDecayRate);
-    const float edgeOut = edgeHP * edgeEnv;
-
-    // Composite airborne acoustic sound:
-    // - Direct dipole shock wave (immediate punch & snap): 0.85f * shock
-    // - Resonator Mode 1 (plectrum flex / fingernail plate): 2.4f * y1
-    // - Resonator Mode 2 (plectrum tip clack / nail edge): 2.0f * y2
-    // - Airborne edge air sizzle (8-16 kHz crisp bite): 0.40f * edgeOut
-    // - Pre-release wound wire ridge rasp: 0.70f * ridgeOut
-    const float click = pickClickAmp * (0.85f * shock + 2.4f * y1 + 2.0f * y2 + 0.40f * edgeOut + 0.70f * ridgeOut);
-
-    ++pickClickElapsed;
-    --pickClickSamplesLeft;
-
-    return click;
 }
 
 float Voice::midiToFreq(int note) noexcept
@@ -695,8 +624,7 @@ float Voice::getPickupVelocity(float distFromBridgeMeters, bool isHumbucker, flo
     }
     else
     {
-        // Waveguide fallback: comb-filter approximation at pickup distance
-        rawVel = (isHumbucker ? 0.75f : 1.0f) * string.getEnergy();
+        rawVel = string.getPickupVelocity(distFromBridgeMeters, currentStringLengthMeters, isHumbucker, poleSpacingMeters);
     }
 
     return rawVel * lastGainScale;

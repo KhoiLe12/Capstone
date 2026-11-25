@@ -95,14 +95,6 @@ public:
     /** Advance one sample and return dual-axis bridge forces (vertical pumping V, lateral rocking H). */
     void tickPolar(float& outV, float& outH) noexcept;
 
-    /**
-     * Direct airborne plectrum radiation — the high-frequency pick click (~4–12 kHz burst)
-     * that travels through open air from plectrum to microphone, bypassing the soundboard
-     * body resonator entirely. Generates energy for ~8–14 ms following the pluck moment.
-     * Call this in a separate pass AFTER body.processBlock() and sum directly into stereo out.
-     */
-    float tickPickClick() noexcept;
-
     bool  isActive()    const noexcept { return active; }
     int   getMidiNote() const noexcept { return midiNote; }
     int   getSamplesSinceNoteOn() const noexcept { return samplesSinceNoteOn; }
@@ -146,12 +138,14 @@ private:
     float currentDecay = 0.80f;
 
     // Smooth acoustic release envelope
-    bool  releasing       = false;
-    float releaseGain     = 1.0f;
-    float releaseCoeff    = 0.999f;
-    int   fadeSamplesLeft = -1;
+    bool  releasing        = false;
+    float releaseGain      = 1.0f;
+    float releaseCoeff     = 0.999f;
+    int   fadeSamplesLeft  = -1;
+    int   fadeSamplesTotal = 96;
     int   samplesSinceNoteOn = 0;
-    float lastGainScale = 1.0f;
+    float lastGainScale    = 1.0f;
+    float currentStringLengthMeters = 0.65f;
 
     // Physical acoustic choke & hand slap transient state
     bool  choking          = false;
@@ -166,48 +160,6 @@ private:
     float    slapPulseCenter       = 40.0f;
     int      slapPulseElapsed      = 0;
     int      slapPulseDuration     = 0;
-
-    // Direct airborne plectrum physical radiation (v50.f)
-    // Physical elastodynamic model of acoustic dipole shock wave + dual flexural eigenmodes + wire ridge micro-texture
-    float    pickClickAmp          = 0.0f;  ///< Peak amplitude of the snap
-    int      pickClickSamplesLeft  = 0;     ///< Remaining samples for click lifespan
-    int      pickClickElapsed      = 0;     ///< Elapsed samples since release
-
-    // Acoustic dipole shock wave (Mexican Hat / Ricker wavelet pressure impulse)
-    float    pickDipoleSigma       = 8.0f;  ///< Width of dipole shock wave in samples
-    float    pickDipoleCenter      = 12.0f; ///< Peak center in samples
-
-    // Flexural Resonator 1 (Plectrum body flex / fingernail plate mode)
-    float    pickRes1_b0           = 0.0f;
-    float    pickRes1_a1           = 0.0f;
-    float    pickRes1_a2           = 0.0f;
-    float    pickRes1_x1           = 0.0f;
-    float    pickRes1_x2           = 0.0f;
-    float    pickRes1_y1           = 0.0f;
-    float    pickRes1_y2           = 0.0f;
-
-    // Flexural Resonator 2 (Plectrum tip snap / keratin nail edge mode)
-    float    pickRes2_b0           = 0.0f;
-    float    pickRes2_a1           = 0.0f;
-    float    pickRes2_a2           = 0.0f;
-    float    pickRes2_x1           = 0.0f;
-    float    pickRes2_x2           = 0.0f;
-    float    pickRes2_y1           = 0.0f;
-    float    pickRes2_y2           = 0.0f;
-
-    // Wound-wire pre-release winding ridge micro-texture
-    float    pickRidgeAmp          = 0.0f;
-    float    pickRidgePhase        = 0.0f;
-    float    pickRidgePhaseInc     = 0.0f;
-    float    pickRidgeChirpRate    = 0.0f;
-    int      pickRidgeDurSamples   = 0;
-
-    // Airborne edge sizzle layer (8–16 kHz air bite & cavitation)
-    float    pickEdgeHPState       = 0.0f;
-    float    pickEdgeHPAlpha       = 0.65f;
-    float    pickEdgeDecayRate     = 0.005f;
-
-    uint32_t pickClickRng          = 0xC0FFEE17u; ///< Xorshift32 PRNG for organic roughness micro-texture
 
     static float midiToFreq(int note) noexcept;
 

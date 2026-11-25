@@ -23,7 +23,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     acousticPageBtn.onClick = [this]() {
         if (auto* param = processorRef.apvts.getParameter("instrumentMode"))
             param->setValueNotifyingHost(param->convertTo0to1(0.0f));
-        updatePageMode(0);
+        updatePageMode(0, true);
     };
     addAndMakeVisible(acousticPageBtn);
 
@@ -31,7 +31,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     electricPageBtn.onClick = [this]() {
         if (auto* param = processorRef.apvts.getParameter("instrumentMode"))
             param->setValueNotifyingHost(param->convertTo0to1(1.0f));
-        updatePageMode(1);
+        updatePageMode(1, true);
     };
     addAndMakeVisible(electricPageBtn);
 
@@ -227,7 +227,8 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
         p.apvts, "cabAirFilter", cabAirToggle);
 
     refreshCustomIRItem();
-    updatePageMode(p.apvts.getRawParameterValue("instrumentMode")->load() > 0.5f ? 1 : 0);
+    refreshPickupChoices(static_cast<int>(std::round(p.apvts.getRawParameterValue("guitarModel")->load())));
+    updatePageMode(p.apvts.getRawParameterValue("instrumentMode")->load() > 0.5f ? 1 : 0, false);
     startTimerHz(30);
 
     setSize(1140, 250);
@@ -317,7 +318,19 @@ void HybridSynthEditor::loadIRFile(const juce::File& file)
     refreshCustomIRItem();
 }
 
-void HybridSynthEditor::updatePageMode(int mode)
+void HybridSynthEditor::refreshPickupChoices(int guitarModel)
+{
+    if (guitarModel == shownGuitarModel)
+        return;
+    shownGuitarModel = guitarModel;
+    const bool isStrat = (guitarModel == 0);
+    // Items 2, 3, 4 (Bridge + Middle, Middle, Neck + Middle) are Stratocaster-only positions
+    pickupPosBox.setItemEnabled(2, isStrat);
+    pickupPosBox.setItemEnabled(3, isStrat);
+    pickupPosBox.setItemEnabled(4, isStrat);
+}
+
+void HybridSynthEditor::updatePageMode(int mode, bool selectDefaultPreset)
 {
     currentPageMode = mode;
     const bool isElectric = (mode == 1);
@@ -332,10 +345,21 @@ void HybridSynthEditor::updatePageMode(int mode)
         int cur = processorRef.getCurrentProgram();
         if (cur >= HybridSynthProcessor::kNumAcousticPresets)
         {
-            processorRef.setCurrentProgram(0);
-            cur = 0;
+            if (selectDefaultPreset)
+            {
+                processorRef.setCurrentProgram(0);
+                cur = 0;
+                presetBox.setSelectedItemIndex(cur, juce::dontSendNotification);
+            }
+            else if (cur >= 0 && cur < static_cast<int>(presets.size()))
+            {
+                presetBox.setText(presets[static_cast<size_t>(cur)].name, juce::dontSendNotification);
+            }
         }
-        presetBox.setSelectedItemIndex(cur, juce::dontSendNotification);
+        else
+        {
+            presetBox.setSelectedItemIndex(cur, juce::dontSendNotification);
+        }
     }
     else
     {
@@ -348,10 +372,21 @@ void HybridSynthEditor::updatePageMode(int mode)
         int cur = processorRef.getCurrentProgram();
         if (cur < HybridSynthProcessor::kNumAcousticPresets)
         {
-            processorRef.setCurrentProgram(HybridSynthProcessor::kNumAcousticPresets);
-            cur = HybridSynthProcessor::kNumAcousticPresets;
+            if (selectDefaultPreset)
+            {
+                processorRef.setCurrentProgram(HybridSynthProcessor::kNumAcousticPresets);
+                cur = HybridSynthProcessor::kNumAcousticPresets;
+                presetBox.setSelectedItemIndex(cur - HybridSynthProcessor::kNumAcousticPresets, juce::dontSendNotification);
+            }
+            else if (cur >= 0 && cur < static_cast<int>(presets.size()))
+            {
+                presetBox.setText(presets[static_cast<size_t>(cur)].name, juce::dontSendNotification);
+            }
         }
-        presetBox.setSelectedItemIndex(cur - HybridSynthProcessor::kNumAcousticPresets, juce::dontSendNotification);
+        else
+        {
+            presetBox.setSelectedItemIndex(cur - HybridSynthProcessor::kNumAcousticPresets, juce::dontSendNotification);
+        }
     }
 
     stringMaterialBox.setVisible(!isElectric);
@@ -398,11 +433,14 @@ void HybridSynthEditor::timerCallback()
 {
     refreshCustomIRItem();
 
-    // Sync mode page if changed via APVTS automation or preset load
+    // Sync mode page if changed via APVTS automation or preset load (without overwriting user edits)
     const float modeVal = processorRef.apvts.getRawParameterValue("instrumentMode")->load();
     const int targetMode = (modeVal >= 0.5f) ? 1 : 0;
     if (targetMode != currentPageMode)
-        updatePageMode(targetMode);
+        updatePageMode(targetMode, false);
+
+    const int gtrModel = static_cast<int>(std::round(processorRef.apvts.getRawParameterValue("guitarModel")->load()));
+    refreshPickupChoices(gtrModel);
 
     const int curProg = processorRef.getCurrentProgram();
     const int expectedIdx = (currentPageMode == 1)

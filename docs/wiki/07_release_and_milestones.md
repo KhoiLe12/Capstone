@@ -6,6 +6,27 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v78.f
+- **DSP & UI Bugfix Pass + Zero-Loss FDTD / Engine Optimizations**:
+  - **DSP & UI Bugfixes**:
+    - Fixed Bilbao FDTD choked voice leak in `Voice::tickPolar()` by moving `--chokeSamplesLeft` countdown and termination out of `if (slapActive)`.
+    - Fixed double-counted `samplesSinceNoteOn` in Waveguide mode by advancing it once per sample rather than in both engine branches.
+    - Eliminated `fadeSamplesTotal` denominator step discontinuity (96 samples on release / 64 on ring-out) for click-free voice fades.
+    - Aligned `FdtdString` `uDotDu` calculation prior to `u_prev.swap(u_curr)` so Kirchhoff-Carrier inner product matches step $n$.
+    - Added first-principles traveling-wave `KarplusStrong::getPickupVelocity()` (with dual-pole humbucker summing) and removed audio-thread `delayLineV`/`delayLineH` `.resize()` in `setFrequency()` so Electric + Waveguide renders cleanly without allocations.
+    - Converted `keyswitchPalmMuteActive`, `keyswitchFullMuteActive`, `keyswitchStrumActive`, and `lastStrumWasDown` to `std::atomic<bool>` (`relaxed`); removed cross-thread `setCurrentProgram()` direct `synth.param*` mutations; added mode-switch reset for `reflectionBuf`, `passiveElectronics`, and `cabFilter`.
+    - Removed legacy dead `Voice::tickPickClick()` code and ~25 unused members; prevented `PluginEditor::updatePageMode(false)` from clobbering user presets on constructor/timer syncs; disabled Strat-only pickup positions on Les Paul in `refreshPickupChoices()`.
+  - **Zero-Loss Optimizations & CPU Savings**:
+    - `FdtdString` (`-26.3%` to `-33.2%` relative CPU load across block sizes 32–512 for 6-voice FDTD at 48 kHz; single-core serial max capacity raised from 5 to 7 tracks; 10-thread 24-track load cut from `107.6% OVERRUN` to `72.60% REALTIME`):
+      - Replaced per-sample `Du_prev` / `Du_prev_H` recomputation with $O(1)$ `std::vector::swap()` pointer rotation (`Du_prev` recomputed only on `legatoTransition()` and `pluckDisplacement()`).
+      - Fused V and H fast-path interior loops with inline biharmonic stencils ($D^2 u$), `FDTD_RESTRICT` hints, and cached grid/stiffness constants (`invH`, `invHSq`, `invK`, `lamBase`, `c1`, `c1_H`, `c2`, `c3`, `c1_plus_c3`, `c1H_plus_c3`, `kcFactor`).
+      - Added `acousticBridgeOutput` flag to skip bridge/saddle/phantom/longitudinal filters in Electric DI mode, plus `isStateValid()` runaway check.
+    - Engine & Plugin overhead: cached `PassiveElectronics` filter coeffs, precomputed per-block `pickupCfgs[6]` and golpe amplitudes, skipped unused acoustic stages (`golpe`, `clickBuf`, `sympathetic`, `monoBridge`) in Electric mode (and `sympathetic` when `bodyMix <= 0.001`), and cached all 22 APVTS atomic pointers in `PluginProcessor`.
+  - **Verification & Equivalence**:
+    - Pre- vs post-optimization equivalence over 38,400 samples: `-95.9 dBFS` acoustic RMS diff (`max_abs_diff = 6.561e-05`), `-87.6 dBFS` electric RMS diff (`max_abs_diff = 1.567e-04`).
+    - Added 3 regression checks in `BenchSynth` (`FDTD Choke termination (<100 ms)`, `Electric + Waveguide AC output`, `Waveguide 75 ms chord window (50ms)`).
+    - `bench_synth`: `RTCheck PASS (0)` across all buffer sizes (32–512) and sample rates (44.1–192 kHz), `6 vce` FDTD load at 48 kHz reduced from `28.36% -> 20.77%` (block 32), `21.38% -> 15.75%` (block 64), `19.10% -> 13.37%` (block 128), `18.22% -> 12.17%` (block 256), `17.37% -> 11.63%` (block 512).
+
 ### v77.f
 - **Electric DI Headroom Calibration & First-Boot Preset Selection Fix**:
   - **Electric DI Transverse Velocity Scaling & Headroom**:

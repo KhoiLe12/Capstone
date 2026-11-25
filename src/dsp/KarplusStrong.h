@@ -94,6 +94,14 @@ public:
     /** Leaky RMS energy estimate — used by voice-stealer and active checks. */
     float getEnergy() const noexcept { return energyEstimate; }
 
+    /**
+     * Physical electromagnetic pickup transverse-wave velocity tap along the waveguide delay line.
+     * Models the superposition of incident and bridge-reflected waves at distance d from the bridge,
+     * with dual-pole summing for humbuckers (authentic comb-filter pickup-position tone).
+     */
+    float getPickupVelocity(float distFromBridgeMeters, float stringLengthMeters,
+                            bool isHumbucker, float poleSpacingMeters = 0.0185f) const noexcept;
+
     float sampleRate      = 44100.f;
     float currentFreq     = 196.0f;
     float currentDecay    = 0.80f;
