@@ -688,7 +688,171 @@ static bool runChordVsLegatoCheck(float sampleRate)
     std::cout << "  Waveguide 75 ms chord window (50ms): " << wgWinEng.getNumActiveVoices()
               << " voices (expect 2)  " << (wgWinOk ? "PASS" : "FAIL") << "\n";
 
-    return ok && chordTransitionOk && golpeOk && simOk && chokeTermOk && elWgOk && wgWinOk;
+    // Low-register staggered dyad (E2 + F2, 10 ms apart, Strict Fretboard Off) must borrow an idle string
+    const int lowDyad = voicesAfter({ { 0.000f, 40 }, { 0.010f, 41 } }, true, false);
+    const bool lowDyadOk = (lowDyad == 2);
+    std::cout << "  Low-register dyad E2+F2 (off-board): " << lowDyad
+              << " voices (expect 2)  " << (lowDyadOk ? "PASS" : "FAIL") << "\n";
+
+    // Duplicate same-note retrigger (E3 + E3, 10 ms apart) must reuse the same string (1 voice)
+    const int dupRetrig = voicesAfter({ { 0.000f, 52 }, { 0.010f, 52 } }, false, false);
+    const bool dupRetrigOk = (dupRetrig == 1);
+    std::cout << "  Same-note retrigger E3+E3 (10 ms)  : " << dupRetrig
+              << " voice  (expect 1)  " << (dupRetrigOk ? "PASS" : "FAIL") << "\n";
+
+    // Released chord tails must be reclaimed cleanly for staggered high-register chords (C5-E5-G5-B5-D6)
+    bool relStagOk = false;
+    {
+        SynthEngine relEng;
+        relEng.init(sampleRate, 512);
+        relEng.paramEngineType = 1.0f;
+        relEng.paramStrictFretboard = false;
+        std::vector<float> rL(512, 0.0f), rR(512, 0.0f);
+
+        const int prevChord[5] = { 48, 52, 55, 60, 64 };
+        std::vector<SynthEngine::Event> onEvs, offEvs;
+        for (int n : prevChord)
+        {
+            SynthEngine::Event eOn;
+            eOn.sampleOffset = 0;
+            eOn.type = SynthEngine::Event::Type::NoteOn;
+            eOn.note = n;
+            eOn.velocity = 0.8f;
+            onEvs.push_back(eOn);
+
+            SynthEngine::Event eOff;
+            eOff.sampleOffset = 0;
+            eOff.type = SynthEngine::Event::Type::NoteOff;
+            eOff.note = n;
+            offEvs.push_back(eOff);
+        }
+
+        auto renderMs = [&](float ms, const SynthEngine::Event* evs, int nEv)
+        {
+            const int total = std::max(1, static_cast<int>(ms * 0.001f * sampleRate));
+            int sent = 0;
+            for (int done = 0; done < total; done += 512)
+            {
+                const int blk = std::min(512, total - done);
+                relEng.process(rL.data(), rR.data(), blk, sent == 0 ? evs : nullptr, sent == 0 ? nEv : 0);
+                sent += blk;
+            }
+        };
+
+        renderMs(50.0f, onEvs.data(), static_cast<int>(onEvs.size()));
+        renderMs(20.0f, offEvs.data(), static_cast<int>(offEvs.size()));
+
+        const int highChord[5] = { 72, 76, 79, 83, 86 };
+        for (int i = 0; i < 5; ++i)
+        {
+            SynthEngine::Event eOn;
+            eOn.sampleOffset = 0;
+            eOn.type = SynthEngine::Event::Type::NoteOn;
+            eOn.note = highChord[i];
+            eOn.velocity = 0.8f;
+            renderMs(5.0f, &eOn, 1);
+        }
+        renderMs(350.0f, nullptr, 0);
+        const int activeAfter = relEng.getNumActiveVoices();
+        relStagOk = (activeAfter == 5);
+        std::cout << "  Released->staggered C5-D6 (5ms)   : " << activeAfter
+                  << " voices (expect 5)  " << (relStagOk ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Strum 8th mode: simultaneous chord must trigger all 5 notes on the very first downstroke
+    bool strumSimOk = false;
+    {
+        SynthEngine stEng;
+        stEng.init(sampleRate, 512);
+        stEng.paramEngineType = 1.0f;
+        stEng.paramStrictFretboard = false;
+        stEng.paramStrum = true;
+        std::vector<float> sL(512, 0.0f), sR(512, 0.0f);
+
+        const int chord[5] = { 48, 52, 55, 60, 64 };
+        std::vector<SynthEngine::Event> evs;
+        for (int n : chord)
+        {
+            SynthEngine::Event e;
+            e.sampleOffset = 0;
+            e.type = SynthEngine::Event::Type::NoteOn;
+            e.note = n;
+            e.velocity = 0.8f;
+            evs.push_back(e);
+        }
+        const int total25ms = static_cast<int>(0.025f * sampleRate);
+        int sent = 0;
+        for (int done = 0; done < total25ms; done += 512)
+        {
+            const int blk = std::min(512, total25ms - done);
+            stEng.process(sL.data(), sR.data(), blk, sent == 0 ? evs.data() : nullptr, sent == 0 ? static_cast<int>(evs.size()) : 0);
+            sent += blk;
+        }
+        const int activeStrum = stEng.getNumActiveVoices();
+        strumSimOk = (activeStrum == 5);
+        std::cout << "  Strum 8th simultaneous chord       : " << activeStrum
+                  << " voices (expect 5)  " << (strumSimOk ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Split chord: holding E5 (76) on string 5 then triggering {C5, G5, B5, D6} via noteOnChord must keep all 5 voices
+    bool splitChordOk = false;
+    {
+        SynthEngine spEng;
+        spEng.init(sampleRate, 512);
+        spEng.paramEngineType = 1.0f;
+        spEng.paramStrictFretboard = false;
+        std::vector<float> pL(512, 0.0f), pR(512, 0.0f);
+
+        SynthEngine::Event eHeld;
+        eHeld.sampleOffset = 0;
+        eHeld.type = SynthEngine::Event::Type::NoteOn;
+        eHeld.note = 76;
+        eHeld.velocity = 0.8f;
+
+        const int total5ms = std::max(1, static_cast<int>(0.005f * sampleRate));
+        for (int done = 0; done < total5ms; done += 512)
+        {
+            const int blk = std::min(512, total5ms - done);
+            spEng.process(pL.data(), pR.data(), blk, done == 0 ? &eHeld : nullptr, done == 0 ? 1 : 0);
+        }
+
+        const int rem[4] = { 72, 79, 83, 86 };
+        std::vector<SynthEngine::Event> chordEvs;
+        for (int n : rem)
+        {
+            SynthEngine::Event e;
+            e.sampleOffset = 0;
+            e.type = SynthEngine::Event::Type::NoteOn;
+            e.note = n;
+            e.velocity = 0.8f;
+            chordEvs.push_back(e);
+        }
+
+        const int total100ms = static_cast<int>(0.100f * sampleRate);
+        for (int done = 0; done < total100ms; done += 512)
+        {
+            const int blk = std::min(512, total100ms - done);
+            spEng.process(pL.data(), pR.data(), blk,
+                          done == 0 ? chordEvs.data() : nullptr,
+                          done == 0 ? static_cast<int>(chordEvs.size()) : 0);
+        }
+
+        const int activeSplit = spEng.getNumActiveVoices();
+        bool allFivePresent = (activeSplit == 5);
+        for (int target : { 72, 76, 79, 83, 86 })
+        {
+            bool found = false;
+            for (int s = 0; s < 6; ++s)
+                if (spEng.getVoice(s).isActive() && spEng.getVoice(s).getMidiNote() == target)
+                    found = true;
+            allFivePresent = allFivePresent && found;
+        }
+        splitChordOk = allFivePresent;
+        std::cout << "  Split C5-D6 chord (E5 held + 4)    : " << activeSplit
+                  << " voices (expect 5)  " << (splitChordOk ? "PASS" : "FAIL") << "\n";
+    }
+
+    return ok && chordTransitionOk && golpeOk && simOk && chokeTermOk && elWgOk && wgWinOk && lowDyadOk && dupRetrigOk && relStagOk && strumSimOk && splitChordOk;
 }
 
 // ---------------------------------------------------------------------------

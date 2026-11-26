@@ -231,7 +231,7 @@ HybridSynthEditor::HybridSynthEditor(HybridSynthProcessor& p)
     updatePageMode(p.apvts.getRawParameterValue("instrumentMode")->load() > 0.5f ? 1 : 0, false);
     startTimerHz(30);
 
-    setSize(1140, 250);
+    setSize(1140, 355);
     setResizable(false, false);
 }
 
@@ -485,6 +485,56 @@ void HybridSynthEditor::timerCallback()
         if (!strumBadgeArea.isEmpty())
             repaint(strumBadgeArea.expanded(2));
     }
+
+    // Poll lock-free 6-string fretboard state & allocation notices
+    bool fretboardDirty = false;
+    const auto& synth = processorRef.getSynth();
+    for (int s = 0; s < 6; ++s)
+    {
+        const auto& vs = synth.getVisualString(s);
+        const bool  act  = vs.active.load(std::memory_order_relaxed);
+        const int   note = vs.midiNote.load(std::memory_order_relaxed);
+        const int   fret = vs.fret.load(std::memory_order_relaxed);
+        const int   mute = vs.muteMode.load(std::memory_order_relaxed);
+        const bool  offB = vs.offBoard.load(std::memory_order_relaxed);
+        const float eng  = vs.energy.load(std::memory_order_relaxed);
+
+        if (act != displayStrings[s].active
+            || note != displayStrings[s].midiNote
+            || fret != displayStrings[s].fret
+            || mute != displayStrings[s].muteMode
+            || offB != displayStrings[s].offBoard
+            || std::abs(eng - displayStrings[s].energy) > 0.002f)
+        {
+            displayStrings[s] = { note, fret, mute, eng, act, offB };
+            fretboardDirty = true;
+        }
+    }
+
+    int noticeNote = -1;
+    uint32_t noticeSeq = 0;
+    const auto noticeType = synth.getAllocNotice(noticeNote, noticeSeq);
+    if (noticeSeq != lastSeenNoticeSeq)
+    {
+        lastSeenNoticeSeq = noticeSeq;
+        activeNoticeType  = static_cast<int>(noticeType);
+        activeNoticeNote  = noticeNote;
+        noticeHoldTicks   = 45; // ~1.5s at 30 Hz
+        fretboardDirty    = true;
+    }
+    else if (noticeHoldTicks > 0)
+    {
+        --noticeHoldTicks;
+        if (noticeHoldTicks == 0)
+        {
+            activeNoticeType = 0;
+            activeNoticeNote = -1;
+            fretboardDirty   = true;
+        }
+    }
+
+    if (fretboardDirty && !fretboardArea.isEmpty())
+        repaint(fretboardArea.expanded(2));
 }
 
 // ---------------------------------------------------------------------------
@@ -568,6 +618,157 @@ void HybridSynthEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff203a58));
     g.drawHorizontalLine(36, 0.f, static_cast<float>(getWidth()));
     g.drawHorizontalLine(74, 0.f, static_cast<float>(getWidth()));
+
+    // Visual 6-String Fretboard Strip
+    if (!fretboardArea.isEmpty())
+    {
+        auto fb = fretboardArea;
+        g.setColour(juce::Colour(0xff0d1524));
+        g.fillRoundedRectangle(fb.toFloat(), 6.f);
+        g.setColour(juce::Colour(0xff243b55));
+        g.drawRoundedRectangle(fb.toFloat(), 6.f, 1.0f);
+
+        auto formatMidiNote = [](int midi) -> juce::String
+        {
+            if (midi < 0 || midi > 127) return "-";
+            static const char* names[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+            const int oct = (midi / 12) - 1;
+            return juce::String(names[midi % 12]) + juce::String(oct);
+        };
+
+        // Left Status Column
+        auto infoCol = fb.removeFromLeft(170).reduced(8, 6);
+        int activeCount = 0;
+        for (int s = 0; s < 6; ++s)
+            if (displayStrings[s].active) ++activeCount;
+
+        g.setColour(juce::Colour(0xffa0c0e0));
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        g.drawText("FRETBOARD  " + juce::String(activeCount) + "/6",
+                   infoCol.removeFromTop(18), juce::Justification::centredLeft);
+
+        g.setColour(juce::Colour(0xff6b7c93));
+        g.setFont(juce::FontOptions(10.0f));
+        g.drawText("Range: D2-D6 (FL: D3-D7)", infoCol.removeFromTop(16), juce::Justification::centredLeft);
+
+        infoCol.removeFromTop(6);
+        auto noticeBox = infoCol.removeFromTop(26);
+        juce::String noticeText = "All notes ready";
+        juce::Colour noticeBg(0xff142236);
+        juce::Colour noticeFg(0xff7d93b0);
+
+        if (activeNoticeType == 1)
+        {
+            noticeText = "OUT OF RANGE: " + formatMidiNote(activeNoticeNote);
+            noticeBg = juce::Colour(0xff4a1824);
+            noticeFg = juce::Colour(0xffff8fa3);
+        }
+        else if (activeNoticeType == 2)
+        {
+            noticeText = "DROPPED (STRICT): " + formatMidiNote(activeNoticeNote);
+            noticeBg = juce::Colour(0xff4a1824);
+            noticeFg = juce::Colour(0xffffb703);
+        }
+        else if (activeNoticeType == 3)
+        {
+            noticeText = "STRING REUSED: " + formatMidiNote(activeNoticeNote);
+            noticeBg = juce::Colour(0xff3d2c12);
+            noticeFg = juce::Colour(0xffffca3a);
+        }
+
+        g.setColour(noticeBg);
+        g.fillRoundedRectangle(noticeBox.toFloat(), 4.f);
+        g.setColour(noticeFg);
+        g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+        g.drawText(noticeText, noticeBox.reduced(6, 0), juce::Justification::centredLeft);
+
+        // Rosewood Fingerboard Region (nut + frets 1..22)
+        auto neck = fb.reduced(10, 6);
+        auto labelStrip = neck.removeFromLeft(28);
+        const float nutX = static_cast<float>(neck.getX()) + 12.f;
+        const float neckW = static_cast<float>(neck.getWidth()) - 18.f;
+        const float neckY = static_cast<float>(neck.getY());
+        const float neckH = static_cast<float>(neck.getHeight());
+        const float fretW = neckW / 22.0f;
+
+        // Board background
+        g.setColour(juce::Colour(0xff1b1824));
+        g.fillRoundedRectangle(nutX, neckY, neckW, neckH, 3.f);
+
+        // Fret wires & inlay dots
+        static constexpr int inlayFrets[] = { 3, 5, 7, 9, 12, 15, 17, 19, 21 };
+        for (int f = 1; f <= 22; ++f)
+        {
+            const float x = nutX + static_cast<float>(f) * fretW;
+            g.setColour(juce::Colour(0xff3b3e52));
+            g.drawVerticalLine(static_cast<int>(std::round(x)), neckY + 2.f, neckY + neckH - 2.f);
+        }
+        g.setColour(juce::Colour(0xff4c536e));
+        for (int f : inlayFrets)
+        {
+            const float cx = nutX + (static_cast<float>(f) - 0.5f) * fretW;
+            if (f == 12)
+            {
+                g.fillEllipse(cx - 2.5f, neckY + neckH * 0.28f - 2.5f, 5.f, 5.f);
+                g.fillEllipse(cx - 2.5f, neckY + neckH * 0.72f - 2.5f, 5.f, 5.f);
+            }
+            else
+            {
+                g.fillEllipse(cx - 2.5f, neckY + neckH * 0.5f - 2.5f, 5.f, 5.f);
+            }
+        }
+
+        // Nut bar
+        g.setColour(juce::Colour(0xffd8d2c5));
+        g.fillRect(nutX - 2.f, neckY, 3.5f, neckH);
+
+        // Draw 6 strings (top = string 5 / e4, bottom = string 0 / E2)
+        static const char* stringNames[6] = { "E2", "A2", "D3", "G3", "B3", "e4" };
+        for (int row = 0; row < 6; ++row)
+        {
+            const int s = 5 - row;
+            const float sy = neckY + (static_cast<float>(row) + 0.5f) * (neckH / 6.0f);
+            const auto& ds = displayStrings[s];
+
+            // String name label
+            g.setColour(ds.active ? juce::Colour(0xfff1faee) : juce::Colour(0xff6b7c93));
+            g.setFont(juce::FontOptions(10.0f, ds.active ? juce::Font::bold : juce::Font::plain));
+            g.drawText(stringNames[s], labelStrip.getX(), static_cast<int>(sy) - 7, 24, 14,
+                       juce::Justification::centredRight);
+
+            // String wire
+            const float baseThick = 1.0f + static_cast<float>(5 - s) * 0.22f;
+            juce::Colour wireCol(0xff4d5870);
+            if (ds.active)
+            {
+                if (ds.muteMode == 2)      wireCol = juce::Colour(0xffff4070);
+                else if (ds.muteMode == 1) wireCol = juce::Colour(0xffe63946);
+                else if (ds.offBoard)      wireCol = juce::Colour(0xfff4a261);
+                else                       wireCol = juce::Colour(0xff48cae4);
+            }
+            g.setColour(wireCol);
+            g.fillRect(nutX, sy - baseThick * 0.5f, neckW, baseThick);
+
+            // Active note dot / pill
+            if (ds.active && ds.midiNote >= 0)
+            {
+                const int clampedFret = std::clamp(ds.fret, 0, 22);
+                const float dotX = (clampedFret == 0)
+                    ? (nutX - 4.f)
+                    : (nutX + (static_cast<float>(clampedFret) - 0.5f) * fretW);
+
+                const juce::String noteTag = formatMidiNote(ds.midiNote)
+                    + (ds.offBoard ? "*" : "");
+
+                g.setColour(wireCol);
+                g.fillRoundedRectangle(dotX - 16.f, sy - 6.5f, 32.f, 13.f, 6.f);
+                g.setColour(juce::Colour(0xff0b1220));
+                g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+                g.drawText(noteTag, static_cast<int>(dotX - 16.f), static_cast<int>(sy - 6.5f),
+                           32, 13, juce::Justification::centred);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -642,6 +843,9 @@ void HybridSynthEditor::resized()
     strip.removeFromLeft(6);
     strumToggle.setBounds(strip.removeFromLeft(118));
     strumBadgeArea = strip.removeFromLeft(56).reduced(0, 2);
+
+    // Visual 6-String Fretboard Strip at bottom
+    fretboardArea = area.removeFromBottom(102).reduced(10, 4);
 
     // Rotary Knobs Section
     const int numKnobs  = 8;

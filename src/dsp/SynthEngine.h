@@ -116,7 +116,7 @@ public:
      * outString[i] = string for notes[i], or -1 if unplaced. Exhaustive search (<= 13,327 maps).
      */
     void assignChordStrings(const int* notes, int count, bool allowOffBoard, bool avoidRinging,
-                            int* outString) const noexcept;
+                            int* outString, const bool* heldStrings = nullptr) const noexcept;
     static constexpr int KEYSWITCH_PALM_MUTE = 24; ///< C1 (MIDI Note 24 / FL: C2) Hold Keyswitch
     static constexpr int KEYSWITCH_FULL_MUTE = 26; ///< D1 (MIDI Note 26 / FL: D2) Hold/Choke Keyswitch
     static constexpr int KEYSWITCH_STRUM_8TH = 28; ///< E1 (MIDI Note 28 / FL: E2) 8th-Note Strum Keyswitch
@@ -182,6 +182,41 @@ public:
         return paramFullMute || keyswitchFullMuteActive.load(std::memory_order_relaxed);
     }
 
+    enum class AllocNotice : int
+    {
+        None = 0,
+        OutOfRange = 1,
+        DroppedStrict = 2,
+        StolenString = 3
+    };
+
+    struct VisualStringState
+    {
+        std::atomic<int>   midiNote { -1 };
+        std::atomic<int>   fret     { -1 };
+        std::atomic<int>   muteMode { 0 };
+        std::atomic<float> energy   { 0.0f };
+        std::atomic<bool>  active   { false };
+        std::atomic<bool>  offBoard { false };
+    };
+
+    const VisualStringState& getVisualString(int stringIdx) const noexcept
+    {
+        return visualStrings[(stringIdx >= 0 && stringIdx < NUM_VOICES) ? stringIdx : 0];
+    }
+
+    AllocNotice getAllocNotice(int& outNote, uint32_t& outSeq) const noexcept
+    {
+        outSeq  = allocNoticeSeq.load(std::memory_order_relaxed);
+        outNote = allocNoticeNote.load(std::memory_order_relaxed);
+        return static_cast<AllocNotice>(allocNoticeType.load(std::memory_order_relaxed));
+    }
+
+    static constexpr int getOpenMidi(int s) noexcept
+    {
+        return (s >= 0 && s < NUM_VOICES) ? kOpenMidi[s] : 40;
+    }
+
 private:
     /** Lateral (H-polarization) saddle rocking efficiency relative to vertical drive. */
     static constexpr float kHorizontalSaddleCoupling = 0.35f;
@@ -198,6 +233,17 @@ private:
     std::atomic<bool> keyswitchPalmMuteActive { false };
     std::atomic<bool> keyswitchFullMuteActive { false };
     std::atomic<bool> keyswitchStrumActive    { false };
+    VisualStringState visualStrings[NUM_VOICES];
+    std::atomic<int>      allocNoticeType { 0 };
+    std::atomic<int>      allocNoticeNote { -1 };
+    std::atomic<uint32_t> allocNoticeSeq  { 0 };
+
+    void postAllocNotice(AllocNotice type, int midiNote) noexcept
+    {
+        allocNoticeType.store(static_cast<int>(type), std::memory_order_relaxed);
+        allocNoticeNote.store(midiNote, std::memory_order_relaxed);
+        allocNoticeSeq.fetch_add(1u, std::memory_order_relaxed);
+    }
     float         strumKeyswitchVelocity  = 0.8f;
     int           strumSampleCounter      = 0;
     bool          nextStrumIsDown         = true;

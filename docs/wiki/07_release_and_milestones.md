@@ -6,6 +6,41 @@ This document records all version increments, DSP milestones, acoustic breakthro
 
 ## 1. Completed Milestones
 
+### v81.f
+- **Held-String Protection in Simultaneous/Split Chords (`SynthEngine::noteOnChord` & `ChordSearch`)**:
+  - **Root Cause & Fix**:
+    - When one note of a chord (e.g., `E5` in a split `C5–E5–G5–B5–D6` / FL `C6–E6–G6–B6–D7` chord) arrived slightly earlier than the remaining simultaneous notes, `noteOnChord()` called `assignChordStrings(..., avoidRinging = false, ...)` without informing `ChordSearch` which strings already held non-retriggered active notes. As a result, `ChordSearch` placed `B5` on string 5—silently clobbering `E5` without posting a notice (`4/6 notes`, `"All notes ready"`).
+    - Added optional `const bool* heldStrings` to `SynthEngine::assignChordStrings()` and prioritized `{ placed, -heldUsed, physical, -span, -fretSum, -ringingUsed, -offBoardDist }` in `ChordSearch::evaluate()`, so `noteOnChord()` routes around actively held strings onto free/off-board strings (or posts `AllocNotice::StolenString` if a forced steal is unavoidable).
+  - **Verification**:
+    - Added `Split C5-D6 chord (E5 held + 4)` regression check in `BenchSynth` (`5 voices`, all 5 pitches `{72, 76, 79, 83, 86}` sounding, `PASS`).
+    - `bench_synth`: `RTCheck ALL PASS (0)`, `+0.0%` CPU overhead (`20.55%` max FDTD load @ block 32; `35` max multi-threaded tracks; `7` max serial tracks), `pluginval` Level 8 `SUCCESS`.
+
+### v80.f
+- **Released-String Reclamation, Strum 8th Chord Trigger Fix, and FL Range Label**:
+  - **Released-Tail String Reclamation (`SynthEngine::assignStringForNote`)**:
+    - Extended release-tail reclamation beyond natural string `s` so staggered/humanized chords (such as `C5-E5-G5-B5-D6` / FL `C6-E6-G6-B6-D7`) played while an earlier chord is releasing reclaim released, non-held strings (`!isStringHeld(alt)`, preferring physical positions with lowest fret and lowest tail energy first, then off-board strings when `Strict Fretboard = Off`) before ever stealing an actively held string (`allowOffBoard ? findFreeVoice() : s`).
+  - **Strum 8th Simultaneous Chord Fix (`SynthEngine::noteOnChord`)**:
+    - Registered all simultaneous chord notes into `heldNotes[]` before invoking `triggerStrum(true, maxVel)` so the very first downstroke strums the full chord instead of firing on just the first note.
+  - **Fretboard Panel Label (`PluginEditor`)**:
+    - Updated fretboard range text to `Range: D2-D6 (FL: D3-D7)` for DAW clarity.
+  - **Verification**:
+    - Added 2 regression tests in `BenchSynth` (`Released->staggered C5-D6 (5ms)` -> 5 voices `PASS`; `Strum 8th simultaneous chord` -> 5 voices `PASS`).
+    - `bench_synth`: `RTCheck ALL PASS (0)`, `+0.0%` CPU overhead (`20.65%` max FDTD load @ block 32; `35` max multi-threaded tracks; `7` max serial tracks), `pluginval` Level 8 `SUCCESS`.
+
+### v79.f
+- **6-String Playability Fixes & Visual Fretboard Display**:
+  - **String Allocation & Chord Voicing Fixes (`SynthEngine`)**:
+    - Fixed `assignStringForNote()` refusing to borrow higher idle strings when `Strict Fretboard` is off (`allowOffBoard = true`), allowing staggered low-register intervals (e.g., `E2 + F2`) to ring polyphonically on idle strings instead of stealing string 0.
+    - Added same-note retrigger reuse in `assignStringForNote()` so repeated `noteOn` events for an already-ringing MIDI note reuse that string instead of duplicating the pitch onto a second string.
+    - Stopped `noteOnChord()` from recording dropped notes in `heldNotes[]` when `Strict Fretboard` is enabled, preventing ghost notes in Strum mode.
+    - Added `-offBoardDist` tie-breaking in `ChordSearch::evaluate()` so off-board placements preserve natural low-to-high string ordering.
+  - **Live 6-String Visual Fretboard (`PluginEditor`)**:
+    - Added a 6-string fretboard strip (`e4`–`E2`, nut + 22 frets with inlay dots) polled lock-free at 30 Hz via atomic `VisualStringState` snapshots in `SynthEngine`.
+    - Color-codes active notes (cyan on-board, amber off-board `*`, red palm/choke) with note/fret pills and displays live allocation notices (`OUT OF RANGE`, `DROPPED (STRICT)`, `STRING REUSED`).
+  - **Verification**:
+    - Added regression tests in `BenchSynth` (`Low-register dyad E2+F2 (off-board)` and `Same-note retrigger E3+E3 (10 ms)`).
+    - `bench_synth`: `RTCheck ALL PASS (0)`, `+0.0%` CPU overhead (`20.35%` max FDTD load @ block 32), `pluginval` Level 8 `SUCCESS`.
+
 ### v78.f
 - **DSP & UI Bugfix Pass + Zero-Loss FDTD / Engine Optimizations**:
   - **DSP & UI Bugfixes**:

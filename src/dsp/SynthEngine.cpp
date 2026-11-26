@@ -106,6 +106,7 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
     // Any notes outside this range are rejected so keyswitches never produce unwanted audio
     if (midiNote < GUITAR_MIN_NOTE || midiNote > GUITAR_MAX_NOTE)
     {
+        postAllocNotice(AllocNotice::OutOfRange, midiNote);
         return;
     }
 
@@ -201,6 +202,12 @@ void SynthEngine::noteOn(int midiNote, float velocity, float brightnessOverride,
 
     heldNotes[midiNote] = velocity;
     const int s = assignStringForNote(midiNote, !paramStrictFretboard);
+    if (voices[s].isActive())
+    {
+        const int oldNote = voices[s].getMidiNote();
+        if (oldNote != midiNote && oldNote >= 0 && oldNote < 128 && heldNotes[oldNote] > 0.001f)
+            postAllocNotice(AllocNotice::StolenString, midiNote);
+    }
     startNoteOnString(midiNote, velocity, s, brightnessOverride, pickPosOverride);
 }
 
@@ -229,11 +236,40 @@ void SynthEngine::startNoteOnString(int midiNote, float velocity, int s, float b
 
 void SynthEngine::noteOnChord(const Event* const* chordEvents, int count)
 {
-    // Auto-strum: held notes define the chord; the strum engine does its own assignment
+    // Auto-strum: register all chord notes in heldNotes before triggering the first downstroke
     if (isStrumActive())
     {
+        bool hadHeld = false;
+        for (int n = GUITAR_MIN_NOTE; n <= GUITAR_MAX_NOTE; ++n)
+        {
+            if (heldNotes[n] > 0.001f)
+            {
+                hadHeld = true;
+                break;
+            }
+        }
+
+        float maxVel = 0.0f;
+        int addedCount = 0;
         for (int i = 0; i < count; ++i)
-            dispatch(*chordEvents[i]);
+        {
+            const int note = chordEvents[i]->note;
+            const float vel = chordEvents[i]->velocity;
+            if (vel > 0.0001f && note >= GUITAR_MIN_NOTE && note <= GUITAR_MAX_NOTE)
+            {
+                heldNotes[note] = vel;
+                maxVel = std::max(maxVel, vel);
+                ++addedCount;
+            }
+        }
+
+        if (!hadHeld && addedCount > 0)
+        {
+            const int samplesPer8th = std::max(100, static_cast<int>((30.0f / currentBpm) * sampleRate));
+            strumSampleCounter = samplesPer8th;
+            triggerStrum(true, maxVel);
+            nextStrumIsDown = false;
+        }
         return;
     }
 
@@ -246,17 +282,47 @@ void SynthEngine::noteOnChord(const Event* const* chordEvents, int count)
     int notes[NUM_VOICES];
     int strings[NUM_VOICES];
     for (int i = 0; i < count; ++i)
-    {
         notes[i] = sorted[i]->note;
-        heldNotes[notes[i]] = sorted[i]->velocity;
+
+    bool held[NUM_VOICES] = {};
+    for (int s = 0; s < NUM_VOICES; ++s)
+    {
+        if (!voices[s].isActive())
+            continue;
+        const int oldNote = voices[s].getMidiNote();
+        if (oldNote >= 0 && oldNote < 128 && heldNotes[oldNote] > 0.001f)
+        {
+            bool retriggeredByChord = false;
+            for (int i = 0; i < count; ++i)
+            {
+                if (notes[i] == oldNote)
+                {
+                    retriggeredByChord = true;
+                    break;
+                }
+            }
+            if (!retriggeredByChord)
+                held[s] = true;
+        }
     }
 
     // Simultaneous notes are a chord, never a legato transition
-    assignChordStrings(notes, count, !paramStrictFretboard, false, strings);
+    assignChordStrings(notes, count, !paramStrictFretboard, false, strings, held);
 
     for (int i = 0; i < count; ++i)
+    {
         if (strings[i] >= 0)
+        {
+            if (held[strings[i]])
+                postAllocNotice(AllocNotice::StolenString, notes[i]);
+            heldNotes[notes[i]] = sorted[i]->velocity;
             startNoteOnString(notes[i], sorted[i]->velocity, strings[i], sorted[i]->brightness, sorted[i]->pickPos);
+        }
+        else
+        {
+            postAllocNotice(AllocNotice::DroppedStrict, notes[i]);
+        }
+    }
 }
 
 void SynthEngine::dispatchGroup(const Event* events, int count)
@@ -301,24 +367,26 @@ namespace
         int count;
         bool allowOffBoard;
         bool ringing[6];
+        bool held[6] = {};
         int minOpen[6];
         int maxFret;
 
         int current[6];
         int best[6];
-        // Score: physical count, placed count, ringing strings kept, -hand span, -fret sum
-        int bestScore[5];
+        // Score: placed count, -held strings stolen, physical count, -hand span, -fret sum, -ringing strings kept, -off-board distance
+        int bestScore[7];
         bool haveBest = false;
 
         void evaluate()
         {
-            int physical = 0, placed = 0, ringingUsed = 0, fretSum = 0;
+            int placed = 0, heldUsed = 0, physical = 0, ringingUsed = 0, fretSum = 0, offBoardDist = 0;
             int lo = 1000, hi = -1;
             for (int i = 0; i < count; ++i)
             {
                 const int s = current[i];
                 if (s < 0) continue;
                 ++placed;
+                if (held[s]) ++heldUsed;
                 if (ringing[s]) ++ringingUsed;
                 const int fret = notes[i] - minOpen[s];
                 if (fret >= 0 && fret <= maxFret)
@@ -327,19 +395,23 @@ namespace
                     fretSum += fret;
                     if (fret > 0) { lo = std::min(lo, fret); hi = std::max(hi, fret); }
                 }
+                else
+                {
+                    offBoardDist += std::abs(fret);
+                }
             }
             const int span = (hi >= 0) ? (hi - lo) : 0;
-            // Ergonomic physical priority: physical fret count, placed note count, compact hand span, low fretboard register, then tie-break with ringing strings kept
-            const int score[5] = { physical, placed, -span, -fretSum, -ringingUsed };
+            // Ergonomic physical priority: placed count, avoid stealing held strings, physical fret count, compact hand span, low register, ringing kept, off-board proximity
+            const int score[7] = { placed, -heldUsed, physical, -span, -fretSum, -ringingUsed, -offBoardDist };
             bool better = !haveBest;
-            for (int k = 0; k < 5 && !better; ++k)
+            for (int k = 0; k < 7 && !better; ++k)
             {
                 if (score[k] != bestScore[k]) { better = score[k] > bestScore[k]; break; }
             }
             if (better)
             {
                 haveBest = true;
-                std::copy(score, score + 5, bestScore);
+                std::copy(score, score + 7, bestScore);
                 std::copy(current, current + count, best);
             }
         }
@@ -362,7 +434,7 @@ namespace
 }
 
 void SynthEngine::assignChordStrings(const int* notes, int count, bool allowOffBoard, bool avoidRinging,
-                                     int* outString) const noexcept
+                                     int* outString, const bool* heldStrings) const noexcept
 {
     count = std::min(count, NUM_VOICES);
     ChordSearch cs;
@@ -373,6 +445,7 @@ void SynthEngine::assignChordStrings(const int* notes, int count, bool allowOffB
     for (int s = 0; s < NUM_VOICES; ++s)
     {
         cs.ringing[s] = avoidRinging && voices[s].isActive();
+        cs.held[s]    = (heldStrings != nullptr) && heldStrings[s];
         cs.minOpen[s] = stringMinOpen(s);
     }
     cs.search(0, 0u);
@@ -933,6 +1006,21 @@ void SynthEngine::process(float* outputL, float* outputR, int numSamples,
         outputL[i] = outL;
         outputR[i] = outR;
     }
+
+    // Publish lightweight lock-free string state snapshot for the UI fretboard
+    for (int s = 0; s < NUM_VOICES; ++s)
+    {
+        const bool active = voices[s].isActive();
+        const int note = active ? voices[s].getMidiNote() : -1;
+        const int fret = (active && note >= 0) ? (note - stringMinOpen(s)) : -1;
+        const bool offBoard = active && (fret < 0 || fret > kMaxFret);
+        visualStrings[s].active.store(active, std::memory_order_relaxed);
+        visualStrings[s].midiNote.store(note, std::memory_order_relaxed);
+        visualStrings[s].fret.store(fret, std::memory_order_relaxed);
+        visualStrings[s].muteMode.store(static_cast<int>(voices[s].getMuteMode()), std::memory_order_relaxed);
+        visualStrings[s].energy.store(active ? voices[s].getEnergy() : 0.0f, std::memory_order_relaxed);
+        visualStrings[s].offBoard.store(offBoard, std::memory_order_relaxed);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -968,6 +1056,17 @@ void SynthEngine::reset()
         pendingPlucks[p].active = false;
     prevMuteMode            = KarplusStrong::MuteMode::Open;
     smoothedPolyScale       = 1.0f;
+    allocNoticeType.store(0, std::memory_order_relaxed);
+    allocNoticeNote.store(-1, std::memory_order_relaxed);
+    for (int s = 0; s < NUM_VOICES; ++s)
+    {
+        visualStrings[s].active.store(false, std::memory_order_relaxed);
+        visualStrings[s].midiNote.store(-1, std::memory_order_relaxed);
+        visualStrings[s].fret.store(-1, std::memory_order_relaxed);
+        visualStrings[s].muteMode.store(0, std::memory_order_relaxed);
+        visualStrings[s].energy.store(0.0f, std::memory_order_relaxed);
+        visualStrings[s].offBoard.store(false, std::memory_order_relaxed);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -994,21 +1093,34 @@ int SynthEngine::assignStringForNote(int note, bool allowOffBoard) const noexcep
     else if (note < 64) s = 4;
     else                s = 5;
 
+    // 1b. If this exact MIDI note is already sounding on a string, re-trigger that string
+    // instead of duplicating the same pitch onto a second string.
+    for (int v = 0; v < 6; ++v)
+    {
+        if (voices[v].isActive() && voices[v].getMidiNote() == note)
+            return v;
+    }
+
     // 2. If natural string is completely idle, use it immediately
     if (!voices[s].isActive())
         return s;
 
+    auto isStringHeld = [this](int idx) noexcept -> bool
+    {
+        if (!voices[idx].isActive())
+            return false;
+        const int oldNote = voices[idx].getMidiNote();
+        return (oldNote >= 0 && oldNote < 128 && heldNotes[oldNote] > 0.001f);
+    };
+
     // 2b. If the note on natural string s is not currently held down (i.e. merely decaying in release),
     // fretting string s with the new note naturally stops the release tail and sounds the note at its
     // authentic physical position instead of contorting the melody onto high frets of other strings.
-    const int oldNote = voices[s].getMidiNote();
-    const bool oldHeld = (oldNote >= 0 && oldNote < 128 && heldNotes[oldNote] > 0.001f);
-    if (!oldHeld)
+    if (!isStringHeld(s))
         return s;
 
-    // 3. String s is currently physically held down by the player.
+    // 3a. String s is currently physically held down by the player.
     // Search for an idle physical string that can voice this note (fret <= kMaxFret).
-    // This preserves ringing chord tails and prevents violent buffer re-trigger clobbering clicks!
     int bestAlt = -1;
     int bestFret = 999;
     for (int alt = 0; alt < 6; ++alt)
@@ -1030,17 +1142,84 @@ int SynthEngine::assignStringForNote(int note, bool allowOffBoard) const noexcep
     if (bestAlt >= 0)
         return bestAlt;
 
-    // 3b. No physical position free: unless the fretboard is strict, use an idle string past the
-    // fretboard (exact pitch) rather than re-plucking a ringing string.
+    // 3b. No completely idle physical string: reclaim a released (non-held) physical string
+    // (lowest fret first, tie-breaking by lowest tail energy) instead of stealing an actively held string.
+    bestAlt = -1;
+    bestFret = 999;
+    float bestEnergy = std::numeric_limits<float>::max();
+    for (int alt = 0; alt < 6; ++alt)
+    {
+        if (!isStringHeld(alt))
+        {
+            const int minOpen = (alt == 0) ? 38 : openMidi[alt];
+            if (note >= minOpen)
+            {
+                const int fret = note - minOpen;
+                if (fret <= kMaxFret)
+                {
+                    const float eng = voices[alt].getEnergy();
+                    if (fret < bestFret || (fret == bestFret && eng < bestEnergy))
+                    {
+                        bestFret = fret;
+                        bestEnergy = eng;
+                        bestAlt = alt;
+                    }
+                }
+            }
+        }
+    }
+    if (bestAlt >= 0)
+        return bestAlt;
+
+    // 3c/3d. No physical position free: unless the fretboard is strict, use an idle off-board string
+    // (preferring strings tuned below the note first), or a released non-held off-board string
+    // (lowest tail energy) before stealing an actively held string.
     if (allowOffBoard)
     {
         for (int alt = 5; alt >= 0; --alt)
             if (!voices[alt].isActive() && note >= stringMinOpen(alt))
                 return alt;
+        for (int alt = 5; alt >= 0; --alt)
+            if (!voices[alt].isActive())
+                return alt;
+
+        bestAlt = -1;
+        bestEnergy = std::numeric_limits<float>::max();
+        for (int alt = 5; alt >= 0; --alt)
+        {
+            if (!isStringHeld(alt) && note >= stringMinOpen(alt))
+            {
+                const float eng = voices[alt].getEnergy();
+                if (eng < bestEnergy)
+                {
+                    bestEnergy = eng;
+                    bestAlt = alt;
+                }
+            }
+        }
+        if (bestAlt >= 0)
+            return bestAlt;
+
+        bestAlt = -1;
+        bestEnergy = std::numeric_limits<float>::max();
+        for (int alt = 5; alt >= 0; --alt)
+        {
+            if (!isStringHeld(alt))
+            {
+                const float eng = voices[alt].getEnergy();
+                if (eng < bestEnergy)
+                {
+                    bestEnergy = eng;
+                    bestAlt = alt;
+                }
+            }
+        }
+        if (bestAlt >= 0)
+            return bestAlt;
     }
 
-    // 4. If all alternative strings are occupied, reuse string s
-    return s;
+    // 4. All 6 strings are actively held: steal quietest string when off-board is allowed, or reuse s.
+    return allowOffBoard ? findFreeVoice() : s;
 }
 
 int SynthEngine::findFreeVoice() const noexcept

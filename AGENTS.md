@@ -122,7 +122,25 @@ For comprehensive mathematical derivations, code architectures, and implementati
 > [!NOTE]
 > Detailed historical milestone notes from **v36.f** to **v55.f** are archived in [`docs/wiki/07_release_and_milestones.md`](docs/wiki/07_release_and_milestones.md).
 
-### Current Version Status: **v78.f**
+### Current Version Status: **v81.f**
+- **v81.f**:
+  - **Held-String Protection in `SynthEngine::noteOnChord()` & `ChordSearch`**:
+    - Passed per-string `heldStrings` mask from `noteOnChord()` to `assignChordStrings()`, prioritizing `{ placed, -heldUsed, physical, -span, -fretSum, -ringingUsed, -offBoardDist }` in `ChordSearch::evaluate()` so partial simultaneous chords avoid silently clobbering already-held strings (e.g., split `C5–D6` / FL `C6–D7` keeping all 5 notes instead of overwriting `E5` with `B5`), and post `AllocNotice::StolenString` if a held string must be stolen.
+    - Added `Split C5-D6 chord (E5 held + 4)` check in `BenchSynth`; `bench_synth` `RTCheck PASS (0)` (`+0.0%` CPU overhead, `20.55%` max FDTD @ 32), `pluginval` Level 8 `SUCCESS`.
+
+- **v80.f**:
+  - **Released-String Reclamation & Strum 8th Chord Fix**:
+    - Extended `SynthEngine::assignStringForNote()` to reclaim released, non-held alternative strings (`!isStringHeld(alt)`)—preferring on-board physical positions (lowest fret, lowest tail energy) first and off-board strings when `Strict Fretboard = Off`—fixing staggered high-register chords (`C5–D6` / FL `C6–D7`) stealing string 5 from prior release tails, and falling back to `findFreeVoice()` instead of blindly clobbering natural string `s` when all 6 strings are held.
+    - Fixed `SynthEngine::noteOnChord()` in `Strum 8th` mode so simultaneous chord notes populate `heldNotes[]` before triggering the initial downstroke (`triggerStrum(true, maxVel)`).
+    - Updated fretboard label in `PluginEditor` to `Range: D2-D6 (FL: D3-D7)`.
+    - Added 2 regression checks in `BenchSynth`; `bench_synth` `RTCheck PASS (0)` (`+0.0%` CPU overhead, `20.65%` max FDTD @ 32), `pluginval` Level 8 `SUCCESS`.
+
+- **v79.f**:
+  - **6-String Playability Fixes & Visual Fretboard Display**:
+    - Fixed `SynthEngine::assignStringForNote()` to allow borrowing any idle string when `Strict Fretboard = Off` (preventing staggered low-register clusters from stealing string 0), reuse the same string on duplicate same-note retriggers, avoid polluting `heldNotes[]` with Strict-dropped chord notes, and tie-break off-board `ChordSearch` placements by pitch proximity.
+    - Added lock-free `VisualStringState` snapshots and `AllocNotice` reporting in `SynthEngine`, rendered as a live 6-string fretboard (`e4`–`E2`, frets `0..22`, note/fret pills, and `OUT OF RANGE` / `DROPPED (STRICT)` / `STRING REUSED` indicators) in `PluginEditor`.
+    - Added 2 regression checks in `BenchSynth`; `bench_synth` `RTCheck PASS (0)` (`+0.0%` CPU overhead), `pluginval` Level 8 `SUCCESS`.
+
 - **v78.f**:
   - **DSP & UI Bugfix Pass**:
     - Fixed FDTD choked voice termination leak in `Voice::tickPolar()`, Waveguide double-counted `samplesSinceNoteOn`, `fadeSamplesTotal` fade step discontinuity, `FdtdString` pre-swap `uDotDu` time alignment, and dead `Voice::tickPickClick()` legacy state.

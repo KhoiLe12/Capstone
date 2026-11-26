@@ -123,5 +123,22 @@ private:
     SliderAttachment decayAttach, brightnessAttach, pickPosAttach,
                      stiffnessAttach, bodySizeAttach, bodyMixAttach, widthAttach, gainAttach, toneAttach;
 
+    // Visual 6-String Fretboard State (polled lock-free at 30 Hz)
+    struct DisplayString
+    {
+        int   midiNote = -1;
+        int   fret     = -1;
+        int   muteMode = 0;
+        float energy   = 0.0f;
+        bool  active   = false;
+        bool  offBoard = false;
+    };
+    DisplayString displayStrings[6];
+    uint32_t lastSeenNoticeSeq = 0;
+    int      activeNoticeType  = 0;
+    int      activeNoticeNote  = -1;
+    int      noticeHoldTicks   = 0;
+    juce::Rectangle<int> fretboardArea;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HybridSynthEditor)
 };
